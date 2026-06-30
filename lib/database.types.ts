@@ -270,6 +270,50 @@ export interface Database {
           }
         ]
       }
+      moneyforward_tokens: {
+        Row: {
+          id: string
+          access_token: string
+          refresh_token: string
+          expires_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          access_token: string
+          refresh_token: string
+          expires_at: string
+          updated_at?: string
+        }
+        Update: {
+          access_token?: string
+          refresh_token?: string
+          expires_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      moneyforward_expenses: {
+        Row: {
+          id: string
+          year: number
+          month: number
+          amount: number
+          synced_at: string
+        }
+        Insert: {
+          id?: string
+          year: number
+          month: number
+          amount: number
+          synced_at?: string
+        }
+        Update: {
+          amount?: number
+          synced_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>
@@ -285,3 +329,11 @@ export type MonthlyGlobalTask = Database['public']['Tables']['monthly_global_tas
 export type TaxAdviceEntry = Database['public']['Tables']['tax_advice_entries']['Row']
 export type TaxChatSession = Database['public']['Tables']['tax_chat_sessions']['Row']
 export type TaxChatMessage = Database['public']['Tables']['tax_chat_messages']['Row']
+
+export interface CustomGlobalTask {
+  id: string
+  title: string
+  months: number[]
+  completed_months: number[]
+  created_at: string
+}

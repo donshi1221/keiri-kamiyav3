@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase'
 import { nowJST } from '@/lib/dates'
 import DashboardClient from './components/dashboard-client'
+import type { CustomGlobalTask } from '@/lib/database.types'
 
 export default async function DashboardPage({
   searchParams,
@@ -19,6 +20,9 @@ export default async function DashboardPage({
     { data: clientRecords },
     { data: globalTask },
     { data: clients },
+    { data: allCustomTasks },
+    { data: mfExpense },
+    { data: mfToken },
   ] = await Promise.all([
     supabase
       .from('monthly_records')
@@ -42,7 +46,26 @@ export default async function DashboardPage({
       .from('monthly_client_records')
       .select('client_id, invoice_sent_at')
       .not('invoice_sent_at', 'is', null),
+    supabase
+      .from('monthly_custom_global_tasks')
+      .select('*')
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('moneyforward_expenses')
+      .select('amount, synced_at')
+      .eq('year', year)
+      .eq('month', month)
+      .maybeSingle(),
+    supabase
+      .from('moneyforward_tokens')
+      .select('updated_at')
+      .limit(1)
+      .maybeSingle(),
   ])
+
+  const customTasks: CustomGlobalTask[] = ((allCustomTasks ?? []) as CustomGlobalTask[]).filter(
+    (t) => t.months.length === 0 || t.months.includes(month)
+  )
 
   const billedCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
@@ -65,9 +88,12 @@ export default async function DashboardPage({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       clientRecords={(clientRecords ?? []) as any}
       globalTask={globalTask ?? null}
+      customTasks={customTasks}
       today={today.toISOString()}
       billedCounts={billedCounts}
       paidCounts={paidCounts}
+      mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
+      mfConnected={!!mfToken}
     />
   )
 }
