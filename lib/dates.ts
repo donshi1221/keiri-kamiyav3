@@ -14,7 +14,7 @@ export function getLastDayOfMonth(year: number, month: number): number {
 }
 
 export function isInReminderWindow(today: number, deadlineDay: number): boolean {
-  return today >= deadlineDay - 3 && today <= deadlineDay
+  return today >= deadlineDay - 3
 }
 
 export type DueState = 'upcoming' | 'inWindow' | 'overdue' | 'done'

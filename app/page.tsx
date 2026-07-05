@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
 import { and, eq, isNotNull, asc } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
+import { computeCarryOver } from '@/lib/carry-over'
 import DashboardClient from './components/dashboard-client'
 
 export default async function DashboardPage({
@@ -22,6 +23,8 @@ export default async function DashboardPage({
     mfExpense,
     mfToken,
     allClientRecords,
+    allRecordsForCarryOver,
+    allClientRecordsForCarryOver,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -60,7 +63,27 @@ export default async function DashboardPage({
       // 片方でも null でないレコードを取得（billedCounts / paidCounts の集計用）
       isNotNull(monthlyClientRecords.client_id)
     ),
+    db.select({
+      year: monthlyRecords.year,
+      month: monthlyRecords.month,
+      invoice_received_at: monthlyRecords.invoice_received_at,
+      payment_reserved_at: monthlyRecords.payment_reserved_at,
+      contractor_paid_at: monthlyRecords.contractor_paid_at,
+    }).from(monthlyRecords),
+    db.select({
+      year: monthlyClientRecords.year,
+      month: monthlyClientRecords.month,
+      invoice_sent_at: monthlyClientRecords.invoice_sent_at,
+      payment_confirmed_at: monthlyClientRecords.payment_confirmed_at,
+    }).from(monthlyClientRecords),
   ])
+
+  const carryOver = computeCarryOver(
+    allRecordsForCarryOver,
+    allClientRecordsForCarryOver,
+    today.getFullYear(),
+    today.getMonth() + 1
+  )
 
   const customTasks = allCustomTasks.filter(
     (t) => t.months.length === 0 || t.months.includes(month)
@@ -88,6 +111,7 @@ export default async function DashboardPage({
       paidCounts={paidCounts}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
       mfConnected={mfToken.length > 0}
+      carryOver={carryOver}
     />
   )
 }

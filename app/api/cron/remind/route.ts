@@ -1,9 +1,13 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks } from '@/lib/schema'
 import { and, eq } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
+
+function overdueMark(day: number, dueDay: number): string {
+  return day > dueDay ? '（期限超過）' : ''
+}
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization')
@@ -24,7 +28,7 @@ export async function GET(req: NextRequest) {
     const remindDay25 = isInReminderWindow(day, 25)
     const remindLastDay = isInReminderWindow(day, lastDay)
 
-    const [records, clientRecords, globalTask] = await Promise.all([
+    const [records, clientRecords, globalTask, customTasks] = await Promise.all([
       db.query.monthlyRecords.findMany({
         where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
         columns: { invoice_received_at: true, payment_reserved_at: true, contractor_paid_at: true },
@@ -46,33 +50,34 @@ export async function GET(req: NextRequest) {
       db.query.monthlyGlobalTasks.findFirst({
         where: and(eq(monthlyGlobalTasks.year, year), eq(monthlyGlobalTasks.month, month)),
       }),
+      db.select().from(monthlyCustomGlobalTasks),
     ])
 
     const sections: string[] = []
 
     const globalLines: string[] = []
     if (remindDay10 && !globalTask?.expense_confirmed_at) {
-      globalLines.push('  □ 社長経費確認（期日: 10日）')
+      globalLines.push(`  □ 社長経費確認（期日: 10日）${overdueMark(day, 10)}`)
     }
     if (remindDay20 && !globalTask?.payment_report_confirmed_at) {
-      globalLines.push('  □ 支払・報酬 請求書チェック出し（期日: 20日）')
+      globalLines.push(`  □ 支払・報酬 請求書チェック出し（期日: 20日）${overdueMark(day, 20)}`)
     }
     if (remindLastDay && !globalTask?.withholding_confirmed_at) {
-      globalLines.push('  □ 源泉所得税確認（期日: 月末）')
+      globalLines.push(`  □ 源泉所得税確認（期日: 月末）${overdueMark(day, lastDay)}`)
     }
     if (globalLines.length > 0) sections.push('■ グローバルタスク\n' + globalLines.join('\n'))
 
     if (remindDay15) {
       const unsentClients = clientRecords.filter((r) => !r.invoice_sent_at)
       if (unsentClients.length > 0) {
-        const lines = unsentClients.map((r) => `  □ ${r.clients?.name ?? '?'}`)
+        const lines = unsentClients.map((r) => `  □ ${r.clients?.name ?? '?'}${overdueMark(day, 15)}`)
         sections.push(`■ クライアント — 請求書送付（期日: 15日）\n${lines.join('\n')}`)
       }
 
       const unreserved = records.filter((r) => !r.payment_reserved_at)
       if (unreserved.length > 0) {
         const lines = unreserved.map((r) =>
-          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）`
+          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）${overdueMark(day, 15)}`
         )
         sections.push(`■ 委託者 — 支払い予約（期日: 15日）\n${lines.join('\n')}`)
       }
@@ -81,7 +86,7 @@ export async function GET(req: NextRequest) {
     if (remindDay25) {
       const unconfirmedClients = clientRecords.filter((r) => !r.payment_confirmed_at)
       if (unconfirmedClients.length > 0) {
-        const lines = unconfirmedClients.map((r) => `  □ ${r.clients?.name ?? '?'}`)
+        const lines = unconfirmedClients.map((r) => `  □ ${r.clients?.name ?? '?'}${overdueMark(day, 25)}`)
         sections.push(`■ クライアント — 入金確認（期日: 25日）\n${lines.join('\n')}`)
       }
     }
@@ -90,7 +95,7 @@ export async function GET(req: NextRequest) {
       const unreceived = records.filter((r) => !r.invoice_received_at)
       if (unreceived.length > 0) {
         const lines = unreceived.map((r) =>
-          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）`
+          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）${overdueMark(day, 10)}`
         )
         sections.push(`■ 委託者 — 請求書受領（期日: 10日）\n${lines.join('\n')}`)
       }
@@ -100,9 +105,18 @@ export async function GET(req: NextRequest) {
       const unpaid = records.filter((r) => !r.contractor_paid_at)
       if (unpaid.length > 0) {
         const lines = unpaid.map((r) =>
-          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）`
+          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）${overdueMark(day, lastDay)}`
         )
         sections.push(`■ 委託者 — 支払い確認（期日: 月末）\n${lines.join('\n')}`)
+      }
+
+      const yearMonth = year * 100 + month
+      const unfinishedCustomTasks = customTasks.filter(
+        (t) => (t.months.length === 0 || t.months.includes(month)) && !t.completed_months.includes(yearMonth)
+      )
+      if (unfinishedCustomTasks.length > 0) {
+        const lines = unfinishedCustomTasks.map((t) => `  □ ${t.title}`)
+        sections.push(`■ カスタムタスク（期日: 月末）\n${lines.join('\n')}`)
       }
     }
 

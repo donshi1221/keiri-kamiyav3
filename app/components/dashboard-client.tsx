@@ -6,7 +6,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, X } from 'lucide-react'
+import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
+import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/schema'
 import TodayTasks from './today-tasks'
 
@@ -51,10 +53,11 @@ interface Props {
   paidCounts: Record<string, number>
   mfExpense: { amount: number; syncedAt: string } | null
   mfConnected: boolean
+  carryOver: CarryOverGroup[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, carryOver,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -311,6 +314,28 @@ export default function DashboardClient({
           次月 →
         </Button>
       </div>
+
+      {/* 繰越未完了バナー */}
+      {carryOver.length > 0 && (
+        <div className="space-y-2">
+          {carryOver.map((g) => (
+            <div
+              key={`${g.year}-${g.month}`}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800"
+            >
+              <span>
+                ⚠ {g.year}年{g.month}月の未完了: {g.items.map((i) => `${i.label} ${i.count}件`).join('、')}
+              </span>
+              <Link
+                href={`/?year=${g.year}&month=${g.month}`}
+                className="shrink-0 font-medium text-amber-900 underline underline-offset-2 hover:text-amber-950"
+              >
+                確認する
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 今日やること */}
       {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} />}
