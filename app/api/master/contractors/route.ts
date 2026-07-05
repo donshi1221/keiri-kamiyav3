@@ -1,29 +1,28 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { contractors } from '@/lib/schema'
+import { asc } from 'drizzle-orm'
 
 export async function GET() {
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('contractors')
-    .select('*')
-    .order('created_at', { ascending: true })
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
+  try {
+    const data = await db.select().from(contractors).orderBy(asc(contractors.created_at))
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('contractors')
-    .insert({
+  try {
+    const body = await req.json()
+    const [data] = await db.insert(contractors).values({
       name: body.name,
       contractor_type: body.contractor_type ?? 'daiko',
       email: body.email ?? null,
       notes: body.notes ?? null,
-    })
-    .select()
-    .single()
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data, { status: 201 })
+    }).returning()
+    return Response.json(data, { status: 201 })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }

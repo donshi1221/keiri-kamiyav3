@@ -1,7 +1,8 @@
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
+import { and, eq, isNotNull, asc } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import DashboardClient from './components/dashboard-client'
-import type { CustomGlobalTask } from '@/lib/database.types'
 
 export default async function DashboardPage({
   searchParams,
@@ -13,68 +14,61 @@ export default async function DashboardPage({
   const year = params.year ? Number(params.year) : today.getFullYear()
   const month = params.month ? Number(params.month) : today.getMonth() + 1
 
-  const supabase = createAdminClient()
-
   const [
-    { data: records },
-    { data: clientRecords },
-    { data: globalTask },
-    { data: clients },
-    { data: allCustomTasks },
-    { data: mfExpense },
-    { data: mfToken },
+    records,
+    clientRecords,
+    globalTask,
+    allCustomTasks,
+    mfExpense,
+    mfToken,
+    allClientRecords,
   ] = await Promise.all([
-    supabase
-      .from('monthly_records')
-      .select('*, assignments ( *, contractors ( id, name, contractor_type ), clients ( id, name ) )')
-      .eq('year', year)
-      .eq('month', month)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('monthly_client_records')
-      .select('*, clients ( id, name, billing_amount, contract_start, contract_months )')
-      .eq('year', year)
-      .eq('month', month)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('monthly_global_tasks')
-      .select('*')
-      .eq('year', year)
-      .eq('month', month)
-      .maybeSingle(),
-    supabase
-      .from('monthly_client_records')
-      .select('client_id, invoice_sent_at')
-      .not('invoice_sent_at', 'is', null),
-    supabase
-      .from('monthly_custom_global_tasks')
-      .select('*')
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('moneyforward_expenses')
-      .select('amount, synced_at')
-      .eq('year', year)
-      .eq('month', month)
-      .maybeSingle(),
-    supabase
-      .from('moneyforward_tokens')
-      .select('updated_at')
-      .limit(1)
-      .maybeSingle(),
+    db.query.monthlyRecords.findMany({
+      where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
+      orderBy: [asc(monthlyRecords.created_at)],
+      with: {
+        assignments: {
+          with: {
+            contractors: { columns: { id: true, name: true, contractor_type: true } },
+            clients: { columns: { id: true, name: true } },
+          },
+        },
+      },
+    }),
+    db.query.monthlyClientRecords.findMany({
+      where: and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)),
+      orderBy: [asc(monthlyClientRecords.created_at)],
+      with: {
+        clients: {
+          columns: { id: true, name: true, billing_amount: true, contract_start: true, contract_months: true },
+        },
+      },
+    }),
+    db.query.monthlyGlobalTasks.findFirst({
+      where: and(eq(monthlyGlobalTasks.year, year), eq(monthlyGlobalTasks.month, month)),
+    }),
+    db.select().from(monthlyCustomGlobalTasks).orderBy(asc(monthlyCustomGlobalTasks.created_at)),
+    db.query.moneyforwardExpenses.findFirst({
+      where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
+    }),
+    db.select({ updated_at: moneyforwardTokens.updated_at }).from(moneyforwardTokens).limit(1),
+    db.select({
+      client_id: monthlyClientRecords.client_id,
+      invoice_sent_at: monthlyClientRecords.invoice_sent_at,
+      payment_confirmed_at: monthlyClientRecords.payment_confirmed_at,
+    }).from(monthlyClientRecords).where(
+      // 片方でも null でないレコードを取得（billedCounts / paidCounts の集計用）
+      isNotNull(monthlyClientRecords.client_id)
+    ),
   ])
 
-  const customTasks: CustomGlobalTask[] = ((allCustomTasks ?? []) as CustomGlobalTask[]).filter(
+  const customTasks = allCustomTasks.filter(
     (t) => t.months.length === 0 || t.months.includes(month)
   )
 
   const billedCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
-
-  const { data: allClientRecords } = await supabase
-    .from('monthly_client_records')
-    .select('client_id, invoice_sent_at, payment_confirmed_at')
-
-  for (const r of allClientRecords ?? []) {
+  for (const r of allClientRecords) {
     if (r.invoice_sent_at) billedCounts[r.client_id] = (billedCounts[r.client_id] ?? 0) + 1
     if (r.payment_confirmed_at) paidCounts[r.client_id] = (paidCounts[r.client_id] ?? 0) + 1
   }
@@ -84,16 +78,16 @@ export default async function DashboardPage({
       year={year}
       month={month}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      records={(records ?? []) as any}
+      records={records as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      clientRecords={(clientRecords ?? []) as any}
+      clientRecords={clientRecords as any}
       globalTask={globalTask ?? null}
       customTasks={customTasks}
       today={today.toISOString()}
       billedCounts={billedCounts}
       paidCounts={paidCounts}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
-      mfConnected={!!mfToken}
+      mfConnected={mfToken.length > 0}
     />
   )
 }

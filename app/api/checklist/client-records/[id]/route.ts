@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { monthlyClientRecords } from '@/lib/schema'
+import { eq } from 'drizzle-orm'
 
 const ALLOWED = ['invoice_sent_at', 'payment_confirmed_at'] as const
 type ToggleField = typeof ALLOWED[number]
@@ -8,33 +10,32 @@ export async function PATCH(
   req: NextRequest,
   ctx: RouteContext<'/api/checklist/client-records/[id]'>
 ) {
-  const { id } = await ctx.params
-  const body = await req.json()
-  const field = body.field as string
+  try {
+    const { id } = await ctx.params
+    const body = await req.json()
+    const field = body.field as string
 
-  if (!(ALLOWED as readonly string[]).includes(field)) {
-    return Response.json({ error: 'Invalid field' }, { status: 400 })
+    if (!(ALLOWED as readonly string[]).includes(field)) {
+      return Response.json({ error: 'Invalid field' }, { status: 400 })
+    }
+
+    const [current] = await db.select().from(monthlyClientRecords).where(eq(monthlyClientRecords.id, id))
+    if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
+
+    const currentValue = current[field as ToggleField] as string | null
+    const newValue = currentValue ? null : new Date().toISOString()
+
+    const updateSet = field === 'invoice_sent_at'
+      ? { invoice_sent_at: newValue }
+      : { payment_confirmed_at: newValue }
+
+    const [data] = await db.update(monthlyClientRecords)
+      .set(updateSet)
+      .where(eq(monthlyClientRecords.id, id))
+      .returning()
+
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
   }
-
-  const supabase = createAdminClient()
-  const { data: current, error: fetchErr } = await supabase
-    .from('monthly_client_records')
-    .select(field as ToggleField)
-    .eq('id', id)
-    .single()
-
-  if (fetchErr) return Response.json({ error: fetchErr.message }, { status: 500 })
-
-  const newValue = (current as Record<string, string | null>)[field] ? null : new Date().toISOString()
-
-  const { data, error } = await supabase
-    .from('monthly_client_records')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .update({ [field]: newValue } as any)
-    .eq('id', id)
-    .select()
-    .single()
-
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
 }

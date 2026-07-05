@@ -1,7 +1,14 @@
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { moneyforwardTokens } from '@/lib/schema'
 
 export async function GET() {
-  const supabase = createAdminClient()
-  const { data } = await supabase.from('moneyforward_tokens').select('expires_at, updated_at').limit(1).maybeSingle()
-  return Response.json({ connected: !!data, updatedAt: data?.updated_at ?? null })
+  try {
+    const [data] = await db.select({
+      expires_at: moneyforwardTokens.expires_at,
+      updated_at: moneyforwardTokens.updated_at,
+    }).from(moneyforwardTokens).limit(1)
+    return Response.json({ connected: !!data, updatedAt: data?.updated_at ?? null })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }

@@ -1,22 +1,20 @@
 import 'server-only'
-import { createAdminClient } from './supabase'
+import { db } from './db'
+import { monthlyClientRecords } from './schema'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
 
 export async function getBilledCountByClient(clientId: string): Promise<number> {
-  const supabase = createAdminClient()
-  const { count } = await supabase
-    .from('monthly_client_records')
-    .select('*', { count: 'exact', head: true })
-    .eq('client_id', clientId)
-    .not('invoice_sent_at', 'is', null)
-  return count ?? 0
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(monthlyClientRecords)
+    .where(and(eq(monthlyClientRecords.client_id, clientId), isNotNull(monthlyClientRecords.invoice_sent_at)))
+  return Number(count)
 }
 
 export async function getPaidCountByClient(clientId: string): Promise<number> {
-  const supabase = createAdminClient()
-  const { count } = await supabase
-    .from('monthly_client_records')
-    .select('*', { count: 'exact', head: true })
-    .eq('client_id', clientId)
-    .not('payment_confirmed_at', 'is', null)
-  return count ?? 0
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(monthlyClientRecords)
+    .where(and(eq(monthlyClientRecords.client_id, clientId), isNotNull(monthlyClientRecords.payment_confirmed_at)))
+  return Number(count)
 }

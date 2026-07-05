@@ -1,30 +1,36 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { taxAdviceEntries } from '@/lib/schema'
+import { eq } from 'drizzle-orm'
 
 export async function PATCH(
   req: NextRequest,
   ctx: RouteContext<'/api/tax/advice/[id]'>
 ) {
-  const { id } = await ctx.params
-  const body = await req.json()
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_advice_entries')
-    .update({ title: body.title, body: body.body, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
+  try {
+    const { id } = await ctx.params
+    const body = await req.json()
+    const [data] = await db.update(taxAdviceEntries).set({
+      title: body.title,
+      body: body.body,
+      updated_at: new Date().toISOString(),
+    }).where(eq(taxAdviceEntries.id, id)).returning()
+    if (!data) return Response.json({ error: 'Not found' }, { status: 404 })
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }
 
 export async function DELETE(
   _req: NextRequest,
   ctx: RouteContext<'/api/tax/advice/[id]'>
 ) {
-  const { id } = await ctx.params
-  const supabase = createAdminClient()
-  const { error } = await supabase.from('tax_advice_entries').delete().eq('id', id)
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return new Response(null, { status: 204 })
+  try {
+    const { id } = await ctx.params
+    await db.delete(taxAdviceEntries).where(eq(taxAdviceEntries.id, id))
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }

@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client } from '@/lib/database.types'
+import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client } from '@/lib/schema'
 
 type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {

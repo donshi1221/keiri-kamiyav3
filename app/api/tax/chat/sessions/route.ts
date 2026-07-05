@@ -1,24 +1,25 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { taxChatSessions } from '@/lib/schema'
+import { desc } from 'drizzle-orm'
 
 export async function GET() {
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_chat_sessions')
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
+  try {
+    const data = await db.select().from(taxChatSessions).orderBy(desc(taxChatSessions.created_at))
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}))
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_chat_sessions')
-    .insert({ title: body.title ?? '新しい会話' })
-    .select()
-    .single()
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data, { status: 201 })
+  try {
+    const body = await req.json().catch(() => ({}))
+    const [data] = await db.insert(taxChatSessions).values({
+      title: body.title ?? '新しい会話',
+    }).returning()
+    return Response.json(data, { status: 201 })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }

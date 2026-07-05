@@ -1,20 +1,22 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
-import { getAnthropicClient } from '@/lib/anthropic'
+import { db } from '@/lib/db'
+import { taxAdviceEntries, taxChatMessages } from '@/lib/schema'
+import { eq, asc } from 'drizzle-orm'
+import { getGeminiClient } from '@/lib/gemini'
 
 export async function GET(
   _req: NextRequest,
   ctx: RouteContext<'/api/tax/chat/sessions/[id]/messages'>
 ) {
-  const { id } = await ctx.params
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_chat_messages')
-    .select('*')
-    .eq('session_id', id)
-    .order('created_at', { ascending: true })
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
+  try {
+    const { id } = await ctx.params
+    const data = await db.select().from(taxChatMessages)
+      .where(eq(taxChatMessages.session_id, id))
+      .orderBy(asc(taxChatMessages.created_at))
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }
 
 export async function POST(
@@ -28,14 +30,17 @@ export async function POST(
     return Response.json({ error: 'content is required' }, { status: 400 })
   }
 
-  const supabase = createAdminClient()
-
-  const [{ data: entries }, { data: history }] = await Promise.all([
-    supabase.from('tax_advice_entries').select('title, body').order('created_at', { ascending: true }),
-    supabase.from('tax_chat_messages').select('role, content').eq('session_id', sessionId).order('created_at', { ascending: true }),
+  const [entries, history] = await Promise.all([
+    db.select({ title: taxAdviceEntries.title, body: taxAdviceEntries.body })
+      .from(taxAdviceEntries)
+      .orderBy(asc(taxAdviceEntries.created_at)),
+    db.select({ role: taxChatMessages.role, content: taxChatMessages.content })
+      .from(taxChatMessages)
+      .where(eq(taxChatMessages.session_id, sessionId))
+      .orderBy(asc(taxChatMessages.created_at)),
   ])
 
-  const adviceContext = entries?.length
+  const adviceContext = entries.length
     ? entries.map((e) => `【${e.title}】\n${e.body}`).join('\n\n')
     : '（蓄積アドバイスなし）'
 
@@ -51,27 +56,28 @@ export async function POST(
     '日本語で回答してください。',
   ].join('\n')
 
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    ...(history ?? []).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user', content: userContent },
-  ]
+  const gemini = getGeminiClient()
+  const model = gemini.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
-  const anthropic = getAnthropicClient()
+  const geminiHistory = history.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
 
-  const stream = await anthropic.messages.stream({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
-    system: systemPrompt,
-    messages,
+  const chat = model.startChat({
+    systemInstruction: systemPrompt,
+    history: geminiHistory,
   })
+
+  const result = await chat.sendMessageStream(userContent)
 
   let fullText = ''
 
   const readable = new ReadableStream({
     async start(controller) {
-      for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-          const text = chunk.delta.text
+      for await (const chunk of result.stream) {
+        const text = chunk.text()
+        if (text) {
           fullText += text
           controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n\n`))
         }
@@ -79,7 +85,7 @@ export async function POST(
       controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
       controller.close()
 
-      await supabase.from('tax_chat_messages').insert([
+      await db.insert(taxChatMessages).values([
         { session_id: sessionId, role: 'user', content: userContent },
         { session_id: sessionId, role: 'assistant', content: fullText },
       ])

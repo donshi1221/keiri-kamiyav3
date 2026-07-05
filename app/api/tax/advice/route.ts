@@ -1,24 +1,27 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { taxAdviceEntries } from '@/lib/schema'
+import { desc } from 'drizzle-orm'
 
 export async function GET() {
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_advice_entries')
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data)
+  try {
+    const data = await db.select().from(taxAdviceEntries).orderBy(desc(taxAdviceEntries.created_at))
+    return Response.json(data)
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
-  const supabase = createAdminClient()
-  const { data, error } = await supabase
-    .from('tax_advice_entries')
-    .insert({ title: body.title, body: body.body, source_type: 'manual' })
-    .select()
-    .single()
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json(data, { status: 201 })
+  try {
+    const body = await req.json()
+    const [data] = await db.insert(taxAdviceEntries).values({
+      title: body.title,
+      body: body.body,
+      source_type: 'manual',
+    }).returning()
+    return Response.json(data, { status: 201 })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+  }
 }

@@ -1,56 +1,42 @@
 import { NextRequest } from 'next/server'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { assignments, clients, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks } from '@/lib/schema'
+import { eq } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get('x-cron-secret')
-  if (secret !== process.env.CRON_SECRET) {
+  const auth = req.headers.get('authorization')
+  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const today = nowJST()
-  const year = today.getFullYear()
-  const month = today.getMonth() + 1
-  const supabase = createAdminClient()
+  try {
+    const today = nowJST()
+    const year = today.getFullYear()
+    const month = today.getMonth() + 1
 
-  const { data: assignments, error: assignErr } = await supabase
-    .from('assignments')
-    .select('id')
-    .eq('active', true)
+    const activeAssignments = await db.select({ id: assignments.id }).from(assignments).where(eq(assignments.active, true))
 
-  if (assignErr) return Response.json({ error: assignErr.message }, { status: 500 })
+    if (activeAssignments.length > 0) {
+      await db.insert(monthlyRecords)
+        .values(activeAssignments.map((a) => ({ year, month, assignment_id: a.id })))
+        .onConflictDoNothing()
+    }
 
-  if (assignments && assignments.length > 0) {
-    const { error } = await supabase
-      .from('monthly_records')
-      .upsert(
-        assignments.map((a) => ({ year, month, assignment_id: a.id })),
-        { onConflict: 'year,month,assignment_id', ignoreDuplicates: true }
-      )
-    if (error) return Response.json({ error: error.message }, { status: 500 })
+    const allClients = await db.select({ id: clients.id }).from(clients)
+
+    if (allClients.length > 0) {
+      await db.insert(monthlyClientRecords)
+        .values(allClients.map((c) => ({ year, month, client_id: c.id })))
+        .onConflictDoNothing()
+    }
+
+    await db.insert(monthlyGlobalTasks)
+      .values({ year, month })
+      .onConflictDoNothing()
+
+    return Response.json({ ok: true, year, month, assignmentCount: activeAssignments.length })
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
   }
-
-  const { data: clients, error: clientErr } = await supabase
-    .from('clients')
-    .select('id')
-
-  if (clientErr) return Response.json({ error: clientErr.message }, { status: 500 })
-
-  if (clients && clients.length > 0) {
-    const { error } = await supabase
-      .from('monthly_client_records')
-      .upsert(
-        clients.map((c) => ({ year, month, client_id: c.id })),
-        { onConflict: 'year,month,client_id', ignoreDuplicates: true }
-      )
-    if (error) return Response.json({ error: error.message }, { status: 500 })
-  }
-
-  const { error: globalErr } = await supabase
-    .from('monthly_global_tasks')
-    .upsert({ year, month }, { onConflict: 'year,month', ignoreDuplicates: true })
-
-  if (globalErr) return Response.json({ error: globalErr.message }, { status: 500 })
-
-  return Response.json({ ok: true, year, month, assignmentCount: assignments?.length ?? 0 })
 }

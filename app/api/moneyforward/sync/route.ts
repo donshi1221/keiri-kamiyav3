@@ -1,5 +1,6 @@
 import { fetchMFExpenses } from '@/lib/moneyforward'
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { moneyforwardExpenses } from '@/lib/schema'
 import { NextRequest } from 'next/server'
 
 export async function POST(req: NextRequest) {
@@ -11,11 +12,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const amount = await fetchMFExpenses(year, month)
-    const supabase = createAdminClient()
-    await supabase.from('moneyforward_expenses').upsert(
-      { year, month, amount, synced_at: new Date().toISOString() },
-      { onConflict: 'year,month' }
-    )
+    await db.insert(moneyforwardExpenses)
+      .values({ year, month, amount, synced_at: new Date().toISOString() })
+      .onConflictDoUpdate({
+        target: [moneyforwardExpenses.year, moneyforwardExpenses.month],
+        set: { amount, synced_at: new Date().toISOString() },
+      })
     return Response.json({ ok: true, amount })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
-import type { Contractor, Client, Assignment } from '@/lib/database.types'
+import type { Contractor, Client, Assignment } from '@/lib/schema'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null

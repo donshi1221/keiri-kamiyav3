@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, X } from 'lucide-react'
 import { getLastDayOfMonth } from '@/lib/dates'
-import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/database.types'
+import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/schema'
 
 type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {

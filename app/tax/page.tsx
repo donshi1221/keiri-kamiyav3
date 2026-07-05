@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
-import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/database.types'
+import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/schema'
 
 // ─────────────────────────────────────────────
 // Dialog

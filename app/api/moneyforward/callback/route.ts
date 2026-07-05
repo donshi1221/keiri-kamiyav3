@@ -8,11 +8,14 @@ export async function GET(req: NextRequest) {
     return redirect('/?mf_error=no_code')
   }
 
+  let success = false
   try {
     const tokens = await exchangeCodeForTokens(code)
     await saveTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in)
-    return redirect('/?mf_connected=1')
+    success = true
   } catch {
-    return redirect('/?mf_error=token_failed')
+    success = false
   }
+
+  return success ? redirect('/?mf_connected=1') : redirect('/?mf_error=token_failed')
 }

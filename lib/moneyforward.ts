@@ -1,4 +1,6 @@
-import { createAdminClient } from './supabase'
+import { db } from './db'
+import { moneyforwardTokens } from './schema'
+import { eq } from 'drizzle-orm'
 
 const MF_AUTH_URL = 'https://id.moneyforward.com/oauth/authorize'
 const MF_TOKEN_URL = 'https://id.moneyforward.com/oauth/token'
@@ -47,18 +49,17 @@ async function refreshAccessToken(refreshToken: string) {
 }
 
 export async function saveTokens(accessToken: string, refreshToken: string, expiresIn: number) {
-  const supabase = createAdminClient()
   const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
-  const { data: existing } = await supabase.from('moneyforward_tokens').select('id').limit(1).maybeSingle()
+  const [existing] = await db.select({ id: moneyforwardTokens.id }).from(moneyforwardTokens).limit(1)
   if (existing) {
-    await supabase.from('moneyforward_tokens').update({
+    await db.update(moneyforwardTokens).set({
       access_token: accessToken,
       refresh_token: refreshToken,
       expires_at: expiresAt,
       updated_at: new Date().toISOString(),
-    }).eq('id', existing.id)
+    }).where(eq(moneyforwardTokens.id, existing.id))
   } else {
-    await supabase.from('moneyforward_tokens').insert({
+    await db.insert(moneyforwardTokens).values({
       access_token: accessToken,
       refresh_token: refreshToken,
       expires_at: expiresAt,
@@ -68,8 +69,7 @@ export async function saveTokens(accessToken: string, refreshToken: string, expi
 
 // 有効なアクセストークンを返す（期限切れの場合は自動でリフレッシュ）
 export async function getValidAccessToken(): Promise<string | null> {
-  const supabase = createAdminClient()
-  const { data: token } = await supabase.from('moneyforward_tokens').select('*').limit(1).maybeSingle()
+  const [token] = await db.select().from(moneyforwardTokens).limit(1)
   if (!token) return null
 
   const expiresAt = new Date(token.expires_at)

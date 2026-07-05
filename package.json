@@ -10,12 +10,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
     "@base-ui/react": "^1.6.0",
-    "@supabase/ssr": "^0.12.0",
-    "@supabase/supabase-js": "^2.108.2",
+    "@google/generative-ai": "^0.24.1",
+    "@neondatabase/serverless": "^1.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
+    "drizzle-orm": "^0.45.2",
     "lucide-react": "^1.21.0",
     "next": "16.2.9",
     "pdf-parse": "^2.4.5",
@@ -33,6 +34,7 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.10",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

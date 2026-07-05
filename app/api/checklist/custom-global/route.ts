@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { clients } from '@/lib/schema'
+import { monthlyCustomGlobalTasks } from '@/lib/schema'
 import { asc } from 'drizzle-orm'
 
 export async function GET() {
   try {
-    const data = await db.select().from(clients).orderBy(asc(clients.created_at))
+    const data = await db.select().from(monthlyCustomGlobalTasks).orderBy(asc(monthlyCustomGlobalTasks.created_at))
     return Response.json(data)
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
@@ -15,13 +15,16 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const [data] = await db.insert(clients).values({
-      name: body.name,
-      contact_person: body.contact_person ?? null,
-      billing_amount: body.billing_amount ?? 0,
-      contract_start: body.contract_start ?? null,
-      contract_months: body.contract_months ? Number(body.contract_months) : null,
-      notes: body.notes ?? null,
+    const title = body.title as string
+    const months = (body.months ?? []) as number[]
+
+    if (!title?.trim()) {
+      return Response.json({ error: 'title is required' }, { status: 400 })
+    }
+
+    const [data] = await db.insert(monthlyCustomGlobalTasks).values({
+      title: title.trim(),
+      months,
     }).returning()
     return Response.json(data, { status: 201 })
   } catch (err) {

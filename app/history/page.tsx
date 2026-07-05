@@ -1,4 +1,6 @@
-import { createAdminClient } from '@/lib/supabase'
+import { db } from '@/lib/db'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks } from '@/lib/schema'
+import { and, eq, asc } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import HistoryClient from './history-client'
 
@@ -13,31 +15,29 @@ export default async function HistoryPage({
   const year = params.year ? Number(params.year) : defaultDate.getFullYear()
   const month = params.month ? Number(params.month) : defaultDate.getMonth() + 1
 
-  const supabase = createAdminClient()
-
-  const [
-    { data: records },
-    { data: clientRecords },
-    { data: globalTask },
-  ] = await Promise.all([
-    supabase
-      .from('monthly_records')
-      .select('*, assignments ( *, contractors ( id, name, contractor_type ), clients ( id, name ) )')
-      .eq('year', year)
-      .eq('month', month)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('monthly_client_records')
-      .select('*, clients ( id, name, billing_amount )')
-      .eq('year', year)
-      .eq('month', month)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('monthly_global_tasks')
-      .select('*')
-      .eq('year', year)
-      .eq('month', month)
-      .maybeSingle(),
+  const [records, clientRecords, globalTask] = await Promise.all([
+    db.query.monthlyRecords.findMany({
+      where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
+      orderBy: [asc(monthlyRecords.created_at)],
+      with: {
+        assignments: {
+          with: {
+            contractors: { columns: { id: true, name: true, contractor_type: true } },
+            clients: { columns: { id: true, name: true } },
+          },
+        },
+      },
+    }),
+    db.query.monthlyClientRecords.findMany({
+      where: and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)),
+      orderBy: [asc(monthlyClientRecords.created_at)],
+      with: {
+        clients: { columns: { id: true, name: true, billing_amount: true } },
+      },
+    }),
+    db.query.monthlyGlobalTasks.findFirst({
+      where: and(eq(monthlyGlobalTasks.year, year), eq(monthlyGlobalTasks.month, month)),
+    }),
   ])
 
   return (
@@ -45,9 +45,9 @@ export default async function HistoryPage({
       year={year}
       month={month}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      records={(records ?? []) as any}
+      records={records as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      clientRecords={(clientRecords ?? []) as any}
+      clientRecords={clientRecords as any}
       globalTask={globalTask ?? null}
     />
   )
