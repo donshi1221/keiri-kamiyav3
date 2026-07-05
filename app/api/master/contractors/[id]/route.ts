@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { contractors } from '@/lib/schema'
-import { eq } from 'drizzle-orm'
+import { contractors, assignments } from '@/lib/schema'
+import { eq, sql } from 'drizzle-orm'
 
 export async function PATCH(
   req: NextRequest,
@@ -29,6 +29,19 @@ export async function DELETE(
 ) {
   try {
     const { id } = await ctx.params
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(assignments)
+      .where(eq(assignments.contractor_id, id))
+
+    if (Number(count) > 0) {
+      return Response.json(
+        { error: `${count}件のアサインが存在するため削除できません。先にアサインを削除してください。` },
+        { status: 409 }
+      )
+    }
+
     await db.delete(contractors).where(eq(contractors.id, id))
     return new Response(null, { status: 204 })
   } catch (err) {

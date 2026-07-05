@@ -39,6 +39,7 @@ export default function TaxPage() {
   const [messages, setMessages] = useState<TaxChatMessage[]>([])
   const [addTextOpen, setAddTextOpen] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<'advice' | 'chat'>('chat')
 
   const loadEntries = useCallback(async () => {
     const data = await fetch('/api/tax/advice').then((r) => r.json())
@@ -83,9 +84,28 @@ export default function TaxPage() {
   return (
     <div>
       <h1 className="text-xl font-bold mb-6">税務メモ</h1>
-      <div className="flex gap-6 h-[calc(100vh-160px)]">
+
+      {/* スマホ表示（md未満）: パネル切替タブ */}
+      <div className="mb-3 flex gap-2 border-b md:hidden">
+        <button
+          type="button"
+          onClick={() => setMobilePanel('advice')}
+          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'advice' ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500'}`}
+        >
+          アドバイス管理
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobilePanel('chat')}
+          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'chat' ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500'}`}
+        >
+          AIチャット
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-6 h-[calc(100dvh-260px)] md:h-[calc(100dvh-160px)] md:flex-row">
         {/* 左パネル: アドバイス管理 */}
-        <div className="w-72 shrink-0 flex flex-col gap-3">
+        <div className={`w-full shrink-0 flex-col gap-3 md:flex md:w-72 ${mobilePanel === 'advice' ? 'flex' : 'hidden'}`}>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" className="flex-1" onClick={() => setAddTextOpen(true)}>
               + テキスト追加
@@ -130,7 +150,7 @@ export default function TaxPage() {
         </div>
 
         {/* 右パネル: AIチャット */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className={`flex-1 flex-col min-w-0 md:flex ${mobilePanel === 'chat' ? 'flex' : 'hidden'}`}>
           <div className="flex items-center gap-2 mb-3">
             <Button size="sm" onClick={newSession}>新しい会話</Button>
             {sessions.length > 0 && (

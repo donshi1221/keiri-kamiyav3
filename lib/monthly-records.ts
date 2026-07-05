@@ -18,16 +18,25 @@ function isClientActiveForMonth(
 }
 
 export async function generateMonthlyRecords(year: number, month: number) {
-  const activeAssignments = await db.select({ id: assignments.id }).from(assignments).where(eq(assignments.active, true))
+  const activeAssignments = await db.select({
+    id: assignments.id,
+    contractor_payout_amount: assignments.contractor_payout_amount,
+  }).from(assignments).where(eq(assignments.active, true))
 
   if (activeAssignments.length > 0) {
     await db.insert(monthlyRecords)
-      .values(activeAssignments.map((a) => ({ year, month, assignment_id: a.id })))
+      .values(activeAssignments.map((a) => ({
+        year,
+        month,
+        assignment_id: a.id,
+        payout_amount_snapshot: a.contractor_payout_amount,
+      })))
       .onConflictDoNothing()
   }
 
   const allClients = await db.select({
     id: clients.id,
+    billing_amount: clients.billing_amount,
     contract_start: clients.contract_start,
     contract_months: clients.contract_months,
   }).from(clients)
@@ -36,7 +45,12 @@ export async function generateMonthlyRecords(year: number, month: number) {
 
   if (activeClients.length > 0) {
     await db.insert(monthlyClientRecords)
-      .values(activeClients.map((c) => ({ year, month, client_id: c.id })))
+      .values(activeClients.map((c) => ({
+        year,
+        month,
+        client_id: c.id,
+        billing_amount_snapshot: c.billing_amount,
+      })))
       .onConflictDoNothing()
   }
 

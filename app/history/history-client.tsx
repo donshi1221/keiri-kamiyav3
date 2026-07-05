@@ -61,7 +61,7 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
       </div>
 
       {/* 閲覧専用バナー */}
-      <div className="sticky top-14 z-10 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2 rounded-lg">
+      <div className="sticky top-12 z-10 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2 rounded-lg md:top-14">
         過去月（閲覧専用）— この月のデータは変更できません
       </div>
 
@@ -88,38 +88,66 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
         <div className="px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
         </div>
-        <div className="overflow-x-auto">
-          {clientRecords.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコードなし</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs font-normal text-gray-400">15日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs font-normal text-gray-400">25日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientRecords.map((cr) => (
-                  <tr key={cr.id} className="border-b last:border-0">
-                    <td className="py-3 px-4 font-medium">{cr.clients?.name ?? '?'}</td>
-                    <td className="py-3 px-3 text-right text-gray-600">
-                      {cr.clients?.billing_amount ? `¥${cr.clients.billing_amount.toLocaleString()}` : '—'}
-                    </td>
-                    <td className="text-center py-3 px-3">
-                      <CheckIcon done={!!cr.invoice_sent_at} label="送付" />
-                    </td>
-                    <td className="text-center py-3 px-3">
-                      <CheckIcon done={!!cr.payment_confirmed_at} label="入金確認" />
-                    </td>
+        {clientRecords.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">レコードなし</p>
+        ) : (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-gray-50">
+                  <tr>
+                    <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs font-normal text-gray-400">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs font-normal text-gray-400">25日</span></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                </thead>
+                <tbody>
+                  {clientRecords.map((cr) => (
+                    <tr key={cr.id} className="border-b last:border-0">
+                      <td className="py-3 px-4 font-medium">{cr.clients?.name ?? '?'}</td>
+                      <td className="py-3 px-3 text-right text-gray-600">
+                        {(() => {
+                          const billing = cr.billing_amount_snapshot ?? cr.clients?.billing_amount
+                          return billing ? `¥${billing.toLocaleString()}` : '—'
+                        })()}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <CheckIcon done={!!cr.invoice_sent_at} label="送付" />
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <CheckIcon done={!!cr.payment_confirmed_at} label="入金確認" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="divide-y md:hidden">
+              {clientRecords.map((cr) => {
+                const billing = cr.billing_amount_snapshot ?? cr.clients?.billing_amount
+                return (
+                  <div key={cr.id} className="px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="font-medium">{cr.clients?.name ?? '?'}</span>
+                      <span className="text-sm text-gray-600">{billing ? `¥${billing.toLocaleString()}` : '—'}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2 text-xs text-gray-500">
+                      <div className="flex flex-col items-center gap-1">
+                        <span>送付<span className="ml-1 text-gray-400">15日</span></span>
+                        <CheckIcon done={!!cr.invoice_sent_at} label="送付" />
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span>入金確認<span className="ml-1 text-gray-400">25日</span></span>
+                        <CheckIcon done={!!cr.payment_confirmed_at} label="入金確認" />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
       </section>
 
       {/* 委託者 — 請求書受領・支払管理 */}
@@ -127,52 +155,88 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
         <div className="px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
         </div>
-        <div className="overflow-x-auto">
-          {records.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコードなし</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs font-normal text-gray-400">10日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs font-normal text-gray-400">15日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs font-normal text-gray-400">末日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((r) => {
-                  const asgn = r.assignments
-                  const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
-                  const payout = isVideoEditor
-                    ? r.actual_payout_amount
-                    : asgn?.contractor_payout_amount
-                  return (
-                    <tr key={r.id} className="border-b last:border-0">
-                      <td className="py-3 px-4">
+        {records.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">レコードなし</p>
+        ) : (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-gray-50">
+                  <tr>
+                    <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs font-normal text-gray-400">10日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs font-normal text-gray-400">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs font-normal text-gray-400">末日</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {records.map((r) => {
+                    const asgn = r.assignments
+                    const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
+                    const payout = isVideoEditor
+                      ? r.actual_payout_amount
+                      : (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount)
+                    return (
+                      <tr key={r.id} className="border-b last:border-0">
+                        <td className="py-3 px-4">
+                          <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
+                          <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                        </td>
+                        <td className="py-3 px-3 text-right text-gray-600">
+                          {payout != null ? `¥${payout.toLocaleString()}` : '—'}
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <CheckIcon done={!!r.invoice_received_at} label="受領" />
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <CheckIcon done={!!r.payment_reserved_at} label="支払予約" />
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <CheckIcon done={!!r.contractor_paid_at} label="支払確認" />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="divide-y md:hidden">
+              {records.map((r) => {
+                const asgn = r.assignments
+                const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
+                const payout = isVideoEditor
+                  ? r.actual_payout_amount
+                  : (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount)
+                return (
+                  <div key={r.id} className="px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div>
                         <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
                         <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
-                      </td>
-                      <td className="py-3 px-3 text-right text-gray-600">
-                        {payout != null ? `¥${payout.toLocaleString()}` : '—'}
-                      </td>
-                      <td className="text-center py-3 px-3">
+                      </div>
+                      <span className="text-sm text-gray-600">{payout != null ? `¥${payout.toLocaleString()}` : '—'}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2 text-xs text-gray-500">
+                      <div className="flex flex-col items-center gap-1">
+                        <span>受領<span className="ml-1 text-gray-400">10日</span></span>
                         <CheckIcon done={!!r.invoice_received_at} label="受領" />
-                      </td>
-                      <td className="text-center py-3 px-3">
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span>支払予約<span className="ml-1 text-gray-400">15日</span></span>
                         <CheckIcon done={!!r.payment_reserved_at} label="支払予約" />
-                      </td>
-                      <td className="text-center py-3 px-3">
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span>支払確認<span className="ml-1 text-gray-400">末日</span></span>
                         <CheckIcon done={!!r.contractor_paid_at} label="支払確認" />
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
       </section>
     </div>
   )

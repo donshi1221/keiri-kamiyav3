@@ -2,11 +2,31 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import ErrorToast from '@/app/components/error-toast'
 import type { Contractor, Client, Assignment } from '@/lib/schema'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
   clients: Pick<Client, 'id' | 'name'> | null
+}
+
+async function readErrorMessage(res: Response, fallback: string) {
+  try {
+    const data = await res.json()
+    return typeof data?.error === 'string' ? data.error : fallback
+  } catch {
+    return fallback
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -42,6 +62,16 @@ export default function MasterPage() {
   const [contractors, setContractors] = useState<Contractor[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [assignments, setAssignments] = useState<AssignmentWithRelations[]>([])
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showError = useCallback((msg: string) => {
+    setErrorMsg(msg)
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+    errorTimerRef.current = setTimeout(() => setErrorMsg(null), 5000)
+  }, [])
+
+  useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
 
   const load = useCallback(async () => {
     const [c, cl, a] = await Promise.all([
@@ -58,6 +88,8 @@ export default function MasterPage() {
 
   return (
     <div className="space-y-6">
+      {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
+
       <h1 className="text-xl font-bold">マスタ管理</h1>
       <div className="flex gap-2 border-b">
         {(['contractor', 'client'] as const).map((t) => (
@@ -72,10 +104,10 @@ export default function MasterPage() {
       </div>
 
       {tab === 'contractor' && (
-        <ContractorTab contractors={contractors} assignments={assignments} clients={clients} onRefresh={load} />
+        <ContractorTab contractors={contractors} assignments={assignments} clients={clients} onRefresh={load} onError={showError} />
       )}
       {tab === 'client' && (
-        <ClientTab clients={clients} contractors={contractors} assignments={assignments} onRefresh={load} />
+        <ClientTab clients={clients} contractors={contractors} assignments={assignments} onRefresh={load} onError={showError} />
       )}
     </div>
   )
@@ -84,41 +116,58 @@ export default function MasterPage() {
 // ─────────────────────────────────────────────
 // Contractor Tab
 // ─────────────────────────────────────────────
-function ContractorTab({ contractors, assignments, clients, onRefresh }: {
+function ContractorTab({ contractors, assignments, clients, onRefresh, onError }: {
   contractors: Contractor[]
   assignments: AssignmentWithRelations[]
   clients: Client[]
   onRefresh: () => void
+  onError: (msg: string) => void
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [editContractor, setEditContractor] = useState<Contractor | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Contractor | null>(null)
+  const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
 
-  async function deleteContractor(id: string) {
-    if (!confirm('この委託者を削除しますか？')) return
-    await fetch(`/api/master/contractors/${id}`, { method: 'DELETE' })
+  async function confirmDeleteContractor() {
+    if (!deleteTarget) return
+    const id = deleteTarget.id
+    setDeleteTarget(null)
+    const res = await fetch(`/api/master/contractors/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      onError(await readErrorMessage(res, '委託者の削除に失敗しました。'))
+      return
+    }
     onRefresh()
   }
 
   async function deactivateAssignment(id: string) {
-    await fetch(`/api/master/assignments/${id}`, {
+    const res = await fetch(`/api/master/assignments/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: false }),
     })
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
+      return
+    }
     onRefresh()
   }
 
-  async function deleteAssignment(id: string) {
+  async function deleteAssignment(id: string, label: string) {
     const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
     if (res.status === 409) {
-      const data = await res.json()
-      if (data.hint === 'inactive') {
-        if (confirm('月次レコードが存在するため削除できません。代わりに非アクティブにしますか？')) {
-          await deactivateAssignment(id)
-        }
+      const data = await res.json().catch(() => null)
+      if (data?.hint === 'inactive') {
+        setDeactivateTarget({ id, label })
         return
       }
+      onError(data?.error ?? '削除できませんでした。')
+      return
+    }
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+      return
     }
     onRefresh()
   }
@@ -136,14 +185,14 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
           const myAssignments = assignments.filter((a) => a.contractor_id === c.id)
           return (
             <div key={c.id} className="rounded-lg border bg-white">
-              <div className="flex items-center gap-3 px-4 py-3 border-b">
-                <span className="font-medium flex-1">{c.name}</span>
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
+                <span className="font-medium flex-1 min-w-[8rem]">{c.name}</span>
                 <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
                   {c.contractor_type === 'daiko' ? '代行者' : '動画編集者'}
                 </span>
                 {c.email && <span className="text-xs text-gray-400">{c.email}</span>}
                 <button onClick={() => setEditContractor(c)} className="text-xs text-blue-600 hover:underline">編集</button>
-                <button onClick={() => deleteContractor(c.id)} className="text-xs text-red-500 hover:underline">削除</button>
+                <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline">削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
@@ -166,7 +215,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id)} className="text-xs text-red-400 hover:underline">削除</button>
+                          <button onClick={() => deleteAssignment(a.id, `${a.clients?.name ?? ''} — ${a.role_name}`)} className="text-xs text-red-400 hover:underline">削除</button>
                         )}
                       </div>
                     ))}
@@ -182,12 +231,14 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         onSaved={() => { setAddOpen(false); onRefresh() }}
+        onError={onError}
         initial={null}
       />
       <ContractorFormDialog
         open={!!editContractor}
         onClose={() => setEditContractor(null)}
         onSaved={() => { setEditContractor(null); onRefresh() }}
+        onError={onError}
         initial={editContractor}
       />
       {addAssignOpen && (
@@ -195,6 +246,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
           open={!!addAssignOpen}
           onClose={() => setAddAssignOpen(null)}
           onSaved={() => { setAddAssignOpen(null); onRefresh() }}
+          onError={onError}
           clients={clients}
           contractors={[]}
           fixedContractorId={addAssignOpen}
@@ -202,6 +254,43 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
           initial={null}
         />
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>委託者を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.name}」を削除します。この操作は取り消せません。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmDeleteContractor}>削除する</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deactivateTarget} onOpenChange={(open) => { if (!open) setDeactivateTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>削除できません</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deactivateTarget?.label}」は月次記録が存在するため削除できません。代わりに非アクティブにしますか？（過去の記録は残ります）
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deactivateTarget) deactivateAssignment(deactivateTarget.id)
+                setDeactivateTarget(null)
+              }}
+            >
+              非アクティブにする
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -209,41 +298,58 @@ function ContractorTab({ contractors, assignments, clients, onRefresh }: {
 // ─────────────────────────────────────────────
 // Client Tab
 // ─────────────────────────────────────────────
-function ClientTab({ clients, contractors, assignments, onRefresh }: {
+function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
   clients: Client[]
   contractors: Contractor[]
   assignments: AssignmentWithRelations[]
   onRefresh: () => void
+  onError: (msg: string) => void
 }) {
   const [addClientOpen, setAddClientOpen] = useState(false)
   const [editClient, setEditClient] = useState<Client | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
+  const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
 
-  async function deleteClient(id: string) {
-    if (!confirm('このクライアントを削除しますか？')) return
-    await fetch(`/api/master/clients/${id}`, { method: 'DELETE' })
+  async function confirmDeleteClient() {
+    if (!deleteTarget) return
+    const id = deleteTarget.id
+    setDeleteTarget(null)
+    const res = await fetch(`/api/master/clients/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'クライアントの削除に失敗しました。'))
+      return
+    }
     onRefresh()
   }
 
   async function deactivateAssignment(id: string) {
-    await fetch(`/api/master/assignments/${id}`, {
+    const res = await fetch(`/api/master/assignments/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: false }),
     })
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
+      return
+    }
     onRefresh()
   }
 
-  async function deleteAssignment(id: string) {
+  async function deleteAssignment(id: string, label: string) {
     const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
     if (res.status === 409) {
-      const data = await res.json()
-      if (data.hint === 'inactive') {
-        if (confirm('月次レコードが存在するため削除できません。代わりに非アクティブにしますか？')) {
-          await deactivateAssignment(id)
-        }
+      const data = await res.json().catch(() => null)
+      if (data?.hint === 'inactive') {
+        setDeactivateTarget({ id, label })
         return
       }
+      onError(data?.error ?? '削除できませんでした。')
+      return
+    }
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+      return
     }
     onRefresh()
   }
@@ -261,8 +367,8 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
           const myAssignments = assignments.filter((a) => a.client_id === cl.id)
           return (
             <div key={cl.id} className="rounded-lg border bg-white">
-              <div className="flex items-center gap-3 px-4 py-3 border-b">
-                <span className="font-medium flex-1">{cl.name}</span>
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
+                <span className="font-medium flex-1 min-w-[8rem]">{cl.name}</span>
                 {cl.billing_amount > 0 && (
                   <span className="text-sm text-gray-600">¥{cl.billing_amount.toLocaleString()}</span>
                 )}
@@ -270,7 +376,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
                   <span className="text-xs text-gray-400">{cl.contract_months}ヶ月</span>
                 )}
                 <button onClick={() => setEditClient(cl)} className="text-xs text-blue-600 hover:underline">編集</button>
-                <button onClick={() => deleteClient(cl.id)} className="text-xs text-red-500 hover:underline">削除</button>
+                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline">削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
@@ -290,7 +396,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id)} className="text-xs text-red-400 hover:underline">削除</button>
+                          <button onClick={() => deleteAssignment(a.id, `${a.contractors?.name ?? ''} — ${a.role_name}`)} className="text-xs text-red-400 hover:underline">削除</button>
                         )}
                       </div>
                     ))}
@@ -306,12 +412,14 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
         open={addClientOpen}
         onClose={() => setAddClientOpen(false)}
         onSaved={() => { setAddClientOpen(false); onRefresh() }}
+        onError={onError}
         initial={null}
       />
       <ClientFormDialog
         open={!!editClient}
         onClose={() => setEditClient(null)}
         onSaved={() => { setEditClient(null); onRefresh() }}
+        onError={onError}
         initial={editClient}
       />
       {addAssignOpen && (
@@ -319,12 +427,50 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
           open={!!addAssignOpen}
           onClose={() => setAddAssignOpen(null)}
           onSaved={() => { setAddAssignOpen(null); onRefresh() }}
+          onError={onError}
           clients={[]}
           contractors={contractors}
           fixedClientId={addAssignOpen}
           initial={null}
         />
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>クライアントを削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.name}」を削除します。この操作は取り消せません。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmDeleteClient}>削除する</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deactivateTarget} onOpenChange={(open) => { if (!open) setDeactivateTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>削除できません</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deactivateTarget?.label}」は月次記録が存在するため削除できません。代わりに非アクティブにしますか？（過去の記録は残ります）
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deactivateTarget) deactivateAssignment(deactivateTarget.id)
+                setDeactivateTarget(null)
+              }}
+            >
+              非アクティブにする
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -332,10 +478,11 @@ function ClientTab({ clients, contractors, assignments, onRefresh }: {
 // ─────────────────────────────────────────────
 // Contractor Form Dialog
 // ─────────────────────────────────────────────
-function ContractorFormDialog({ open, onClose, onSaved, initial }: {
+function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   open: boolean
   onClose: () => void
   onSaved: () => void
+  onError: (msg: string) => void
   initial: Contractor | null
 }) {
   const [name, setName] = useState('')
@@ -354,20 +501,22 @@ function ContractorFormDialog({ open, onClose, onSaved, initial }: {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    if (initial) {
-      await fetch(`/api/master/contractors/${initial.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
-      })
-    } else {
-      await fetch('/api/master/contractors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
-      })
-    }
+    const res = initial
+      ? await fetch(`/api/master/contractors/${initial.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+        })
+      : await fetch('/api/master/contractors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+        })
     setSaving(false)
+    if (!res.ok) {
+      onError(await readErrorMessage(res, '委託者の保存に失敗しました。'))
+      return
+    }
     onSaved()
   }
 
@@ -375,7 +524,7 @@ function ContractorFormDialog({ open, onClose, onSaved, initial }: {
     <Dialog open={open} onClose={onClose} title={initial ? '委託者を編集' : '委託者を追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="text-sm font-medium block mb-1">名前 <span className="text-red-500">*</span></label>
+          <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
         <div>
@@ -401,10 +550,11 @@ function ContractorFormDialog({ open, onClose, onSaved, initial }: {
 // ─────────────────────────────────────────────
 // Client Form Dialog
 // ─────────────────────────────────────────────
-function ClientFormDialog({ open, onClose, onSaved, initial }: {
+function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   open: boolean
   onClose: () => void
   onSaved: () => void
+  onError: (msg: string) => void
   initial: Client | null
 }) {
   const [name, setName] = useState('')
@@ -431,20 +581,22 @@ function ClientFormDialog({ open, onClose, onSaved, initial }: {
       contract_start: contractStart || null,
       contract_months: contractMonths ? Number(contractMonths) : null,
     }
-    if (initial) {
-      await fetch(`/api/master/clients/${initial.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-    } else {
-      await fetch('/api/master/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-    }
+    const res = initial
+      ? await fetch(`/api/master/clients/${initial.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      : await fetch('/api/master/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
     setSaving(false)
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
+      return
+    }
     onSaved()
   }
 
@@ -452,7 +604,7 @@ function ClientFormDialog({ open, onClose, onSaved, initial }: {
     <Dialog open={open} onClose={onClose} title={initial ? 'クライアントを編集' : 'クライアントを追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="text-sm font-medium block mb-1">名前 <span className="text-red-500">*</span></label>
+          <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
         <div>
@@ -481,10 +633,11 @@ function ClientFormDialog({ open, onClose, onSaved, initial }: {
 // ─────────────────────────────────────────────
 // Assign Form Dialog
 // ─────────────────────────────────────────────
-function AssignFormDialog({ open, onClose, onSaved, clients, contractors, fixedContractorId, fixedContractorType, fixedClientId, initial }: {
+function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractors, fixedContractorId, fixedContractorType, fixedClientId, initial }: {
   open: boolean
   onClose: () => void
   onSaved: () => void
+  onError: (msg: string) => void
   clients: Client[]
   contractors: Contractor[]
   fixedContractorId?: string
@@ -531,12 +684,16 @@ function AssignFormDialog({ open, onClose, onSaved, clients, contractors, fixedC
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
-    await fetch('/api/master/assignments', {
+    const res = await fetch('/api/master/assignments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
     setSaving(false)
+    if (!res.ok) {
+      onError(await readErrorMessage(res, 'アサインの保存に失敗しました。'))
+      return
+    }
     onSaved()
   }
 
@@ -548,7 +705,7 @@ function AssignFormDialog({ open, onClose, onSaved, clients, contractors, fixedC
       <form onSubmit={submit} className="space-y-4">
         {!fixedContractorId && (
           <div>
-            <label className="text-sm font-medium block mb-1">委託者 <span className="text-red-500">*</span></label>
+            <label className="text-sm font-medium block mb-1">委託者 <span className="text-destructive">*</span></label>
             <select required value={contractorId} onChange={(e) => setContractorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               <option value="">選択してください</option>
               {daikoContractors.length > 0 && (
@@ -567,7 +724,7 @@ function AssignFormDialog({ open, onClose, onSaved, clients, contractors, fixedC
 
         {!fixedClientId && (
           <div>
-            <label className="text-sm font-medium block mb-1">クライアント <span className="text-red-500">*</span></label>
+            <label className="text-sm font-medium block mb-1">クライアント <span className="text-destructive">*</span></label>
             <select required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               <option value="">選択してください</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -576,7 +733,7 @@ function AssignFormDialog({ open, onClose, onSaved, clients, contractors, fixedC
         )}
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
-          <label className="text-sm font-medium block mb-1">役割名 <span className="text-red-500">*</span></label>
+          <label className="text-sm font-medium block mb-1">役割名 <span className="text-destructive">*</span></label>
           <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required={!isVideoEditor} className="w-full border rounded px-3 py-2 text-sm" placeholder="例: ライター" />
         </div>
 

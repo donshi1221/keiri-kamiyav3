@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/schema'
 import TodayTasks from './today-tasks'
+import ErrorToast from './error-toast'
 
 type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {
@@ -39,6 +40,56 @@ function DueBadge({ state }: { state: DueState }) {
   if (state === 'overdue') return <span className="block text-[10px] text-red-600 mt-1">期限超過</span>
   if (state === 'inWindow') return <span className="block text-[10px] text-amber-600 mt-1">今週対応</span>
   return null
+}
+
+// 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
+// タップ領域はスマホで44px以上を確保し、PCの表では詰めて表示する。
+function MoneyCheckControl({ checked, pending, label, onRequest, onConfirm, onCancel, badge }: {
+  checked: boolean
+  pending: boolean
+  label: string
+  onRequest: () => void
+  onConfirm: () => void
+  onCancel: () => void
+  badge?: React.ReactNode
+}) {
+  if (pending) {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <span className="whitespace-nowrap text-[10px] text-gray-500">外しますか？</span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs font-medium text-destructive hover:bg-destructive/10 md:h-6 md:min-w-0"
+          >
+            外す
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs text-gray-400 hover:bg-gray-100 md:h-6 md:min-w-0"
+          >
+            戻る
+          </button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <button
+        type="button"
+        onClick={onRequest}
+        aria-pressed={checked}
+        aria-label={label}
+        className="flex h-11 w-11 items-center justify-center md:h-auto md:w-auto"
+      >
+        <Checkbox checked={checked} className="pointer-events-none" tabIndex={-1} />
+      </button>
+      {badge}
+    </div>
+  )
 }
 
 interface Props {
@@ -77,6 +128,7 @@ export default function DashboardClient({
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [mfExpense, setMfExpense] = useState(initialMfExpense)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -131,6 +183,38 @@ export default function DashboardClient({
     }
   }
 
+  // 金銭に関わるチェックは「外す」操作のみ誤タップ防止の確認を挟む（付ける操作はそのまま）
+  function requestToggleRecord(id: string, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at', currentlyChecked: boolean) {
+    if (currentlyChecked) {
+      setPendingUncheck({ kind: 'record', id, field })
+    } else {
+      toggleRecord(id, field)
+    }
+  }
+
+  function requestToggleClientRecord(id: string, field: 'invoice_sent_at' | 'payment_confirmed_at', currentlyChecked: boolean) {
+    if (currentlyChecked) {
+      setPendingUncheck({ kind: 'client', id, field })
+    } else {
+      toggleClientRecord(id, field)
+    }
+  }
+
+  function confirmUncheck() {
+    if (!pendingUncheck) return
+    const { kind, id, field } = pendingUncheck
+    setPendingUncheck(null)
+    if (kind === 'record') {
+      toggleRecord(id, field as 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at')
+    } else {
+      toggleClientRecord(id, field as 'invoice_sent_at' | 'payment_confirmed_at')
+    }
+  }
+
+  function cancelUncheck() {
+    setPendingUncheck(null)
+  }
+
   async function toggleGlobal(field: 'expense_confirmed_at' | 'payment_report_confirmed_at' | 'withholding_confirmed_at') {
     if (!localGlobal) return
     setLocalGlobal((prev) => prev ? { ...prev, [field]: prev[field] ? null : new Date().toISOString() } : prev)
@@ -149,14 +233,14 @@ export default function DashboardClient({
 
   const yearMonth = year * 100 + month
 
-  // 売上・外注費・利益の計算
-  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.clients?.billing_amount ?? 0), 0)
+  // 売上・外注費・利益の計算（マスタ改定後も過去月表示が変わらないよう、スナップショットを優先）
+  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? cr.clients?.billing_amount ?? 0), 0)
   const contractorCost = localRecords.reduce((sum, r) => {
     const asgn = r.assignments
     if (asgn?.contractors?.contractor_type === 'video_editor') {
       return sum + (r.actual_payout_amount ?? 0)
     }
-    return sum + (asgn?.contractor_payout_amount ?? 0)
+    return sum + (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount ?? 0)
   }, 0)
   const otherExpenses = mfExpense?.amount ?? 0
   const profit = revenue - contractorCost - otherExpenses
@@ -290,22 +374,7 @@ export default function DashboardClient({
   return (
     <div className="space-y-6">
       {/* エラートースト */}
-      {errorMsg && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-        >
-          <span>{errorMsg}</span>
-          <button
-            type="button"
-            onClick={() => setErrorMsg(null)}
-            className="shrink-0 text-red-400 hover:text-red-600"
-            aria-label="閉じる"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
 
       <div className="flex items-center gap-3">
         <Button variant="outline" size="sm" onClick={() => navigate(-1)}>← 前月</Button>
@@ -345,71 +414,177 @@ export default function DashboardClient({
         <div className="px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
         </div>
-        <div className="overflow-x-auto">
-          {localRecords.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {localRecords.map((r) => {
-                  const asgn = r.assignments
-                  const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
-                  const receivedState = recordDueState(r, 'invoice_received_at', 10)
-                  const reservedState = recordDueState(r, 'payment_reserved_at', 15)
-                  const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50'
-                  return (
-                    <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
-                      <td className="py-3 px-4">
+        {localRecords.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+        ) : (
+          <>
+            {/* PC・タブレット表示（md以上）: 表形式 */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-gray-50">
+                  <tr>
+                    <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {localRecords.map((r) => {
+                    const asgn = r.assignments
+                    const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
+                    const receivedState = recordDueState(r, 'invoice_received_at', 10)
+                    const reservedState = recordDueState(r, 'payment_reserved_at', 15)
+                    const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
+                    const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50'
+                    return (
+                      <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
+                        <td className="py-3 px-4">
+                          <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
+                          <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          {isVideoEditor ? (
+                            <PayoutInput
+                              recordId={r.id}
+                              initialValue={r.actual_payout_amount}
+                              onSaved={(val) =>
+                                setLocalRecords((prev) =>
+                                  prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
+                                )
+                              }
+                              onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
+                            />
+                          ) : (
+                            <span className="text-gray-600">
+                              {(() => {
+                                const payout = r.payout_amount_snapshot ?? asgn?.contractor_payout_amount
+                                return payout ? `¥${payout.toLocaleString()}` : '—'
+                              })()}
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <MoneyCheckControl
+                            checked={!!r.invoice_received_at}
+                            pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'invoice_received_at'}
+                            label={`${asgn?.contractors?.name ?? '?'}の請求書受領`}
+                            onRequest={() => requestToggleRecord(r.id, 'invoice_received_at', !!r.invoice_received_at)}
+                            onConfirm={confirmUncheck}
+                            onCancel={cancelUncheck}
+                            badge={isCurrentMonth && !r.invoice_received_at && <DueBadge state={receivedState} />}
+                          />
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <MoneyCheckControl
+                            checked={!!r.payment_reserved_at}
+                            pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
+                            label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
+                            onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
+                            onConfirm={confirmUncheck}
+                            onCancel={cancelUncheck}
+                            badge={isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
+                          />
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <MoneyCheckControl
+                            checked={!!r.contractor_paid_at}
+                            pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
+                            label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
+                            onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
+                            onConfirm={confirmUncheck}
+                            onCancel={cancelUncheck}
+                            badge={isCurrentMonth && !r.contractor_paid_at && <DueBadge state={paidState} />}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* スマホ表示（md未満）: カード形式（1カード=1委託者） */}
+            <div className="divide-y md:hidden">
+              {localRecords.map((r) => {
+                const asgn = r.assignments
+                const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
+                const receivedState = recordDueState(r, 'invoice_received_at', 10)
+                const reservedState = recordDueState(r, 'payment_reserved_at', 15)
+                const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
+                const cardClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : ''
+                return (
+                  <div key={r.id} className={`px-4 py-3 ${cardClass}`}>
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div>
                         <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
                         <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {isVideoEditor ? (
-                          <PayoutInput
-                            recordId={r.id}
-                            initialValue={r.actual_payout_amount}
-                            onSaved={(val) =>
-                              setLocalRecords((prev) =>
-                                prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
-                              )
-                            }
-                            onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
-                          />
-                        ) : (
-                          <span className="text-gray-600">
-                            {asgn?.contractor_payout_amount ? `¥${asgn.contractor_payout_amount.toLocaleString()}` : '—'}
-                          </span>
-                        )}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!r.invoice_received_at} onCheckedChange={() => toggleRecord(r.id, 'invoice_received_at')} />
-                        {isCurrentMonth && !r.invoice_received_at && <DueBadge state={receivedState} />}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!r.payment_reserved_at} onCheckedChange={() => toggleRecord(r.id, 'payment_reserved_at')} />
-                        {isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!r.contractor_paid_at} onCheckedChange={() => toggleRecord(r.id, 'contractor_paid_at')} />
-                        {isCurrentMonth && !r.contractor_paid_at && <DueBadge state={paidState} />}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                      </div>
+                      {isVideoEditor ? (
+                        <PayoutInput
+                          recordId={r.id}
+                          initialValue={r.actual_payout_amount}
+                          onSaved={(val) =>
+                            setLocalRecords((prev) =>
+                              prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
+                            )
+                          }
+                          onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
+                        />
+                      ) : (
+                        <span className="shrink-0 text-sm text-gray-600">
+                          {(() => {
+                            const payout = r.payout_amount_snapshot ?? asgn?.contractor_payout_amount
+                            return payout ? `¥${payout.toLocaleString()}` : '—'
+                          })()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500">受領<span className="ml-1 text-gray-400">10日</span></span>
+                        <MoneyCheckControl
+                          checked={!!r.invoice_received_at}
+                          pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'invoice_received_at'}
+                          label={`${asgn?.contractors?.name ?? '?'}の請求書受領`}
+                          onRequest={() => requestToggleRecord(r.id, 'invoice_received_at', !!r.invoice_received_at)}
+                          onConfirm={confirmUncheck}
+                          onCancel={cancelUncheck}
+                          badge={isCurrentMonth && !r.invoice_received_at && <DueBadge state={receivedState} />}
+                        />
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500">支払予約<span className="ml-1 text-gray-400">15日</span></span>
+                        <MoneyCheckControl
+                          checked={!!r.payment_reserved_at}
+                          pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
+                          label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
+                          onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
+                          onConfirm={confirmUncheck}
+                          onCancel={cancelUncheck}
+                          badge={isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
+                        />
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500">支払確認<span className="ml-1 text-gray-400">末日</span></span>
+                        <MoneyCheckControl
+                          checked={!!r.contractor_paid_at}
+                          pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
+                          label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
+                          onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
+                          onConfirm={confirmUncheck}
+                          onCancel={cancelUncheck}
+                          badge={isCurrentMonth && !r.contractor_paid_at && <DueBadge state={paidState} />}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
       </section>
 
       {/* クライアント — 請求・入金管理 */}
@@ -417,53 +592,129 @@ export default function DashboardClient({
         <div className="px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
         </div>
-        <div className="overflow-x-auto">
-          {localClientRecords.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-400 font-normal">25日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {localClientRecords.map((cr) => {
-                  const client = cr.clients
-                  const clientId = cr.client_id
-                  const billedCount = billedCounts[clientId] ?? 0
-                  const contractMonths = client?.contract_months
-                  const overBilled = contractMonths != null && billedCount >= contractMonths
-                  const sentState = clientDueState(cr, 'invoice_sent_at', 15)
-                  const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
-                  return (
-                    <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
-                      <td className="py-3 px-4">
+        {localClientRecords.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+        ) : (
+          <>
+            {/* PC・タブレット表示（md以上）: 表形式 */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-gray-50">
+                  <tr>
+                    <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-400 font-normal">25日</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {localClientRecords.map((cr) => {
+                    const client = cr.clients
+                    const clientId = cr.client_id
+                    const billedCount = billedCounts[clientId] ?? 0
+                    const contractMonths = client?.contract_months
+                    const overBilled = contractMonths != null && billedCount >= contractMonths
+                    const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+                    const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+                    const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
+                    return (
+                      <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
+                        <td className="py-3 px-4">
+                          <span className="font-medium">{client?.name ?? '?'}</span>
+                          {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
+                        </td>
+                        <td className="py-3 px-3 text-right text-gray-600">
+                          {(() => {
+                            const billing = cr.billing_amount_snapshot ?? client?.billing_amount
+                            return billing ? `¥${billing.toLocaleString()}` : '—'
+                          })()}
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <MoneyCheckControl
+                            checked={!!cr.invoice_sent_at}
+                            pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
+                            label={`${client?.name ?? '?'}の請求書送付`}
+                            onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
+                            onConfirm={confirmUncheck}
+                            onCancel={cancelUncheck}
+                            badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
+                          />
+                        </td>
+                        <td className="text-center py-3 px-3">
+                          <MoneyCheckControl
+                            checked={!!cr.payment_confirmed_at}
+                            pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
+                            label={`${client?.name ?? '?'}の入金確認`}
+                            onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
+                            onConfirm={confirmUncheck}
+                            onCancel={cancelUncheck}
+                            badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* スマホ表示（md未満）: カード形式（1カード=1クライアント） */}
+            <div className="divide-y md:hidden">
+              {localClientRecords.map((cr) => {
+                const client = cr.clients
+                const clientId = cr.client_id
+                const billedCount = billedCounts[clientId] ?? 0
+                const contractMonths = client?.contract_months
+                const overBilled = contractMonths != null && billedCount >= contractMonths
+                const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+                const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+                const cardClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
+                return (
+                  <div key={cr.id} className={`px-4 py-3 ${cardClass}`}>
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div>
                         <span className="font-medium">{client?.name ?? '?'}</span>
                         {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
-                      </td>
-                      <td className="py-3 px-3 text-right text-gray-600">
-                        {client?.billing_amount ? `¥${client.billing_amount.toLocaleString()}` : '—'}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!cr.invoice_sent_at} onCheckedChange={() => toggleClientRecord(cr.id, 'invoice_sent_at')} />
-                        {isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!cr.payment_confirmed_at} onCheckedChange={() => toggleClientRecord(cr.id, 'payment_confirmed_at')} />
-                        {isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                      </div>
+                      <span className="shrink-0 text-sm text-gray-600">
+                        {(() => {
+                          const billing = cr.billing_amount_snapshot ?? client?.billing_amount
+                          return billing ? `¥${billing.toLocaleString()}` : '—'
+                        })()}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-400">15日</span></span>
+                        <MoneyCheckControl
+                          checked={!!cr.invoice_sent_at}
+                          pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
+                          label={`${client?.name ?? '?'}の請求書送付`}
+                          onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
+                          onConfirm={confirmUncheck}
+                          onCancel={cancelUncheck}
+                          badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
+                        />
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-400">25日</span></span>
+                        <MoneyCheckControl
+                          checked={!!cr.payment_confirmed_at}
+                          pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
+                          label={`${client?.name ?? '?'}の入金確認`}
+                          onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
+                          onConfirm={confirmUncheck}
+                          onCancel={cancelUncheck}
+                          badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
       </section>
 
       {/* グローバルタスク（常時表示） */}
