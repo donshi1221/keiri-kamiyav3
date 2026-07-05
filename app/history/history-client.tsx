@@ -137,7 +137,8 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
                   <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
                   <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
                   <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs font-normal text-gray-400">10日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払<br /><span className="text-xs font-normal text-gray-400">末日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs font-normal text-gray-400">15日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs font-normal text-gray-400">末日</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -160,7 +161,10 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
                         <CheckIcon done={!!r.invoice_received_at} label="受領" />
                       </td>
                       <td className="text-center py-3 px-3">
-                        <CheckIcon done={!!r.contractor_paid_at} label="支払" />
+                        <CheckIcon done={!!r.payment_reserved_at} label="支払予約" />
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <CheckIcon done={!!r.contractor_paid_at} label="支払確認" />
                       </td>
                     </tr>
                   )

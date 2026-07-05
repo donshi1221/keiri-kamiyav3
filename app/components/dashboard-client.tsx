@@ -96,7 +96,7 @@ export default function DashboardClient({
     startTransition(() => router.push(`/?year=${y}&month=${m}`))
   }
 
-  async function toggleRecord(id: string, field: 'invoice_received_at' | 'contractor_paid_at') {
+  async function toggleRecord(id: string, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at') {
     setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: r[field] ? null : new Date().toISOString() } : r))
     const res = await fetch(`/api/checklist/records/${id}`, {
       method: 'PATCH',
@@ -249,7 +249,7 @@ export default function DashboardClient({
   const clientDueState = (r: ClientRecordWithClient, field: 'invoice_sent_at' | 'payment_confirmed_at', dueDay: number): DueState =>
     isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
 
-  const recordDueState = (r: RecordWithRelations, field: 'invoice_received_at' | 'contractor_paid_at', dueDay: number): DueState =>
+  const recordDueState = (r: RecordWithRelations, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at', dueDay: number): DueState =>
     isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
 
   const overdueItems: { label: string }[] = []
@@ -273,9 +273,12 @@ export default function DashboardClient({
       const receivedState = recordDueState(r, 'invoice_received_at', 10)
       if (receivedState === 'overdue') overdueItems.push({ label: `${name} — 請求書受領` })
       else if (receivedState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書受領` })
+      const reservedState = recordDueState(r, 'payment_reserved_at', 15)
+      if (reservedState === 'overdue') overdueItems.push({ label: `${name} — 支払い予約` })
+      else if (reservedState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い予約` })
       const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 報酬支払` })
-      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 報酬支払` })
+      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 支払い確認` })
+      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い確認` })
     }
   }
 
@@ -327,7 +330,8 @@ export default function DashboardClient({
                   <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
                   <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
                   <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -335,8 +339,9 @@ export default function DashboardClient({
                   const asgn = r.assignments
                   const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
                   const receivedState = recordDueState(r, 'invoice_received_at', 10)
+                  const reservedState = recordDueState(r, 'payment_reserved_at', 15)
                   const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, paidState])) : 'hover:bg-gray-50'
+                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50'
                   return (
                     <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
                       <td className="py-3 px-4">
@@ -364,6 +369,10 @@ export default function DashboardClient({
                       <td className="text-center py-3 px-3">
                         <Checkbox checked={!!r.invoice_received_at} onCheckedChange={() => toggleRecord(r.id, 'invoice_received_at')} />
                         {isCurrentMonth && !r.invoice_received_at && <DueBadge state={receivedState} />}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <Checkbox checked={!!r.payment_reserved_at} onCheckedChange={() => toggleRecord(r.id, 'payment_reserved_at')} />
+                        {isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
                       </td>
                       <td className="text-center py-3 px-3">
                         <Checkbox checked={!!r.contractor_paid_at} onCheckedChange={() => toggleRecord(r.id, 'contractor_paid_at')} />

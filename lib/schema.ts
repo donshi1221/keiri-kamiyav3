@@ -47,6 +47,7 @@ export const monthlyRecords = pgTable('monthly_records', {
   assignment_id: uuid('assignment_id').notNull().references(() => assignments.id),
   actual_payout_amount: integer('actual_payout_amount'),
   invoice_received_at: timestamp('invoice_received_at', { withTimezone: true, mode: 'string' }),
+  payment_reserved_at: timestamp('payment_reserved_at', { withTimezone: true, mode: 'string' }),
   contractor_paid_at: timestamp('contractor_paid_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.assignment_id)])

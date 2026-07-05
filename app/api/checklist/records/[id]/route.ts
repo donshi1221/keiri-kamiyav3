@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { monthlyRecords } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
 
-const ALLOWED = ['invoice_received_at', 'contractor_paid_at'] as const
+const ALLOWED = ['invoice_received_at', 'payment_reserved_at', 'contractor_paid_at'] as const
 type ToggleField = typeof ALLOWED[number]
 
 export async function PATCH(
@@ -31,15 +31,12 @@ export async function PATCH(
     const [current] = await db.select().from(monthlyRecords).where(eq(monthlyRecords.id, id))
     if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
 
-    const currentValue = current[field as ToggleField] as string | null
+    const toggleField = field as ToggleField
+    const currentValue = current[toggleField] as string | null
     const newValue = currentValue ? null : new Date().toISOString()
 
-    const updateSet = field === 'invoice_received_at'
-      ? { invoice_received_at: newValue }
-      : { contractor_paid_at: newValue }
-
     const [data] = await db.update(monthlyRecords)
-      .set(updateSet)
+      .set({ [toggleField]: newValue })
       .where(eq(monthlyRecords.id, id))
       .returning()
 

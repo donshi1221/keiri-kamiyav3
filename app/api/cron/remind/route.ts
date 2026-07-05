@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     const [records, clientRecords, globalTask] = await Promise.all([
       db.query.monthlyRecords.findMany({
         where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
-        columns: { invoice_received_at: true, contractor_paid_at: true },
+        columns: { invoice_received_at: true, payment_reserved_at: true, contractor_paid_at: true },
         with: {
           assignments: {
             columns: {},
@@ -68,6 +68,14 @@ export async function GET(req: NextRequest) {
         const lines = unsentClients.map((r) => `  □ ${r.clients?.name ?? '?'}`)
         sections.push(`■ クライアント — 請求書送付（期日: 15日）\n${lines.join('\n')}`)
       }
+
+      const unreserved = records.filter((r) => !r.payment_reserved_at)
+      if (unreserved.length > 0) {
+        const lines = unreserved.map((r) =>
+          `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）`
+        )
+        sections.push(`■ 委託者 — 支払い予約（期日: 15日）\n${lines.join('\n')}`)
+      }
     }
 
     if (remindDay25) {
@@ -94,7 +102,7 @@ export async function GET(req: NextRequest) {
         const lines = unpaid.map((r) =>
           `  □ ${r.assignments?.contractors?.name ?? '?'}（担当: ${r.assignments?.clients?.name ?? '?'}）`
         )
-        sections.push(`■ 委託者 — 報酬支払（期日: 月末）\n${lines.join('\n')}`)
+        sections.push(`■ 委託者 — 支払い確認（期日: 月末）\n${lines.join('\n')}`)
       }
     }
 
