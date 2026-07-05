@@ -17,6 +17,20 @@ export function isInReminderWindow(today: number, deadlineDay: number): boolean 
   return today >= deadlineDay - 3 && today <= deadlineDay
 }
 
+export type DueState = 'upcoming' | 'inWindow' | 'overdue' | 'done'
+
+export function getDueState(
+  day: number,
+  dueDay: number,
+  doneAt: string | Date | null | undefined,
+  windowDays = 3
+): DueState {
+  if (doneAt) return 'done'
+  if (day > dueDay) return 'overdue'
+  if (day >= dueDay - windowDays) return 'inWindow'
+  return 'upcoming'
+}
+
 export function getDueDates(year: number, month: number) {
   const lastDay = getLastDayOfMonth(year, month)
   return {

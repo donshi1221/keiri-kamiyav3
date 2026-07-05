@@ -6,8 +6,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, X } from 'lucide-react'
-import { getLastDayOfMonth } from '@/lib/dates'
+import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/schema'
+import TodayTasks from './today-tasks'
 
 type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {
@@ -18,6 +19,24 @@ type RecordWithRelations = MonthlyRecord & {
 
 type ClientRecordWithClient = MonthlyClientRecord & {
   clients: (Client & { contract_months: number | null }) | null
+}
+
+function rowDueState(states: DueState[]): DueState {
+  if (states.includes('overdue')) return 'overdue'
+  if (states.includes('inWindow')) return 'inWindow'
+  return 'done'
+}
+
+function rowDueClass(state: DueState): string {
+  if (state === 'overdue') return 'bg-red-50/70 hover:bg-red-100/70'
+  if (state === 'inWindow') return 'bg-amber-50/70 hover:bg-amber-100/70'
+  return 'hover:bg-gray-50'
+}
+
+function DueBadge({ state }: { state: DueState }) {
+  if (state === 'overdue') return <span className="block text-[10px] text-red-600 mt-1">期限超過</span>
+  if (state === 'inWindow') return <span className="block text-[10px] text-amber-600 mt-1">今週対応</span>
+  return null
 }
 
 interface Props {
@@ -216,11 +235,49 @@ export default function DashboardClient({
   }
 
   const globalTaskDefs = [
-    { field: 'expense_confirmed_at' as const, label: '社長経費確認', dueLabel: '10日まで', inWindow: day >= 5 && day <= 10 },
-    { field: 'payment_report_confirmed_at' as const, label: '支払・報酬 請求書チェック出し', dueLabel: '20日まで', inWindow: day >= 17 && day <= 20 },
-    { field: 'withholding_confirmed_at' as const, label: '源泉所得税確認', dueLabel: '月末まで', inWindow: day >= lastDay - 4 && day <= lastDay },
+    { field: 'expense_confirmed_at' as const, label: '社長経費確認', dueLabel: '10日まで', dueDay: 10, windowDays: 5 },
+    { field: 'payment_report_confirmed_at' as const, label: '支払・報酬 請求書チェック出し', dueLabel: '20日まで', dueDay: 20, windowDays: 3 },
+    { field: 'withholding_confirmed_at' as const, label: '源泉所得税確認', dueLabel: '月末まで', dueDay: lastDay, windowDays: 4 },
   ]
-  const visibleGlobalTasks = localGlobal ? globalTaskDefs : []
+  const visibleGlobalTasks = localGlobal
+    ? globalTaskDefs.map((t) => ({
+        ...t,
+        state: getDueState(day, t.dueDay, localGlobal[t.field], t.windowDays),
+      }))
+    : []
+
+  const clientDueState = (r: ClientRecordWithClient, field: 'invoice_sent_at' | 'payment_confirmed_at', dueDay: number): DueState =>
+    isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
+
+  const recordDueState = (r: RecordWithRelations, field: 'invoice_received_at' | 'contractor_paid_at', dueDay: number): DueState =>
+    isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
+
+  const overdueItems: { label: string }[] = []
+  const inWindowItems: { label: string }[] = []
+  if (isCurrentMonth) {
+    for (const t of visibleGlobalTasks) {
+      if (t.state === 'overdue') overdueItems.push({ label: `${t.label}` })
+      else if (t.state === 'inWindow') inWindowItems.push({ label: `${t.label}` })
+    }
+    for (const cr of localClientRecords) {
+      const name = cr.clients?.name ?? '?'
+      const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+      if (sentState === 'overdue') overdueItems.push({ label: `${name} — 請求書送付` })
+      else if (sentState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書送付` })
+      const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+      if (confirmedState === 'overdue') overdueItems.push({ label: `${name} — 入金確認` })
+      else if (confirmedState === 'inWindow') inWindowItems.push({ label: `${name} — 入金確認` })
+    }
+    for (const r of localRecords) {
+      const name = r.assignments?.contractors?.name ?? '?'
+      const receivedState = recordDueState(r, 'invoice_received_at', 10)
+      if (receivedState === 'overdue') overdueItems.push({ label: `${name} — 請求書受領` })
+      else if (receivedState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書受領` })
+      const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
+      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 報酬支払` })
+      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 報酬支払` })
+    }
+  }
 
   const canAdd = newTitle.trim().length > 0 && (monthMode === 'all' || selectedMonths.length > 0)
 
@@ -252,75 +309,126 @@ export default function DashboardClient({
         </Button>
       </div>
 
-      {/* 売上・経費・利益サマリー */}
-      <section className="rounded-lg border bg-white p-4">
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">売上</p>
-            <p className="text-xl font-medium text-gray-900">¥{revenue.toLocaleString()}</p>
-            <p className="text-xs text-gray-400 mt-0.5">クライアント {localClientRecords.length}件</p>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">外注費</p>
-            <p className="text-xl font-medium text-gray-600">¥{contractorCost.toLocaleString()}</p>
-            <p className="text-xs text-gray-400 mt-0.5">委託者 {localRecords.length}件</p>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-xs text-gray-500">その他経費</p>
-              <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">MF連携</span>
-            </div>
-            <p className="text-xl font-medium text-gray-600">
-              {mfExpense ? `¥${mfExpense.amount.toLocaleString()}` : '—'}
-            </p>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {mfExpense
-                ? `${new Date(mfExpense.syncedAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })} 同期済`
-                : '未同期'}
-            </p>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">利益</p>
-            <p className={`text-xl font-medium ${profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-              ¥{profit.toLocaleString()}
-            </p>
-            {revenue > 0 && (
-              <p className="text-xs text-gray-400 mt-0.5">
-                利益率 {Math.round((profit / revenue) * 100)}%
-              </p>
-            )}
-          </div>
+      {/* 今日やること */}
+      {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} />}
+
+      {/* 委託者 — 請求書受領・支払管理 */}
+      <section className="rounded-lg border bg-white">
+        <div className="px-4 pt-4 pb-2 border-b">
+          <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
         </div>
-        <div className="flex items-center justify-between border-t pt-3">
-          <div>
-            {mfConnected ? (
-              <p className="text-xs text-gray-500">
-                マネーフォワード クラウド会計 連携中
-              </p>
-            ) : (
-              <p className="text-xs text-gray-500">マネーフォワード 未連携</p>
-            )}
-          </div>
-          <div className="flex gap-2">
-            {!mfConnected && (
-              <a
-                href="/api/moneyforward/auth"
-                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded"
-              >
-                MF連携する
-              </a>
-            )}
-            {mfConnected && (
-              <button
-                type="button"
-                onClick={syncMFExpenses}
-                disabled={isSyncing}
-                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 px-3 py-1.5 rounded"
-              >
-                {isSyncing ? '同期中…' : '今すぐ同期'}
-              </button>
-            )}
-          </div>
+        <div className="overflow-x-auto">
+          {localRecords.length === 0 ? (
+            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="border-b bg-gray-50">
+                <tr>
+                  <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
+                  <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {localRecords.map((r) => {
+                  const asgn = r.assignments
+                  const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
+                  const receivedState = recordDueState(r, 'invoice_received_at', 10)
+                  const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
+                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, paidState])) : 'hover:bg-gray-50'
+                  return (
+                    <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
+                      <td className="py-3 px-4">
+                        <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
+                        <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        {isVideoEditor ? (
+                          <PayoutInput
+                            recordId={r.id}
+                            initialValue={r.actual_payout_amount}
+                            onSaved={(val) =>
+                              setLocalRecords((prev) =>
+                                prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
+                              )
+                            }
+                            onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
+                          />
+                        ) : (
+                          <span className="text-gray-600">
+                            {asgn?.contractor_payout_amount ? `¥${asgn.contractor_payout_amount.toLocaleString()}` : '—'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <Checkbox checked={!!r.invoice_received_at} onCheckedChange={() => toggleRecord(r.id, 'invoice_received_at')} />
+                        {isCurrentMonth && !r.invoice_received_at && <DueBadge state={receivedState} />}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <Checkbox checked={!!r.contractor_paid_at} onCheckedChange={() => toggleRecord(r.id, 'contractor_paid_at')} />
+                        {isCurrentMonth && !r.contractor_paid_at && <DueBadge state={paidState} />}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      {/* クライアント — 請求・入金管理 */}
+      <section className="rounded-lg border bg-white">
+        <div className="px-4 pt-4 pb-2 border-b">
+          <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
+        </div>
+        <div className="overflow-x-auto">
+          {localClientRecords.length === 0 ? (
+            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="border-b bg-gray-50">
+                <tr>
+                  <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
+                  <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
+                  <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-400 font-normal">25日</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {localClientRecords.map((cr) => {
+                  const client = cr.clients
+                  const clientId = cr.client_id
+                  const billedCount = billedCounts[clientId] ?? 0
+                  const contractMonths = client?.contract_months
+                  const overBilled = contractMonths != null && billedCount >= contractMonths
+                  const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+                  const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+                  const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
+                  return (
+                    <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
+                      <td className="py-3 px-4">
+                        <span className="font-medium">{client?.name ?? '?'}</span>
+                        {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
+                      </td>
+                      <td className="py-3 px-3 text-right text-gray-600">
+                        {client?.billing_amount ? `¥${client.billing_amount.toLocaleString()}` : '—'}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <Checkbox checked={!!cr.invoice_sent_at} onCheckedChange={() => toggleClientRecord(cr.id, 'invoice_sent_at')} />
+                        {isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
+                      </td>
+                      <td className="text-center py-3 px-3">
+                        <Checkbox checked={!!cr.payment_confirmed_at} onCheckedChange={() => toggleClientRecord(cr.id, 'payment_confirmed_at')} />
+                        {isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
 
@@ -399,8 +507,11 @@ export default function DashboardClient({
                   <Checkbox checked={done} onCheckedChange={() => toggleGlobal(t.field)} />
                   <span className={`flex-1 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.label}</span>
                   <span className="text-xs text-gray-400">{t.dueLabel}</span>
-                  {!done && !t.inWindow && (
-                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間外</span>
+                  {t.state === 'overdue' && (
+                    <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded">期限超過</span>
+                  )}
+                  {t.state === 'upcoming' && (
+                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間前</span>
                   )}
                 </div>
               )
@@ -461,113 +572,75 @@ export default function DashboardClient({
         )}
       </section>
 
-      {/* クライアント — 請求・入金管理 */}
-      <section className="rounded-lg border bg-white">
-        <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
+      {/* 売上・経費・利益サマリー */}
+      <section className="rounded-lg border bg-white p-4">
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-xs text-gray-500 mb-1">売上</p>
+            <p className="text-xl font-medium text-gray-900">¥{revenue.toLocaleString()}</p>
+            <p className="text-xs text-gray-400 mt-0.5">クライアント {localClientRecords.length}件</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-xs text-gray-500 mb-1">外注費</p>
+            <p className="text-xl font-medium text-gray-600">¥{contractorCost.toLocaleString()}</p>
+            <p className="text-xs text-gray-400 mt-0.5">委託者 {localRecords.length}件</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs text-gray-500">その他経費</p>
+              <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">MF連携</span>
+            </div>
+            <p className="text-xl font-medium text-gray-600">
+              {mfExpense ? `¥${mfExpense.amount.toLocaleString()}` : '—'}
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {mfExpense
+                ? `${new Date(mfExpense.syncedAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })} 同期済`
+                : '未同期'}
+            </p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-xs text-gray-500 mb-1">利益</p>
+            <p className={`text-xl font-medium ${profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+              ¥{profit.toLocaleString()}
+            </p>
+            {revenue > 0 && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                利益率 {Math.round((profit / revenue) * 100)}%
+              </p>
+            )}
+          </div>
         </div>
-        <div className="overflow-x-auto">
-          {localClientRecords.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-400 font-normal">25日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {localClientRecords.map((cr) => {
-                  const client = cr.clients
-                  const clientId = cr.client_id
-                  const billedCount = billedCounts[clientId] ?? 0
-                  const contractMonths = client?.contract_months
-                  const overBilled = contractMonths != null && billedCount >= contractMonths
-                  return (
-                    <tr key={cr.id} className="border-b last:border-0 hover:bg-gray-50">
-                      <td className="py-3 px-4">
-                        <span className="font-medium">{client?.name ?? '?'}</span>
-                        {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
-                      </td>
-                      <td className="py-3 px-3 text-right text-gray-600">
-                        {client?.billing_amount ? `¥${client.billing_amount.toLocaleString()}` : '—'}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!cr.invoice_sent_at} onCheckedChange={() => toggleClientRecord(cr.id, 'invoice_sent_at')} />
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!cr.payment_confirmed_at} onCheckedChange={() => toggleClientRecord(cr.id, 'payment_confirmed_at')} />
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </section>
-
-      {/* 委託者 — 請求書受領・支払管理 */}
-      <section className="rounded-lg border bg-white">
-        <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
-        </div>
-        <div className="overflow-x-auto">
-          {localRecords.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4">レコード未生成</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50">
-                <tr>
-                  <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
-                  <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
-                  <th className="text-center py-2 px-3 font-medium text-gray-600">支払<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {localRecords.map((r) => {
-                  const asgn = r.assignments
-                  const isVideoEditor = asgn?.contractors?.contractor_type === 'video_editor'
-                  return (
-                    <tr key={r.id} className="border-b last:border-0 hover:bg-gray-50">
-                      <td className="py-3 px-4">
-                        <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
-                        <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {isVideoEditor ? (
-                          <PayoutInput
-                            recordId={r.id}
-                            initialValue={r.actual_payout_amount}
-                            onSaved={(val) =>
-                              setLocalRecords((prev) =>
-                                prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
-                              )
-                            }
-                            onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
-                          />
-                        ) : (
-                          <span className="text-gray-600">
-                            {asgn?.contractor_payout_amount ? `¥${asgn.contractor_payout_amount.toLocaleString()}` : '—'}
-                          </span>
-                        )}
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!r.invoice_received_at} onCheckedChange={() => toggleRecord(r.id, 'invoice_received_at')} />
-                      </td>
-                      <td className="text-center py-3 px-3">
-                        <Checkbox checked={!!r.contractor_paid_at} onCheckedChange={() => toggleRecord(r.id, 'contractor_paid_at')} />
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
+        <div className="flex items-center justify-between border-t pt-3">
+          <div>
+            {mfConnected ? (
+              <p className="text-xs text-gray-500">
+                マネーフォワード クラウド会計 連携中
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500">マネーフォワード 未連携</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {!mfConnected && (
+              <a
+                href="/api/moneyforward/auth"
+                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded"
+              >
+                MF連携する
+              </a>
+            )}
+            {mfConnected && (
+              <button
+                type="button"
+                onClick={syncMFExpenses}
+                disabled={isSyncing}
+                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 px-3 py-1.5 rounded"
+              >
+                {isSyncing ? '同期中…' : '今すぐ同期'}
+              </button>
+            )}
+          </div>
         </div>
       </section>
     </div>
