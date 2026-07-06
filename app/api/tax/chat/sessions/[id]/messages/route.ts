@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { taxAdviceEntries, taxChatMessages } from '@/lib/schema'
+import { taxAdviceEntries, taxChatMessages, taxChatSessions } from '@/lib/schema'
 import { eq, asc } from 'drizzle-orm'
 import { getGeminiClient } from '@/lib/gemini'
+
+const SESSION_TITLE_MAX_LENGTH = 30
 
 export async function GET(
   _req: NextRequest,
@@ -40,6 +42,16 @@ export async function POST(
       .orderBy(asc(taxChatMessages.created_at)),
   ])
 
+  const isFirstMessage = history.length === 0
+
+  // Geminiの呼び出し前にユーザーメッセージを保存し、失敗時も入力内容が失われないようにする
+  await db.insert(taxChatMessages).values({ session_id: sessionId, role: 'user', content: userContent })
+
+  if (isFirstMessage) {
+    const title = userContent.trim().slice(0, SESSION_TITLE_MAX_LENGTH)
+    await db.update(taxChatSessions).set({ title }).where(eq(taxChatSessions.id, sessionId))
+  }
+
   const adviceContext = entries.length
     ? entries.map((e) => `【${e.title}】\n${e.body}`).join('\n\n')
     : '（蓄積アドバイスなし）'
@@ -56,39 +68,43 @@ export async function POST(
     '日本語で回答してください。',
   ].join('\n')
 
-  const gemini = getGeminiClient()
-  const model = gemini.getGenerativeModel({ model: 'gemini-2.0-flash' })
-
   const geminiHistory = history.map((m) => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }))
 
-  const chat = model.startChat({
-    systemInstruction: systemPrompt,
-    history: geminiHistory,
-  })
-
-  const result = await chat.sendMessageStream(userContent)
-
   let fullText = ''
 
   const readable = new ReadableStream({
     async start(controller) {
-      for await (const chunk of result.stream) {
-        const text = chunk.text()
-        if (text) {
-          fullText += text
-          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n\n`))
+      const encoder = new TextEncoder()
+      try {
+        const gemini = getGeminiClient()
+        const model = gemini.getGenerativeModel({ model: 'gemini-2.0-flash' })
+        const chat = model.startChat({
+          systemInstruction: systemPrompt,
+          history: geminiHistory,
+        })
+        const result = await chat.sendMessageStream(userContent)
+
+        for await (const chunk of result.stream) {
+          const text = chunk.text()
+          if (text) {
+            fullText += text
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`))
+          }
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'AI応答の生成に失敗しました。'
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`))
+      } finally {
+        controller.close()
+        // ストリームが失敗しても、それまでに生成できた分は部分保存する
+        if (fullText) {
+          await db.insert(taxChatMessages).values({ session_id: sessionId, role: 'assistant', content: fullText })
         }
       }
-      controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
-      controller.close()
-
-      await db.insert(taxChatMessages).values([
-        { session_id: sessionId, role: 'user', content: userContent },
-        { session_id: sessionId, role: 'assistant', content: fullText },
-      ])
     },
   })
 

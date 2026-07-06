@@ -42,10 +42,16 @@ function DueBadge({ state }: { state: DueState }) {
   return null
 }
 
+function formatShortDate(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
 // 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
 // タップ領域はスマホで44px以上を確保し、PCの表では詰めて表示する。
-function MoneyCheckControl({ checked, pending, label, onRequest, onConfirm, onCancel, badge }: {
+function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onConfirm, onCancel, badge }: {
   checked: boolean
+  checkedAt?: string | null
   pending: boolean
   label: string
   onRequest: () => void
@@ -87,6 +93,7 @@ function MoneyCheckControl({ checked, pending, label, onRequest, onConfirm, onCa
       >
         <Checkbox checked={checked} className="pointer-events-none" tabIndex={-1} />
       </button>
+      {checked && checkedAt && <span className="text-[10px] text-gray-400">{formatShortDate(checkedAt)}</span>}
       {badge}
     </div>
   )
@@ -468,6 +475,7 @@ export default function DashboardClient({
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
                             checked={!!r.invoice_received_at}
+                            checkedAt={r.invoice_received_at}
                             pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'invoice_received_at'}
                             label={`${asgn?.contractors?.name ?? '?'}の請求書受領`}
                             onRequest={() => requestToggleRecord(r.id, 'invoice_received_at', !!r.invoice_received_at)}
@@ -479,6 +487,7 @@ export default function DashboardClient({
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
                             checked={!!r.payment_reserved_at}
+                            checkedAt={r.payment_reserved_at}
                             pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
                             label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
                             onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
@@ -490,6 +499,7 @@ export default function DashboardClient({
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
                             checked={!!r.contractor_paid_at}
+                            checkedAt={r.contractor_paid_at}
                             pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
                             label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
                             onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
@@ -546,6 +556,7 @@ export default function DashboardClient({
                         <span className="text-xs text-gray-500">受領<span className="ml-1 text-gray-400">10日</span></span>
                         <MoneyCheckControl
                           checked={!!r.invoice_received_at}
+                          checkedAt={r.invoice_received_at}
                           pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'invoice_received_at'}
                           label={`${asgn?.contractors?.name ?? '?'}の請求書受領`}
                           onRequest={() => requestToggleRecord(r.id, 'invoice_received_at', !!r.invoice_received_at)}
@@ -558,6 +569,7 @@ export default function DashboardClient({
                         <span className="text-xs text-gray-500">支払予約<span className="ml-1 text-gray-400">15日</span></span>
                         <MoneyCheckControl
                           checked={!!r.payment_reserved_at}
+                          checkedAt={r.payment_reserved_at}
                           pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
                           label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
                           onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
@@ -570,6 +582,7 @@ export default function DashboardClient({
                         <span className="text-xs text-gray-500">支払確認<span className="ml-1 text-gray-400">末日</span></span>
                         <MoneyCheckControl
                           checked={!!r.contractor_paid_at}
+                          checkedAt={r.contractor_paid_at}
                           pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
                           label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
                           onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
@@ -632,6 +645,7 @@ export default function DashboardClient({
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
                             checked={!!cr.invoice_sent_at}
+                            checkedAt={cr.invoice_sent_at}
                             pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
                             label={`${client?.name ?? '?'}の請求書送付`}
                             onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
@@ -643,6 +657,7 @@ export default function DashboardClient({
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
                             checked={!!cr.payment_confirmed_at}
+                            checkedAt={cr.payment_confirmed_at}
                             pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
                             label={`${client?.name ?? '?'}の入金確認`}
                             onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
@@ -688,6 +703,7 @@ export default function DashboardClient({
                         <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-400">15日</span></span>
                         <MoneyCheckControl
                           checked={!!cr.invoice_sent_at}
+                          checkedAt={cr.invoice_sent_at}
                           pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
                           label={`${client?.name ?? '?'}の請求書送付`}
                           onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
@@ -700,6 +716,7 @@ export default function DashboardClient({
                         <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-400">25日</span></span>
                         <MoneyCheckControl
                           checked={!!cr.payment_confirmed_at}
+                          checkedAt={cr.payment_confirmed_at}
                           pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
                           label={`${client?.name ?? '?'}の入金確認`}
                           onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}

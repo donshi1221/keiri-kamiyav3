@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
-import { and, eq, isNotNull, asc } from 'drizzle-orm'
+import { and, eq, asc, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import DashboardClient from './components/dashboard-client'
@@ -22,7 +22,7 @@ export default async function DashboardPage({
     allCustomTasks,
     mfExpense,
     mfToken,
-    allClientRecords,
+    clientBillingCounts,
     allRecordsForCarryOver,
     allClientRecordsForCarryOver,
   ] = await Promise.all([
@@ -55,14 +55,12 @@ export default async function DashboardPage({
       where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
     }),
     db.select({ updated_at: moneyforwardTokens.updated_at }).from(moneyforwardTokens).limit(1),
+    // クライアントごとの送付済み・入金確認済み件数をSQL側で集計（請求回数超過の判定に使用）
     db.select({
       client_id: monthlyClientRecords.client_id,
-      invoice_sent_at: monthlyClientRecords.invoice_sent_at,
-      payment_confirmed_at: monthlyClientRecords.payment_confirmed_at,
-    }).from(monthlyClientRecords).where(
-      // 片方でも null でないレコードを取得（billedCounts / paidCounts の集計用）
-      isNotNull(monthlyClientRecords.client_id)
-    ),
+      billed: sql<number>`count(*) filter (where ${monthlyClientRecords.invoice_sent_at} is not null)`,
+      paid: sql<number>`count(*) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null)`,
+    }).from(monthlyClientRecords).groupBy(monthlyClientRecords.client_id),
     db.select({
       year: monthlyRecords.year,
       month: monthlyRecords.month,
@@ -91,9 +89,9 @@ export default async function DashboardPage({
 
   const billedCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
-  for (const r of allClientRecords) {
-    if (r.invoice_sent_at) billedCounts[r.client_id] = (billedCounts[r.client_id] ?? 0) + 1
-    if (r.payment_confirmed_at) paidCounts[r.client_id] = (paidCounts[r.client_id] ?? 0) + 1
+  for (const row of clientBillingCounts) {
+    billedCounts[row.client_id] = Number(row.billed)
+    paidCounts[row.client_id] = Number(row.paid)
   }
 
   return (

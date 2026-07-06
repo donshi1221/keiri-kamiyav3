@@ -17,6 +17,8 @@ export function getMFAuthUrl(state: string): string {
   return `${MF_AUTH_URL}?${params}`
 }
 
+const MF_FETCH_TIMEOUT_MS = 15000
+
 export async function exchangeCodeForTokens(code: string) {
   const res = await fetch(MF_TOKEN_URL, {
     method: 'POST',
@@ -28,6 +30,7 @@ export async function exchangeCodeForTokens(code: string) {
       grant_type: 'authorization_code',
       code,
     }),
+    signal: AbortSignal.timeout(MF_FETCH_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`MF token exchange failed: ${res.status}`)
   return res.json() as Promise<{ access_token: string; refresh_token: string; expires_in: number }>
@@ -43,6 +46,7 @@ async function refreshAccessToken(refreshToken: string) {
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     }),
+    signal: AbortSignal.timeout(MF_FETCH_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(`MF token refresh failed: ${res.status}`)
   return res.json() as Promise<{ access_token: string; refresh_token: string; expires_in: number }>
@@ -98,10 +102,11 @@ export async function fetchMFExpenses(year: number, month: number): Promise<numb
   const lastDay = new Date(year, month, 0).getDate()
   const endDate = `${year}-${String(month).padStart(2, '0')}-${lastDay}`
 
-  // MFクラウド会計 APIから支出取引（type=payment）を全件取得
+  // MFクラウド会計 APIから支出取引（type=payment）を全件取得（無限ループ防止のためページ数に上限を設ける）
+  const MAX_PAGES = 50
   let total = 0
   let page = 1
-  while (true) {
+  while (page <= MAX_PAGES) {
     const params = new URLSearchParams({
       start_date: startDate,
       end_date: endDate,
@@ -114,6 +119,7 @@ export async function fetchMFExpenses(year: number, month: number): Promise<numb
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
       },
+      signal: AbortSignal.timeout(MF_FETCH_TIMEOUT_MS),
     })
     if (!res.ok) throw new Error(`MF API error: ${res.status}`)
     const data = await res.json() as { data: Array<{ amount: number }>; meta?: { total_count?: number } }

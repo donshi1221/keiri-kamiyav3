@@ -1,13 +1,20 @@
 import { db } from '@/lib/db'
 import { moneyforwardTokens } from '@/lib/schema'
+import { getValidAccessToken } from '@/lib/moneyforward'
 
 export async function GET() {
   try {
     const [data] = await db.select({
-      expires_at: moneyforwardTokens.expires_at,
       updated_at: moneyforwardTokens.updated_at,
     }).from(moneyforwardTokens).limit(1)
-    return Response.json({ connected: !!data, updatedAt: data?.updated_at ?? null })
+
+    if (!data) {
+      return Response.json({ connected: false, updatedAt: null })
+    }
+
+    // トークンが期限切れの場合は実際にリフレッシュを試み、失敗したら未連携扱いにする
+    const accessToken = await getValidAccessToken()
+    return Response.json({ connected: !!accessToken, updatedAt: data.updated_at })
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
   }

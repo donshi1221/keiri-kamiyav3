@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/schema'
+import ErrorToast from '@/app/components/error-toast'
 
 // ─────────────────────────────────────────────
 // Dialog
@@ -175,6 +176,7 @@ export default function TaxPage() {
               streaming={streaming}
               setMessages={setMessages}
               setStreaming={setStreaming}
+              onFirstMessageSent={loadSessions}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm text-gray-400 border rounded-lg">
@@ -196,15 +198,17 @@ export default function TaxPage() {
 // ─────────────────────────────────────────────
 // Chat Panel
 // ─────────────────────────────────────────────
-function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming }: {
+function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, onFirstMessageSent }: {
   sessionId: string
   messages: TaxChatMessage[]
   streaming: boolean
   setMessages: React.Dispatch<React.SetStateAction<TaxChatMessage[]>>
   setStreaming: React.Dispatch<React.SetStateAction<boolean>>
+  onFirstMessageSent: () => void
 }) {
   const [input, setInput] = useState('')
   const [streamingText, setStreamingText] = useState('')
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -214,7 +218,9 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming }
   async function send() {
     const content = input.trim()
     if (!content || streaming) return
+    const isFirstMessage = messages.length === 0
     setInput('')
+    setErrorMsg(null)
     setMessages((prev) => [...prev, { id: 'tmp', session_id: sessionId, role: 'user', content, created_at: new Date().toISOString() }])
     setStreaming(true)
     setStreamingText('')
@@ -225,11 +231,16 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming }
       body: JSON.stringify({ content }),
     })
 
-    if (!res.body) { setStreaming(false); return }
+    if (!res.body) {
+      setStreaming(false)
+      setErrorMsg('AI応答の取得に失敗しました。もう一度お試しください。')
+      return
+    }
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let full = ''
+    let streamError: string | null = null
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -239,9 +250,13 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming }
         const payload = line.slice(6)
         if (payload === '[DONE]') break
         try {
-          const { text } = JSON.parse(payload)
-          full += text
-          setStreamingText(full)
+          const { text, error } = JSON.parse(payload)
+          if (error) {
+            streamError = error
+          } else if (text) {
+            full += text
+            setStreamingText(full)
+          }
         } catch {
           // ignore parse errors
         }
@@ -250,14 +265,27 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming }
 
     setStreaming(false)
     setStreamingText('')
-    setMessages((prev) => [
-      ...prev,
-      { id: Date.now().toString(), session_id: sessionId, role: 'assistant', content: full, created_at: new Date().toISOString() },
-    ])
+    if (full) {
+      setMessages((prev) => [
+        ...prev,
+        { id: Date.now().toString(), session_id: sessionId, role: 'assistant', content: full, created_at: new Date().toISOString() },
+      ])
+    }
+    if (streamError) {
+      setErrorMsg('AI応答の生成中にエラーが発生しました。もう一度お試しください。')
+    }
+    if (isFirstMessage) {
+      onFirstMessageSent()
+    }
   }
 
   return (
     <div className="flex-1 flex flex-col border rounded-lg overflow-hidden">
+      {errorMsg && (
+        <div className="p-2">
+          <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !streaming && (
           <p className="text-sm text-gray-400 text-center mt-8">メッセージを送信してください</p>

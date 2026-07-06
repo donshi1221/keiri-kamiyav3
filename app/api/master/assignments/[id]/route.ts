@@ -10,6 +10,21 @@ export async function PATCH(
   try {
     const { id } = await ctx.params
     const body = await req.json()
+
+    if (body.contractor_id !== undefined || body.client_id !== undefined) {
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(monthlyRecords)
+        .where(eq(monthlyRecords.assignment_id, id))
+
+      if (Number(count) > 0) {
+        return Response.json(
+          { error: '月次記録が存在するため、委託者・クライアントの変更はできません。' },
+          { status: 409 }
+        )
+      }
+    }
+
     await db.update(assignments).set({
       contractor_id: body.contractor_id,
       client_id: body.client_id,

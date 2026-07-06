@@ -1,11 +1,15 @@
 import { exchangeCodeForTokens, saveTokens } from '@/lib/moneyforward'
-import { redirect } from 'next/navigation'
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code')
-  if (!code) {
-    return redirect('/?mf_error=no_code')
+  const state = req.nextUrl.searchParams.get('state')
+  const savedState = req.cookies.get('mf_oauth_state')?.value
+
+  if (!code || !state || !savedState || state !== savedState) {
+    const res = NextResponse.redirect(new URL(!code ? '/?mf_error=no_code' : '/?mf_error=invalid_state', req.url))
+    res.cookies.delete('mf_oauth_state')
+    return res
   }
 
   let success = false
@@ -17,5 +21,7 @@ export async function GET(req: NextRequest) {
     success = false
   }
 
-  return success ? redirect('/?mf_connected=1') : redirect('/?mf_error=token_failed')
+  const res = NextResponse.redirect(new URL(success ? '/?mf_connected=1' : '/?mf_error=token_failed', req.url))
+  res.cookies.delete('mf_oauth_state')
+  return res
 }

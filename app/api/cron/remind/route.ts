@@ -135,6 +135,8 @@ export async function GET(req: NextRequest) {
     ].join('\n')
 
     const resend = getResend()
+    // noreply@resend.dev はResendの検証用ドメインのため、Resendアカウント本人のメールアドレス宛にしか届かない。
+    // 他の宛先にも届けるには、Resendで独自ドメインを検証してfromをそのドメインに変更する必要がある。
     const { error: mailErr } = await resend.emails.send({
       from: 'keiri-v3 <noreply@resend.dev>',
       to: process.env.NOTIFICATION_EMAIL!,
