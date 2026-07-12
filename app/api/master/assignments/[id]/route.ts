@@ -25,14 +25,21 @@ export async function PATCH(
       }
     }
 
-    await db.update(assignments).set({
-      contractor_id: body.contractor_id,
-      client_id: body.client_id,
-      role_name: body.role_name,
-      contractor_payout_amount: body.contractor_payout_amount,
-      spreadsheet_url: body.spreadsheet_url ?? null,
-      active: body.active,
-    }).where(eq(assignments.id, id))
+    // リクエストに含まれた項目だけを更新対象にする（undefined のキーは触らない）。
+    // これをしないと、UIが一部の項目だけ送った場合に未送信の項目が null 上書きで消える。
+    const patch: Partial<typeof assignments.$inferInsert> = {}
+    if (body.contractor_id !== undefined) patch.contractor_id = body.contractor_id
+    if (body.client_id !== undefined) patch.client_id = body.client_id
+    if (body.role_name !== undefined) patch.role_name = body.role_name
+    if (body.contractor_payout_amount !== undefined) patch.contractor_payout_amount = body.contractor_payout_amount
+    if (body.spreadsheet_url !== undefined) patch.spreadsheet_url = body.spreadsheet_url
+    if (body.active !== undefined) patch.active = body.active
+
+    if (Object.keys(patch).length === 0) {
+      return Response.json({ error: '更新する項目がありません。' }, { status: 400 })
+    }
+
+    await db.update(assignments).set(patch).where(eq(assignments.id, id))
 
     const data = await db.query.assignments.findFirst({
       where: (a, { eq: eqFn }) => eqFn(a.id, id),

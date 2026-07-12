@@ -4,12 +4,17 @@ import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustom
 import { and, eq } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
+import { generateMonthlyRecords } from '@/lib/monthly-records'
 
 function overdueMark(day: number, dueDay: number): string {
   return day > dueDay ? '（期限超過）' : ''
 }
 
 export async function GET(req: NextRequest) {
+  // CRON_SECRET 未設定時は素通しさせず、必ず拒否する（フェイルクローズ）。
+  if (!process.env.CRON_SECRET) {
+    return Response.json({ error: 'Server misconfiguration' }, { status: 500 })
+  }
   const auth = req.headers.get('authorization')
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
@@ -21,6 +26,10 @@ export async function GET(req: NextRequest) {
     const month = today.getMonth() + 1
     const day = today.getDate()
     const lastDay = getLastDayOfMonth(year, month)
+
+    // セーフティネット: 月次生成cron（毎月1日）が失敗するとその月のタスクが丸ごと消える。
+    // 生成処理は冪等（onConflictDoNothing）なので、毎朝ここで当月分を生成し直しても既存は壊れない。
+    await generateMonthlyRecords(year, month)
 
     const remindDay10 = isInReminderWindow(day, 10)
     const remindDay15 = isInReminderWindow(day, 15)

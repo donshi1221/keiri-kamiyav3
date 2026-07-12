@@ -10,14 +10,24 @@ export async function PATCH(
   try {
     const { id } = await ctx.params
     const body = await req.json()
-    const [data] = await db.update(clients).set({
-      name: body.name,
-      contact_person: body.contact_person ?? null,
-      billing_amount: body.billing_amount ?? 0,
-      contract_start: body.contract_start ?? null,
-      contract_months: body.contract_months ? Number(body.contract_months) : null,
-      notes: body.notes ?? null,
-    }).where(eq(clients.id, id)).returning()
+
+    // リクエストに含まれた項目だけを更新対象にする（undefined のキーは触らない）。
+    // これをしないと、UIが一部の項目だけ送った場合に未送信の項目が null / 0 上書きで消える。
+    const patch: Partial<typeof clients.$inferInsert> = {}
+    if (body.name !== undefined) patch.name = body.name
+    if (body.contact_person !== undefined) patch.contact_person = body.contact_person
+    if (body.billing_amount !== undefined) patch.billing_amount = body.billing_amount
+    if (body.contract_start !== undefined) patch.contract_start = body.contract_start
+    if (body.contract_months !== undefined) {
+      patch.contract_months = body.contract_months ? Number(body.contract_months) : null
+    }
+    if (body.notes !== undefined) patch.notes = body.notes
+
+    if (Object.keys(patch).length === 0) {
+      return Response.json({ error: '更新する項目がありません。' }, { status: 400 })
+    }
+
+    const [data] = await db.update(clients).set(patch).where(eq(clients.id, id)).returning()
     if (!data) return Response.json({ error: 'Not found' }, { status: 404 })
     return Response.json(data)
   } catch (err) {
