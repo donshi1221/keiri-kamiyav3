@@ -9,20 +9,10 @@ import { Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
-import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client, CustomGlobalTask } from '@/lib/schema'
+import type { MonthlyGlobalTask, CustomGlobalTask } from '@/lib/schema'
+import type { RecordWithRelations, ClientRecordWithClient } from '@/lib/ui-types'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
-
-type RecordWithRelations = MonthlyRecord & {
-  assignments: (Assignment & {
-    contractors: (Contractor & { contractor_type: 'daiko' | 'video_editor' }) | null
-    clients: Client | null
-  }) | null
-}
-
-type ClientRecordWithClient = MonthlyClientRecord & {
-  clients: (Client & { contract_months: number | null }) | null
-}
 
 function rowDueState(states: DueState[]): DueState {
   if (states.includes('overdue')) return 'overdue'
@@ -31,14 +21,14 @@ function rowDueState(states: DueState[]): DueState {
 }
 
 function rowDueClass(state: DueState): string {
-  if (state === 'overdue') return 'bg-red-50/70 hover:bg-red-100/70'
-  if (state === 'inWindow') return 'bg-amber-50/70 hover:bg-amber-100/70'
+  if (state === 'overdue') return 'bg-danger-subtle/70 hover:bg-danger-subtle/70'
+  if (state === 'inWindow') return 'bg-warning-subtle/70 hover:bg-warning-subtle/70'
   return 'hover:bg-gray-50'
 }
 
 function DueBadge({ state }: { state: DueState }) {
-  if (state === 'overdue') return <span className="block text-[10px] text-red-600 mt-1">期限超過</span>
-  if (state === 'inWindow') return <span className="block text-[10px] text-amber-600 mt-1">今週対応</span>
+  if (state === 'overdue') return <span className="block text-[10px] text-danger mt-1">期限超過</span>
+  if (state === 'inWindow') return <span className="block text-[10px] text-warning mt-1">今週対応</span>
   return null
 }
 
@@ -449,14 +439,14 @@ export default function DashboardClient({
           {carryOver.map((g) => (
             <div
               key={`${g.year}-${g.month}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning-subtle bg-warning-subtle px-4 py-2.5 text-sm text-warning"
             >
               <span>
                 ⚠ {g.year}年{g.month}月の未完了: {g.items.map((i) => `${i.label} ${i.count}件`).join('、')}
               </span>
               <Link
                 href={`/?year=${g.year}&month=${g.month}`}
-                className="shrink-0 font-medium text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                className="shrink-0 font-medium text-warning underline underline-offset-2 hover:text-warning"
               >
                 確認する
               </Link>
@@ -837,7 +827,7 @@ export default function DashboardClient({
                   ))}
                 </div>
                 {selectedMonths.length === 0 && (
-                  <p className="text-xs text-red-500">対象の月を1つ以上選択してください</p>
+                  <p className="text-xs text-danger">対象の月を1つ以上選択してください</p>
                 )}
               </div>
             )}
@@ -862,7 +852,7 @@ export default function DashboardClient({
                   <span className={`flex-1 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.label}</span>
                   <span className="text-xs text-gray-400">{t.dueLabel}</span>
                   {t.state === 'overdue' && (
-                    <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded">期限超過</span>
+                    <span className="text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
                   )}
                   {t.state === 'upcoming' && (
                     <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間前</span>
@@ -895,7 +885,7 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => deleteCustomTask(t.id)}
-                            className="text-xs text-red-500 hover:text-red-700 font-medium px-1.5 py-0.5 rounded hover:bg-red-50"
+                            className="text-xs text-danger hover:text-danger font-medium px-1.5 py-0.5 rounded hover:bg-danger-subtle"
                           >
                             削除
                           </button>
@@ -912,7 +902,7 @@ export default function DashboardClient({
                           type="button"
                           onClick={() => setPendingDeleteId(t.id)}
                           aria-label={`${t.title}を削除`}
-                          className="text-gray-300 hover:text-red-400 shrink-0"
+                          className="text-gray-300 hover:text-danger shrink-0"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -942,7 +932,7 @@ export default function DashboardClient({
           <div className="bg-gray-50 rounded-lg p-3">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs text-gray-500">その他経費</p>
-              <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">MF連携</span>
+              <span className="text-xs bg-info-subtle text-info px-1.5 py-0.5 rounded">MF連携</span>
             </div>
             <p className="text-xl font-medium text-gray-600">
               {mfExpense ? `¥${mfExpense.amount.toLocaleString()}` : '—'}
@@ -955,7 +945,7 @@ export default function DashboardClient({
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">利益</p>
-            <p className={`text-xl font-medium ${profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+            <p className={`text-xl font-medium ${profit >= 0 ? 'text-success' : 'text-danger'}`}>
               ¥{profit.toLocaleString()}
             </p>
             {revenue > 0 && (
@@ -972,7 +962,7 @@ export default function DashboardClient({
                 マネーフォワード クラウド会計 連携中
               </p>
             ) : mfExpired ? (
-              <p className="text-xs text-red-600">
+              <p className="text-xs text-danger">
                 マネーフォワード連携の有効期限が切れました。再連携してください。
               </p>
             ) : (
@@ -983,7 +973,7 @@ export default function DashboardClient({
             {!mfConnected && (
               <a
                 href="/api/moneyforward/auth"
-                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded"
+                className="text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle px-3 py-1.5 rounded"
               >
                 {mfExpired ? 'MF再連携する' : 'MF連携する'}
               </a>
@@ -993,7 +983,7 @@ export default function DashboardClient({
                 type="button"
                 onClick={syncMFExpenses}
                 disabled={isSyncing}
-                className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 px-3 py-1.5 rounded"
+                className="text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle disabled:opacity-50 px-3 py-1.5 rounded"
               >
                 {isSyncing ? '同期中…' : '今すぐ同期'}
               </button>
@@ -1051,7 +1041,7 @@ function PayoutInput({ recordId, initialValue, onSaved, onError }: {
         <span className="absolute right-1.5 text-gray-400 pointer-events-none text-xs">✏️</span>
       </div>
       {feedback === 'saved' && (
-        <span className="text-xs text-green-600 whitespace-nowrap">保存 ✓</span>
+        <span className="text-xs text-success whitespace-nowrap">保存 ✓</span>
       )}
     </div>
   )

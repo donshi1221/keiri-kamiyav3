@@ -44,10 +44,8 @@ export default async function HistoryPage({
     <HistoryClient
       year={year}
       month={month}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      records={records as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      clientRecords={clientRecords as any}
+      records={records}
+      clientRecords={clientRecords}
       globalTask={globalTask ?? null}
     />
   )

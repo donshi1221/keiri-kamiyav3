@@ -191,7 +191,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                   {c.contractor_type === 'daiko' ? '代行者' : '動画編集者'}
                 </span>
                 {c.email && <span className="text-xs text-gray-400">{c.email}</span>}
-                <button onClick={() => setEditContractor(c)} className="text-xs text-blue-600 hover:underline">編集</button>
+                <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline">編集</button>
                 <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline">削除</button>
               </div>
               <div className="px-4 py-2">
@@ -199,7 +199,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
                   <button
                     onClick={() => setAddAssignOpen(c.id)}
-                    className="text-xs text-blue-600 hover:underline"
+                    className="text-xs text-info hover:underline"
                   >
                     + アサインを追加
                   </button>
@@ -215,7 +215,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id, `${a.clients?.name ?? ''} — ${a.role_name}`)} className="text-xs text-red-400 hover:underline">削除</button>
+                          <button onClick={() => deleteAssignment(a.id, `${a.clients?.name ?? ''} — ${a.role_name}`)} className="text-xs text-danger hover:underline">削除</button>
                         )}
                       </div>
                     ))}
@@ -375,13 +375,13 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                 {cl.contract_months && (
                   <span className="text-xs text-gray-400">{cl.contract_months}ヶ月</span>
                 )}
-                <button onClick={() => setEditClient(cl)} className="text-xs text-blue-600 hover:underline">編集</button>
+                <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline">編集</button>
                 <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline">削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
-                  <button onClick={() => setAddAssignOpen(cl.id)} className="text-xs text-blue-600 hover:underline">
+                  <button onClick={() => setAddAssignOpen(cl.id)} className="text-xs text-info hover:underline">
                     + アサインを追加
                   </button>
                 </div>
@@ -396,7 +396,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id, `${a.contractors?.name ?? ''} — ${a.role_name}`)} className="text-xs text-red-400 hover:underline">削除</button>
+                          <button onClick={() => deleteAssignment(a.id, `${a.contractors?.name ?? ''} — ${a.role_name}`)} className="text-xs text-danger hover:underline">削除</button>
                         )}
                       </div>
                     ))}

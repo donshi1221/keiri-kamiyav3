@@ -139,7 +139,7 @@ export default function TaxPage() {
                   <div className="flex items-start gap-1">
                     <span className="shrink-0">{e.source_type === 'file' ? '📎' : '📄'}</span>
                     <span className="flex-1 font-medium line-clamp-2 break-all">{e.title}</span>
-                    <button onClick={() => deleteEntry(e.id)} className="text-red-400 hover:text-red-600 shrink-0 ml-1">×</button>
+                    <button onClick={() => deleteEntry(e.id)} className="text-danger hover:text-danger shrink-0 ml-1">×</button>
                   </div>
                   <div className="text-xs text-gray-400 mt-1 ml-5">
                     {new Date(e.created_at).toLocaleDateString('ja-JP')}
@@ -351,11 +351,11 @@ function AddTextDialog({ open, onClose, onSaved }: { open: boolean; onClose: () 
     <Dialog open={open} onClose={onClose} title="アドバイスをテキストで追加">
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="text-sm font-medium block mb-1">タイトル <span className="text-red-500">*</span></label>
+          <label className="text-sm font-medium block mb-1">タイトル <span className="text-danger">*</span></label>
           <input required value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
         <div>
-          <label className="text-sm font-medium block mb-1">内容 <span className="text-red-500">*</span></label>
+          <label className="text-sm font-medium block mb-1">内容 <span className="text-danger">*</span></label>
           <textarea required rows={6} value={body} onChange={(e) => setBody(e.target.value)} className="w-full border rounded px-3 py-2 text-sm resize-none" />
         </div>
         <div className="flex justify-end gap-2 pt-2">

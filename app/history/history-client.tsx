@@ -3,18 +3,8 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import type { MonthlyRecord, MonthlyClientRecord, MonthlyGlobalTask, Assignment, Contractor, Client } from '@/lib/schema'
-
-type RecordWithRelations = MonthlyRecord & {
-  assignments: (Assignment & {
-    contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
-    clients: Pick<Client, 'id' | 'name'> | null
-  }) | null
-}
-
-type ClientRecordWithClient = MonthlyClientRecord & {
-  clients: (Pick<Client, 'id' | 'name'> & { billing_amount: number | null }) | null
-}
+import type { MonthlyGlobalTask } from '@/lib/schema'
+import type { RecordWithRelations, ClientRecordWithClient } from '@/lib/ui-types'
 
 interface Props {
   year: number
@@ -27,7 +17,7 @@ interface Props {
 function CheckIcon({ done, label }: { done: boolean; label: string }) {
   if (done) {
     return (
-      <span aria-label={`${label}完了（閲覧専用）`} className="text-green-600 text-base leading-none">✓</span>
+      <span aria-label={`${label}完了（閲覧専用）`} className="text-success text-base leading-none">✓</span>
     )
   }
   return (
@@ -61,7 +51,7 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
       </div>
 
       {/* 閲覧専用バナー */}
-      <div className="sticky top-12 z-10 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2 rounded-lg md:top-14">
+      <div className="sticky top-12 z-10 bg-warning-subtle border border-warning-subtle text-warning text-sm px-4 py-2 rounded-lg md:top-14">
         過去月（閲覧専用）— この月のデータは変更できません
       </div>
 

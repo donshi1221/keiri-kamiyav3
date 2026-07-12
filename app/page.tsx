@@ -107,10 +107,8 @@ export default async function DashboardPage({
     <DashboardClient
       year={year}
       month={month}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      records={records as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      clientRecords={clientRecords as any}
+      records={records}
+      clientRecords={clientRecords}
       globalTask={globalTask ?? null}
       customTasks={customTasks}
       today={today.toISOString()}
