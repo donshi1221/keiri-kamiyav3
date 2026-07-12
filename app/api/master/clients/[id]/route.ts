@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { clients, assignments } from '@/lib/schema'
+import { clients, assignments, monthlyClientRecords } from '@/lib/schema'
 import { eq, sql } from 'drizzle-orm'
 
 export async function PATCH(
@@ -50,6 +50,20 @@ export async function DELETE(
     if (Number(count) > 0) {
       return Response.json(
         { error: `${count}件のアサインが存在するため削除できません。先にアサインを削除してください。` },
+        { status: 409 }
+      )
+    }
+
+    // 月次レコードは client_id を NOT NULL の外部キーで参照するため、
+    // 残ったまま削除するとDBの制約違反で生の500になる。事前に件数を確認して弾く。
+    const [{ count: recordCount }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(monthlyClientRecords)
+      .where(eq(monthlyClientRecords.client_id, id))
+
+    if (Number(recordCount) > 0) {
+      return Response.json(
+        { error: `${recordCount}件の月次記録が存在するため削除できません。` },
         { status: 409 }
       )
     }

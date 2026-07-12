@@ -111,11 +111,14 @@ interface Props {
   paidCounts: Record<string, number>
   mfExpense: { amount: number; syncedAt: string } | null
   mfConnected: boolean
+  mfExpired: boolean
+  mfError: string | null
+  mfJustConnected: boolean
   carryOver: CarryOverGroup[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, carryOver,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -150,6 +153,19 @@ export default function DashboardClient({
 
   useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
 
+  // MF連携コールバックの結果（?mf_error / ?mf_connected）を受け取り、失敗時は理由を通知する。
+  // 表示後はクエリを消し、再読み込みで通知が再表示されないようにする。
+  useEffect(() => {
+    if (mfError) {
+      showError('マネーフォワード連携に失敗しました。もう一度お試しください。')
+      router.replace('/')
+    } else if (mfJustConnected) {
+      router.replace('/')
+    }
+    // 初回マウント時に一度だけ判定する
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   function navigate(delta: number) {
     if (delta > 0 && isCurrentMonth) return
     let y = year, m = month + delta
@@ -159,34 +175,42 @@ export default function DashboardClient({
   }
 
   async function toggleRecord(id: string, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at') {
-    setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: r[field] ? null : new Date().toISOString() } : r))
-    const res = await fetch(`/api/checklist/records/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ field }),
-    })
-    if (!res.ok) {
-      setLocalRecords(records)
-      showError('保存に失敗しました。もう一度お試しください。')
-    } else {
+    // 失敗時に「この1件だけ」を直前の値へ戻せるよう、変更前の値を控える。
+    const prevValue = localRecords.find((r) => r.id === id)?.[field] ?? null
+    const nextChecked = !prevValue
+    setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: nextChecked ? new Date().toISOString() : null } : r))
+    try {
+      const res = await fetch(`/api/checklist/records/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, checked: nextChecked }),
+      })
+      if (!res.ok) throw new Error('save failed')
       const updated = await res.json()
       setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...updated, assignments: r.assignments } : r))
+    } catch {
+      // 通信例外・保存失敗いずれの場合も、この行のこの項目だけを元に戻す（他の行の変更は保持）。
+      setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: prevValue } : r))
+      showError('保存に失敗しました。もう一度お試しください。')
     }
   }
 
   async function toggleClientRecord(id: string, field: 'invoice_sent_at' | 'payment_confirmed_at') {
-    setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: r[field] ? null : new Date().toISOString() } : r))
-    const res = await fetch(`/api/checklist/client-records/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ field }),
-    })
-    if (!res.ok) {
-      setLocalClientRecords(clientRecords)
-      showError('保存に失敗しました。もう一度お試しください。')
-    } else {
+    const prevValue = localClientRecords.find((r) => r.id === id)?.[field] ?? null
+    const nextChecked = !prevValue
+    setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: nextChecked ? new Date().toISOString() : null } : r))
+    try {
+      const res = await fetch(`/api/checklist/client-records/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, checked: nextChecked }),
+      })
+      if (!res.ok) throw new Error('save failed')
       const updated = await res.json()
       setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...updated, clients: r.clients } : r))
+    } catch {
+      setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: prevValue } : r))
+      showError('保存に失敗しました。もう一度お試しください。')
     }
   }
 
@@ -224,17 +248,21 @@ export default function DashboardClient({
 
   async function toggleGlobal(field: 'expense_confirmed_at' | 'payment_report_confirmed_at' | 'withholding_confirmed_at') {
     if (!localGlobal) return
-    setLocalGlobal((prev) => prev ? { ...prev, [field]: prev[field] ? null : new Date().toISOString() } : prev)
-    const res = await fetch(`/api/checklist/global/${localGlobal.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ field }),
-    })
-    if (!res.ok) {
-      setLocalGlobal(globalTask)
-      showError('保存に失敗しました。もう一度お試しください。')
-    } else {
+    const prevValue = localGlobal[field]
+    const nextChecked = !prevValue
+    setLocalGlobal((prev) => prev ? { ...prev, [field]: nextChecked ? new Date().toISOString() : null } : prev)
+    try {
+      const res = await fetch(`/api/checklist/global/${localGlobal.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, checked: nextChecked }),
+      })
+      if (!res.ok) throw new Error('save failed')
       setLocalGlobal(await res.json())
+    } catch {
+      // このタスクのこの項目だけを元に戻す。
+      setLocalGlobal((prev) => prev ? { ...prev, [field]: prevValue } : prev)
+      showError('保存に失敗しました。もう一度お試しください。')
     }
   }
 
@@ -254,22 +282,27 @@ export default function DashboardClient({
 
   async function syncMFExpenses() {
     setIsSyncing(true)
-    const res = await fetch('/api/moneyforward/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ year, month }),
-    })
-    setIsSyncing(false)
-    if (res.ok) {
-      const data = await res.json()
-      setMfExpense({ amount: data.amount, syncedAt: new Date().toISOString() })
-    } else {
-      const data = await res.json()
-      if (data.error === 'not_connected') {
-        showError('マネーフォワードが未連携です。連携ボタンから認証してください。')
+    try {
+      const res = await fetch('/api/moneyforward/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, month }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setMfExpense({ amount: data.amount, syncedAt: new Date().toISOString() })
       } else {
-        showError('MF経費の同期に失敗しました。もう一度お試しください。')
+        const data = await res.json().catch(() => ({}))
+        if (data.error === 'not_connected') {
+          showError('マネーフォワードが未連携です。連携ボタンから認証してください。')
+        } else {
+          showError('MF経費の同期に失敗しました。もう一度お試しください。')
+        }
       }
+    } catch {
+      showError('MF経費の同期に失敗しました。通信状況をご確認ください。')
+    } finally {
+      setIsSyncing(false)
     }
   }
 
@@ -279,13 +312,13 @@ export default function DashboardClient({
     if (isAdding) return
     setIsAdding(true)
     const months = monthMode === 'all' ? [] : selectedMonths
-    const res = await fetch('/api/checklist/custom-global', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: newTitle.trim(), months }),
-    })
-    setIsAdding(false)
-    if (res.ok) {
+    try {
+      const res = await fetch('/api/checklist/custom-global', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle.trim(), months }),
+      })
+      if (!res.ok) throw new Error('add failed')
       const created = await res.json()
       if (monthMode === 'all' || months.includes(month)) {
         setCustomTasks((prev) => [...prev, created])
@@ -294,36 +327,55 @@ export default function DashboardClient({
       setSelectedMonths([])
       setMonthMode('all')
       setShowAddForm(false)
-    } else {
+    } catch {
       showError('タスクの追加に失敗しました。もう一度お試しください。')
+    } finally {
+      setIsAdding(false)
     }
   }
 
   async function toggleCustomTask(id: string) {
+    const task = customTasks.find((t) => t.id === id)
+    if (!task) return
+    // 失敗時にこの1件だけ戻せるよう、変更前の完了月リストを控える。
+    const prevCompletedMonths = task.completed_months
+    const nextCompleted = !prevCompletedMonths.includes(yearMonth)
     setCustomTasks((prev) =>
       prev.map((t) =>
         t.id === id
-          ? { ...t, completed_months: t.completed_months.includes(yearMonth) ? t.completed_months.filter((m) => m !== yearMonth) : [...t.completed_months, yearMonth] }
+          ? { ...t, completed_months: nextCompleted ? [...t.completed_months, yearMonth] : t.completed_months.filter((m) => m !== yearMonth) }
           : t
       )
     )
-    const res = await fetch(`/api/checklist/custom-global/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ yearMonth }),
-    })
-    if (!res.ok) {
-      setCustomTasks(initialCustomTasks)
+    try {
+      const res = await fetch(`/api/checklist/custom-global/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yearMonth, completed: nextCompleted }),
+      })
+      if (!res.ok) throw new Error('save failed')
+    } catch {
+      setCustomTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed_months: prevCompletedMonths } : t))
       showError('保存に失敗しました。もう一度お試しください。')
     }
   }
 
   async function deleteCustomTask(id: string) {
     setPendingDeleteId(null)
+    // 失敗時に削除した1件だけを元の位置へ復元できるよう、対象と位置を控える。
+    const index = customTasks.findIndex((t) => t.id === id)
+    const removed = customTasks[index]
+    if (!removed) return
     setCustomTasks((prev) => prev.filter((t) => t.id !== id))
-    const res = await fetch(`/api/checklist/custom-global/${id}`, { method: 'DELETE' })
-    if (!res.ok) {
-      setCustomTasks(initialCustomTasks)
+    try {
+      const res = await fetch(`/api/checklist/custom-global/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+    } catch {
+      setCustomTasks((prev) => {
+        const next = [...prev]
+        next.splice(index, 0, removed)
+        return next
+      })
       showError('削除に失敗しました。もう一度お試しください。')
     }
   }
@@ -919,6 +971,10 @@ export default function DashboardClient({
               <p className="text-xs text-gray-500">
                 マネーフォワード クラウド会計 連携中
               </p>
+            ) : mfExpired ? (
+              <p className="text-xs text-red-600">
+                マネーフォワード連携の有効期限が切れました。再連携してください。
+              </p>
             ) : (
               <p className="text-xs text-gray-500">マネーフォワード 未連携</p>
             )}
@@ -929,7 +985,7 @@ export default function DashboardClient({
                 href="/api/moneyforward/auth"
                 className="text-xs border border-blue-300 text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded"
               >
-                MF連携する
+                {mfExpired ? 'MF再連携する' : 'MF連携する'}
               </a>
             )}
             {mfConnected && (
@@ -961,18 +1017,19 @@ function PayoutInput({ recordId, initialValue, onSaved, onError }: {
 
   async function save() {
     setFeedback('saving')
-    const res = await fetch(`/api/checklist/records/${recordId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ field: 'actual_payout_amount', value }),
-    })
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/checklist/records/${recordId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field: 'actual_payout_amount', value }),
+      })
+      if (!res.ok) throw new Error('save failed')
       const data = await res.json()
       onSaved(data.actual_payout_amount)
       setFeedback('saved')
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => setFeedback('idle'), 1500)
-    } else {
+    } catch {
       setFeedback('idle')
       onError()
     }

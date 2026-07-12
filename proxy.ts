@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { computeSessionToken, timingSafeEqual } from '@/lib/auth'
+import { verifySessionToken } from '@/lib/auth'
 
 export async function proxy(request: NextRequest) {
-  // AUTH_SECRET 未設定だと誰でも計算可能な固定トークンで認証が通ってしまうため、
+  // AUTH_SECRET 未設定だと誰でも計算可能なトークンで認証が通ってしまうため、
   // 未設定時は認証成立とみなさず必ず拒否する（フェイルクローズ）。
   const authSecret = process.env.AUTH_SECRET
   const cookie = request.cookies.get('session')?.value ?? ''
-  const expected = authSecret ? await computeSessionToken(authSecret) : null
+  const valid = authSecret ? await verifySessionToken(authSecret, cookie) : false
 
-  if (expected !== null && timingSafeEqual(cookie, expected)) {
+  if (valid) {
     return NextResponse.next()
   }
 

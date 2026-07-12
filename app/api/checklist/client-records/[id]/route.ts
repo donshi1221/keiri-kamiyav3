@@ -18,12 +18,17 @@ export async function PATCH(
     if (!(ALLOWED as readonly string[]).includes(field)) {
       return Response.json({ error: 'Invalid field' }, { status: 400 })
     }
+    // 冪等化: クライアントが「したい状態」を checked で明示的に送る（トグルしない）。
+    if (typeof body.checked !== 'boolean') {
+      return Response.json({ error: 'checked (boolean) is required' }, { status: 400 })
+    }
 
     const [current] = await db.select().from(monthlyClientRecords).where(eq(monthlyClientRecords.id, id))
     if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
 
-    const currentValue = current[field as ToggleField] as string | null
-    const newValue = currentValue ? null : new Date().toISOString()
+    // 既にチェック済みで再度 checked=true が来た場合は、最初のチェック日時を保持する。
+    const existing = current[field as ToggleField] as string | null
+    const newValue = body.checked ? (existing ?? new Date().toISOString()) : null
 
     const updateSet = field === 'invoice_sent_at'
       ? { invoice_sent_at: newValue }

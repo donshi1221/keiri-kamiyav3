@@ -1,9 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, History, Users, BookText } from 'lucide-react'
+import { LayoutDashboard, History, Users, BookText, LogOut } from 'lucide-react'
 
 const links = [
   { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
@@ -14,6 +14,17 @@ const links = [
 
 export default function Nav() {
   const pathname = usePathname()
+  const router = useRouter()
+
+  async function handleLogout() {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // 通信に失敗してもログイン画面へは遷移させる（Cookieはサーバー側でのみ消せるため再ログインで解決）。
+    }
+    router.replace('/login')
+    router.refresh()
+  }
 
   return (
     <>
@@ -38,13 +49,29 @@ export default function Nav() {
               )
             })}
           </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
+          >
+            <LogOut size={16} />
+            ログアウト
+          </button>
         </div>
       </nav>
 
-      {/* スマホ表示（md未満）: 画面上部にタイトルのみ */}
+      {/* スマホ表示（md未満）: 画面上部にタイトルとログアウト */}
       <header className="border-b bg-white sticky top-0 z-10 md:hidden">
         <div className="px-4 flex items-center h-12">
           <span className="font-bold text-sm text-gray-800">keiri-v3</span>
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="ログアウト"
+            className="ml-auto flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+          >
+            <LogOut size={18} />
+          </button>
         </div>
       </header>
 

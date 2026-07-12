@@ -15,14 +15,18 @@ export async function PATCH(
     if (!yearMonth) {
       return Response.json({ error: 'yearMonth is required' }, { status: 400 })
     }
+    // 冪等化: クライアントが「完了/未完了」を completed で明示的に送る（トグルしない）。
+    if (typeof body.completed !== 'boolean') {
+      return Response.json({ error: 'completed (boolean) is required' }, { status: 400 })
+    }
 
     const [current] = await db.select().from(monthlyCustomGlobalTasks).where(eq(monthlyCustomGlobalTasks.id, id))
     if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
 
     const completedMonths: number[] = current.completed_months ?? []
-    const newCompletedMonths = completedMonths.includes(yearMonth)
-      ? completedMonths.filter((m) => m !== yearMonth)
-      : [...completedMonths, yearMonth]
+    const newCompletedMonths = body.completed
+      ? (completedMonths.includes(yearMonth) ? completedMonths : [...completedMonths, yearMonth])
+      : completedMonths.filter((m) => m !== yearMonth)
 
     const [data] = await db.update(monthlyCustomGlobalTasks)
       .set({ completed_months: newCompletedMonths })

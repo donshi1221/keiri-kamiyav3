@@ -3,12 +3,13 @@ import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustom
 import { and, eq, asc, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
+import { getValidAccessToken } from '@/lib/moneyforward'
 import DashboardClient from './components/dashboard-client'
 
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string; month?: string }>
+  searchParams: Promise<{ year?: string; month?: string; mf_error?: string; mf_connected?: string }>
 }) {
   const params = await searchParams
   const today = nowJST()
@@ -94,6 +95,14 @@ export default async function DashboardPage({
     paidCounts[row.client_id] = Number(row.paid)
   }
 
+  // トークンの行が存在するだけでは「連携中」と言えない（リフレッシュトークン失効時も行は残る）。
+  // 実際に有効なアクセストークンを取得できるかで連携状態を判定する。
+  const mfHasToken = mfToken.length > 0
+  const mfAccessToken = mfHasToken ? await getValidAccessToken() : null
+  const mfConnected = mfAccessToken !== null
+  // 行はあるが有効化できない＝連携が失効している状態。再連携を促すために区別する。
+  const mfExpired = mfHasToken && !mfConnected
+
   return (
     <DashboardClient
       year={year}
@@ -108,7 +117,10 @@ export default async function DashboardPage({
       billedCounts={billedCounts}
       paidCounts={paidCounts}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
-      mfConnected={mfToken.length > 0}
+      mfConnected={mfConnected}
+      mfExpired={mfExpired}
+      mfError={params.mf_error ?? null}
+      mfJustConnected={params.mf_connected === '1'}
       carryOver={carryOver}
     />
   )
