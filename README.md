@@ -18,6 +18,33 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## データベース / マイグレーション運用
+
+DB は Neon (PostgreSQL) + Drizzle ORM。スキーマの唯一の正本（source of truth）は `lib/schema.ts`。
+スキーマ変更は必ず「マイグレーションファイル」として `drizzle/` に残し、Git で履歴管理する。
+
+| コマンド | 用途 |
+|----------|------|
+| `npm run db:generate` | `lib/schema.ts` の変更から差分マイグレーション SQL を `drizzle/` に生成する（DBには接続しない） |
+| `npm run db:migrate` | `drizzle/` の未適用マイグレーションを実 DB へ適用する |
+| `npm run db:push` | スキーマを DB へ即時反映する（履歴を残さない。ローカル開発の試行専用） |
+| `npm run db:studio` | ブラウザで DB を閲覧する GUI を起動する |
+
+接続先は `.env.local` の `DATABASE_URL`。`drizzle.config.ts` が `@next/env` で `.env.local` を読み込む。
+
+### 標準の変更フロー
+
+1. `lib/schema.ts` を編集する
+2. `npm run db:generate` で `drizzle/NNNN_*.sql` を生成する
+3. 生成された SQL を目視レビューし、Git にコミットする
+4. `npm run db:migrate` で実 DB に適用する（本番は Vercel の DATABASE_URL に向けて実行）
+
+> **本番 DB は開発中に `db:push` で作られた既存スキーマがすでに入っている。**
+> 初期マイグレーション `drizzle/0000_*.sql` はその「現状」を表すベースライン。
+> 既存の本番 DB に対しては、このベースラインを「適用済み」として扱い（初回は流さない）、
+> **今後追加される `0001` 以降のマイグレーションのみ `db:migrate` で適用する**こと。
+> 何もテーブルが無い新規環境では `db:migrate` が全テーブルを一から構築する。
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More
