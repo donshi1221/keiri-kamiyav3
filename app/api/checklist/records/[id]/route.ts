@@ -16,11 +16,25 @@ export async function PATCH(
     const field = body.field as string
 
     if (field === 'actual_payout_amount') {
-      const value = body.value === '' ? null : Number(body.value)
+      // actual_payout_amount は integer 列。空文字は「未入力（null）」扱い。
+      // 数値以外・負数は 400 で弾き、小数は円に小数がない前提で四捨五入する
+      // （小数のまま integer 列へ渡すと Postgres が拒否して 500 になるため）。
+      const raw = body.value
+      let value: number | null
+      if (raw === '' || raw === null || raw === undefined) {
+        value = null
+      } else {
+        const n = Number(raw)
+        if (!Number.isFinite(n) || n < 0) {
+          return Response.json({ error: '金額には0以上の数値を入力してください' }, { status: 400 })
+        }
+        value = Math.round(n)
+      }
       const [data] = await db.update(monthlyRecords)
-        .set({ actual_payout_amount: isNaN(value as number) ? null : value })
+        .set({ actual_payout_amount: value })
         .where(eq(monthlyRecords.id, id))
         .returning()
+      if (!data) return Response.json({ error: 'Not found' }, { status: 404 })
       return Response.json(data)
     }
 

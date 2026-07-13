@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { taxAdviceEntries, taxChatMessages, taxChatSessions } from '@/lib/schema'
 import { eq, asc } from 'drizzle-orm'
 import { getGeminiClient } from '@/lib/gemini'
+import { GEMINI_MODEL } from '@/lib/config'
 
 const SESSION_TITLE_MAX_LENGTH = 30
 
@@ -80,7 +81,7 @@ export async function POST(
       const encoder = new TextEncoder()
       try {
         const gemini = getGeminiClient()
-        const model = gemini.getGenerativeModel({ model: 'gemini-2.0-flash' })
+        const model = gemini.getGenerativeModel({ model: GEMINI_MODEL })
         const chat = model.startChat({
           systemInstruction: systemPrompt,
           history: geminiHistory,

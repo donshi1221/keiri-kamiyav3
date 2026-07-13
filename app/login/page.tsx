@@ -16,20 +16,27 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
 
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    })
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
 
-    if (res.ok) {
-      router.replace('/')
-      router.refresh()
-      return
+      if (res.ok) {
+        router.replace('/')
+        router.refresh()
+        return
+      }
+
+      setLoading(false)
+      setError('パスワードが違います')
+    } catch {
+      // 通信断（オフライン等）でも fetch は例外を投げる。catch が無いと
+      // loading が true のままボタンが「ログイン中...」で固着するため、必ず戻す。
+      setLoading(false)
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-
-    setLoading(false)
-    setError('パスワードが違います')
   }
 
   return (

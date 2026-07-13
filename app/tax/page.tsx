@@ -5,6 +5,16 @@ import { Button } from '@/components/ui/button'
 import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/schema'
 import ErrorToast from '@/app/components/error-toast'
 
+// APIエラー応答から表示用メッセージを取り出す。JSONでない/errorが無い場合は fallback を返す。
+async function readError(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json()
+    return typeof data?.error === 'string' ? data.error : fallback
+  } catch {
+    return fallback
+  }
+}
+
 // ─────────────────────────────────────────────
 // Dialog
 // ─────────────────────────────────────────────
@@ -41,16 +51,27 @@ export default function TaxPage() {
   const [addTextOpen, setAddTextOpen] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [mobilePanel, setMobilePanel] = useState<'advice' | 'chat'>('chat')
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const loadEntries = useCallback(async () => {
-    const data = await fetch('/api/tax/advice').then((r) => r.json())
-    setEntries(data ?? [])
+    try {
+      const res = await fetch('/api/tax/advice')
+      const data = await res.json()
+      setEntries(data ?? [])
+    } catch {
+      setErrorMsg('アドバイスの読み込みに失敗しました。接続を確認してください。')
+    }
   }, [])
 
   const loadSessions = useCallback(async () => {
-    const data = await fetch('/api/tax/chat/sessions').then((r) => r.json())
-    setSessions(data ?? [])
-    if (!activeSessionId && data?.length > 0) setActiveSessionId(data[0].id)
+    try {
+      const res = await fetch('/api/tax/chat/sessions')
+      const data = await res.json()
+      setSessions(data ?? [])
+      if (!activeSessionId && data?.length > 0) setActiveSessionId(data[0].id)
+    } catch {
+      setErrorMsg('会話履歴の読み込みに失敗しました。接続を確認してください。')
+    }
   }, [activeSessionId])
 
   useEffect(() => {
@@ -60,30 +81,49 @@ export default function TaxPage() {
 
   useEffect(() => {
     if (!activeSessionId) { setMessages([]); return }
+    let cancelled = false
     fetch(`/api/tax/chat/sessions/${activeSessionId}/messages`)
       .then((r) => r.json())
-      .then((data) => setMessages(data ?? []))
+      .then((data) => { if (!cancelled) setMessages(data ?? []) })
+      .catch(() => { if (!cancelled) setErrorMsg('メッセージの読み込みに失敗しました。') })
+    return () => { cancelled = true }
   }, [activeSessionId])
 
   async function deleteEntry(id: string) {
     if (!confirm('このエントリを削除しますか？')) return
-    await fetch(`/api/tax/advice/${id}`, { method: 'DELETE' })
-    loadEntries()
+    try {
+      const res = await fetch(`/api/tax/advice/${id}`, { method: 'DELETE' })
+      if (!res.ok) { setErrorMsg('エントリの削除に失敗しました。'); return }
+      loadEntries()
+    } catch {
+      setErrorMsg('通信に失敗しました。接続を確認して再度お試しください。')
+    }
   }
 
   async function newSession() {
-    const data = await fetch('/api/tax/chat/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: '新しい会話' }),
-    }).then((r) => r.json())
-    setSessions((prev) => [data, ...prev])
-    setActiveSessionId(data.id)
-    setMessages([])
+    try {
+      const res = await fetch('/api/tax/chat/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '新しい会話' }),
+      })
+      if (!res.ok) { setErrorMsg('会話の作成に失敗しました。'); return }
+      const data = await res.json()
+      setSessions((prev) => [data, ...prev])
+      setActiveSessionId(data.id)
+      setMessages([])
+    } catch {
+      setErrorMsg('通信に失敗しました。接続を確認して再度お試しください。')
+    }
   }
 
   return (
     <div>
+      {errorMsg && (
+        <div className="mb-4">
+          <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />
+        </div>
+      )}
       <h1 className="text-xl font-bold mb-6">税務メモ</h1>
 
       {/* スマホ表示（md未満）: パネル切替タブ */}
@@ -122,9 +162,18 @@ export default function TaxPage() {
                   if (!file) return
                   const form = new FormData()
                   form.append('file', file)
-                  await fetch('/api/tax/advice/upload', { method: 'POST', body: form })
-                  loadEntries()
-                  e.target.value = ''
+                  try {
+                    const res = await fetch('/api/tax/advice/upload', { method: 'POST', body: form })
+                    if (!res.ok) {
+                      setErrorMsg(await readError(res, 'ファイルのアップロードに失敗しました。'))
+                    } else {
+                      loadEntries()
+                    }
+                  } catch {
+                    setErrorMsg('通信に失敗しました。接続を確認して再度お試しください。')
+                  } finally {
+                    e.target.value = ''
+                  }
                 }}
               />
             </label>
@@ -190,6 +239,7 @@ export default function TaxPage() {
         open={addTextOpen}
         onClose={() => setAddTextOpen(false)}
         onSaved={() => { setAddTextOpen(false); loadEntries() }}
+        onError={(msg) => setErrorMsg(msg)}
       />
     </div>
   )
@@ -215,62 +265,85 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText])
 
+  // ストリーム完了後に、サーバーに保存された本物のメッセージ行（正しいID）を取り直す。
+  // クライアント側で id:'tmp' や Date.now() の仮メッセージを積むと、実DBのIDと食い違い
+  // 再読み込みで重複・消失が起きるため、確定後は必ずサーバーの状態に合わせる。
+  async function reloadMessages() {
+    const r = await fetch(`/api/tax/chat/sessions/${sessionId}/messages`)
+    if (!r.ok) throw new Error('reload failed')
+    const data = await r.json()
+    setMessages(data ?? [])
+  }
+
   async function send() {
     const content = input.trim()
     if (!content || streaming) return
     const isFirstMessage = messages.length === 0
     setInput('')
     setErrorMsg(null)
-    setMessages((prev) => [...prev, { id: 'tmp', session_id: sessionId, role: 'user', content, created_at: new Date().toISOString() }])
+    // 送信中だけの楽観表示（一時ID）。ストリーム確定後に reloadMessages で本物に差し替える。
+    setMessages((prev) => [...prev, { id: 'tmp-user', session_id: sessionId, role: 'user', content, created_at: new Date().toISOString() }])
     setStreaming(true)
     setStreamingText('')
 
-    const res = await fetch(`/api/tax/chat/sessions/${sessionId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    })
-
-    if (!res.body) {
-      setStreaming(false)
-      setErrorMsg('AI応答の取得に失敗しました。もう一度お試しください。')
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
     let full = ''
     let streamError: string | null = null
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const chunk = decoder.decode(value, { stream: true })
-      for (const line of chunk.split('\n')) {
-        if (!line.startsWith('data: ')) continue
-        const payload = line.slice(6)
-        if (payload === '[DONE]') break
-        try {
-          const { text, error } = JSON.parse(payload)
-          if (error) {
-            streamError = error
-          } else if (text) {
-            full += text
-            setStreamingText(full)
+    try {
+      const res = await fetch(`/api/tax/chat/sessions/${sessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      })
+
+      if (!res.ok || !res.body) {
+        streamError = await readError(res, 'AI応答の取得に失敗しました。もう一度お試しください。')
+      } else {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const chunk = decoder.decode(value, { stream: true })
+          for (const line of chunk.split('\n')) {
+            if (!line.startsWith('data: ')) continue
+            const payload = line.slice(6)
+            if (payload === '[DONE]') break
+            try {
+              const { text, error } = JSON.parse(payload)
+              if (error) {
+                streamError = error
+              } else if (text) {
+                full += text
+                setStreamingText(full)
+              }
+            } catch {
+              // ignore parse errors
+            }
           }
-        } catch {
-          // ignore parse errors
         }
+      }
+    } catch {
+      streamError = '通信に失敗しました。接続を確認して再度お試しください。'
+    } finally {
+      setStreaming(false)
+      setStreamingText('')
+    }
+
+    // 送受信の結果はサーバー側に保存済み（ユーザー発話・部分応答とも）。
+    // 確定した状態を取り直して仮メッセージを本物に置き換える。取り直しに失敗しても
+    // 生成できた分は残す（フォールバック）。
+    try {
+      await reloadMessages()
+    } catch {
+      if (full) {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== 'tmp-user'),
+          { id: 'tmp-user', session_id: sessionId, role: 'user', content, created_at: new Date().toISOString() },
+          { id: 'tmp-assistant', session_id: sessionId, role: 'assistant', content: full, created_at: new Date().toISOString() },
+        ])
       }
     }
 
-    setStreaming(false)
-    setStreamingText('')
-    if (full) {
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now().toString(), session_id: sessionId, role: 'assistant', content: full, created_at: new Date().toISOString() },
-      ])
-    }
     if (streamError) {
       setErrorMsg('AI応答の生成中にエラーが発生しました。もう一度お試しください。')
     }
@@ -328,7 +401,7 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
 // ─────────────────────────────────────────────
 // Add Text Dialog
 // ─────────────────────────────────────────────
-function AddTextDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+function AddTextDialog({ open, onClose, onSaved, onError }: { open: boolean; onClose: () => void; onSaved: () => void; onError: (msg: string) => void }) {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [saving, setSaving] = useState(false)
@@ -338,13 +411,22 @@ function AddTextDialog({ open, onClose, onSaved }: { open: boolean; onClose: () 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    await fetch('/api/tax/advice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body }),
-    })
-    setSaving(false)
-    onSaved()
+    try {
+      const res = await fetch('/api/tax/advice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, body }),
+      })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readError(res, 'アドバイスの保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
   }
 
   return (

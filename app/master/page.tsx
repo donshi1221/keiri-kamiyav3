@@ -74,15 +74,19 @@ export default function MasterPage() {
   useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
 
   const load = useCallback(async () => {
-    const [c, cl, a] = await Promise.all([
-      fetch('/api/master/contractors').then((r) => r.json()),
-      fetch('/api/master/clients').then((r) => r.json()),
-      fetch('/api/master/assignments').then((r) => r.json()),
-    ])
-    setContractors(c ?? [])
-    setClients(cl ?? [])
-    setAssignments(a ?? [])
-  }, [])
+    try {
+      const [c, cl, a] = await Promise.all([
+        fetch('/api/master/contractors').then((r) => r.json()),
+        fetch('/api/master/clients').then((r) => r.json()),
+        fetch('/api/master/assignments').then((r) => r.json()),
+      ])
+      setContractors(c ?? [])
+      setClients(cl ?? [])
+      setAssignments(a ?? [])
+    } catch {
+      showError('データの読み込みに失敗しました。接続を確認して再読み込みしてください。')
+    }
+  }, [showError])
 
   useEffect(() => { load() }, [load])
 
@@ -133,43 +137,55 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
     if (!deleteTarget) return
     const id = deleteTarget.id
     setDeleteTarget(null)
-    const res = await fetch(`/api/master/contractors/${id}`, { method: 'DELETE' })
-    if (!res.ok) {
-      onError(await readErrorMessage(res, '委託者の削除に失敗しました。'))
-      return
+    try {
+      const res = await fetch(`/api/master/contractors/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '委託者の削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onRefresh()
   }
 
   async function deactivateAssignment(id: string) {
-    const res = await fetch(`/api/master/assignments/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: false }),
-    })
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
-      return
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: false }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onRefresh()
   }
 
   async function deleteAssignment(id: string, label: string) {
-    const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
-    if (res.status === 409) {
-      const data = await res.json().catch(() => null)
-      if (data?.hint === 'inactive') {
-        setDeactivateTarget({ id, label })
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
+      if (res.status === 409) {
+        const data = await res.json().catch(() => null)
+        if (data?.hint === 'inactive') {
+          setDeactivateTarget({ id, label })
+          return
+        }
+        onError(data?.error ?? '削除できませんでした。')
         return
       }
-      onError(data?.error ?? '削除できませんでした。')
-      return
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
-      return
-    }
-    onRefresh()
   }
 
   return (
@@ -315,43 +331,55 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
     if (!deleteTarget) return
     const id = deleteTarget.id
     setDeleteTarget(null)
-    const res = await fetch(`/api/master/clients/${id}`, { method: 'DELETE' })
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'クライアントの削除に失敗しました。'))
-      return
+    try {
+      const res = await fetch(`/api/master/clients/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'クライアントの削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onRefresh()
   }
 
   async function deactivateAssignment(id: string) {
-    const res = await fetch(`/api/master/assignments/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: false }),
-    })
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
-      return
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: false }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの非アクティブ化に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onRefresh()
   }
 
   async function deleteAssignment(id: string, label: string) {
-    const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
-    if (res.status === 409) {
-      const data = await res.json().catch(() => null)
-      if (data?.hint === 'inactive') {
-        setDeactivateTarget({ id, label })
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, { method: 'DELETE' })
+      if (res.status === 409) {
+        const data = await res.json().catch(() => null)
+        if (data?.hint === 'inactive') {
+          setDeactivateTarget({ id, label })
+          return
+        }
+        onError(data?.error ?? '削除できませんでした。')
         return
       }
-      onError(data?.error ?? '削除できませんでした。')
-      return
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
-      return
-    }
-    onRefresh()
   }
 
   return (
@@ -501,23 +529,29 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    const res = initial
-      ? await fetch(`/api/master/contractors/${initial.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
-        })
-      : await fetch('/api/master/contractors', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
-        })
-    setSaving(false)
-    if (!res.ok) {
-      onError(await readErrorMessage(res, '委託者の保存に失敗しました。'))
-      return
+    try {
+      const res = initial
+        ? await fetch(`/api/master/contractors/${initial.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+          })
+        : await fetch('/api/master/contractors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+          })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '委託者の保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      // 通信断でも fetch は例外になる。setSaving を戻さないと「保存中…」で固着する。
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onSaved()
   }
 
   return (
@@ -581,23 +615,28 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
       contract_start: contractStart || null,
       contract_months: contractMonths ? Number(contractMonths) : null,
     }
-    const res = initial
-      ? await fetch(`/api/master/clients/${initial.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-      : await fetch('/api/master/clients', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-    setSaving(false)
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
-      return
+    try {
+      const res = initial
+        ? await fetch(`/api/master/clients/${initial.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+        : await fetch('/api/master/clients', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onSaved()
   }
 
   return (
@@ -684,17 +723,22 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
-    const res = await fetch('/api/master/assignments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    setSaving(false)
-    if (!res.ok) {
-      onError(await readErrorMessage(res, 'アサインの保存に失敗しました。'))
-      return
+    try {
+      const res = await fetch('/api/master/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
     }
-    onSaved()
   }
 
   const daikoContractors = contractors.filter((c) => c.contractor_type === 'daiko')

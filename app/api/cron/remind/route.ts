@@ -29,7 +29,13 @@ export async function GET(req: NextRequest) {
 
     // セーフティネット: 月次生成cron（毎月1日）が失敗するとその月のタスクが丸ごと消える。
     // 生成処理は冪等（onConflictDoNothing）なので、毎朝ここで当月分を生成し直しても既存は壊れない。
-    await generateMonthlyRecords(year, month)
+    // ただし生成が失敗しても、それ自体は「追加の保険」なので、リマインドメール送信まで
+    // 巻き添えで止めない（既存レコードのリマインドは送れるべき）。失敗はログのみ。
+    try {
+      await generateMonthlyRecords(year, month)
+    } catch (genErr) {
+      console.error('[remind] generateMonthlyRecords safety-net failed:', genErr)
+    }
 
     const remindDay10 = isInReminderWindow(day, 10)
     const remindDay15 = isInReminderWindow(day, 15)
