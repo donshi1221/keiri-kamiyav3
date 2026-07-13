@@ -1,3 +1,4 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { monthlyCustomGlobalTasks } from '@/lib/schema'
@@ -8,7 +9,7 @@ export async function GET() {
     const data = await db.select().from(monthlyCustomGlobalTasks).orderBy(asc(monthlyCustomGlobalTasks.created_at))
     return Response.json(data)
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }
 
@@ -28,6 +29,6 @@ export async function POST(req: NextRequest) {
     }).returning()
     return Response.json(data, { status: 201 })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

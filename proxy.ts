@@ -21,7 +21,9 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
+  // login は「セグメント丸ごと」だけ除外する（login(?:$|/) で /login と /login/... のみ）。
+  // 単に login と書くと /loginXXX のような前方一致まで認証対象外になってしまうため。
   matcher: [
-    '/((?!login|api/auth/login|api/cron|_next/static|_next/image|favicon.ico).*)',
+    '/((?!login(?:$|/)|api/auth/login|api/cron|_next/static|_next/image|favicon.ico).*)',
   ],
 }

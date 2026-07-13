@@ -1,3 +1,4 @@
+import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
 import { moneyforwardTokens } from '@/lib/schema'
 import { getValidAccessToken } from '@/lib/moneyforward'
@@ -16,6 +17,6 @@ export async function GET() {
     const accessToken = await getValidAccessToken()
     return Response.json({ connected: !!accessToken, updatedAt: data.updated_at })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

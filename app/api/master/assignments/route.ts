@@ -1,9 +1,11 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { assignments } from '@/lib/schema'
 import { asc } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
+import { parseBody, assignmentCreateSchema } from '@/lib/validation'
 
 export async function GET() {
   try {
@@ -16,13 +18,15 @@ export async function GET() {
     })
     return Response.json(data)
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
+    const parsed = parseBody(assignmentCreateSchema, await req.json())
+    if (!parsed.ok) return Response.json({ error: parsed.message }, { status: 400 })
+    const body = parsed.data
     const [inserted] = await db.insert(assignments).values({
       contractor_id: body.contractor_id,
       client_id: body.client_id,
@@ -45,6 +49,6 @@ export async function POST(req: NextRequest) {
 
     return Response.json(data, { status: 201 })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

@@ -1,3 +1,4 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks } from '@/lib/schema'
@@ -5,6 +6,10 @@ import { and, eq } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
+
+// 関数のタイムアウト上限（秒）。委託者・クライアントを全件走査しメール送信まで行うため、
+// 既定の短いタイムアウトだと途中で切れうる。Vercel の仕様上リテラルで指定する必要がある。
+export const maxDuration = 60
 
 function overdueMark(day: number, dueDay: number): string {
   return day > dueDay ? '（期限超過）' : ''
@@ -159,9 +164,12 @@ export async function GET(req: NextRequest) {
       text: body,
     })
 
-    if (mailErr) return Response.json({ error: mailErr.message }, { status: 500 })
+    if (mailErr) {
+      console.error('[remind] mail send failed:', mailErr)
+      return Response.json({ error: 'リマインドメールの送信に失敗しました。' }, { status: 500 })
+    }
     return Response.json({ ok: true, sent: true, totalCount })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

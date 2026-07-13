@@ -1,3 +1,4 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { monthlyClientRecords } from '@/lib/schema'
@@ -41,6 +42,6 @@ export async function PATCH(
 
     return Response.json(data)
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

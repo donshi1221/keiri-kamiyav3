@@ -129,6 +129,7 @@ export default function DashboardClient({
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
+  const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [mfExpense, setMfExpense] = useState(initialMfExpense)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -253,6 +254,15 @@ export default function DashboardClient({
       // このタスクのこの項目だけを元に戻す。
       setLocalGlobal((prev) => prev ? { ...prev, [field]: prevValue } : prev)
       showError('保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  // グローバルタスクも金銭チェックと同様、「外す」操作だけ誤タップ防止の確認を挟む。
+  function requestToggleGlobal(field: 'expense_confirmed_at' | 'payment_report_confirmed_at' | 'withholding_confirmed_at', currentlyChecked: boolean) {
+    if (currentlyChecked) {
+      setPendingGlobalUncheck(field)
+    } else {
+      toggleGlobal(field)
     }
   }
 
@@ -439,7 +449,7 @@ export default function DashboardClient({
           {carryOver.map((g) => (
             <div
               key={`${g.year}-${g.month}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning-subtle bg-warning-subtle px-4 py-2.5 text-sm text-warning"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-4 py-2.5 text-sm text-warning"
             >
               <span>
                 ⚠ {g.year}年{g.month}月の未完了: {g.items.map((i) => `${i.label} ${i.count}件`).join('、')}
@@ -846,16 +856,39 @@ export default function DashboardClient({
           <div className="space-y-2">
             {visibleGlobalTasks.map((t) => {
               const done = !!localGlobal[t.field]
+              const isPendingUncheck = pendingGlobalUncheck === t.field
               return (
                 <div key={t.field} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
-                  <Checkbox checked={done} onCheckedChange={() => toggleGlobal(t.field)} />
+                  <Checkbox checked={done} onCheckedChange={() => requestToggleGlobal(t.field, done)} />
                   <span className={`flex-1 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.label}</span>
-                  <span className="text-xs text-gray-400">{t.dueLabel}</span>
-                  {t.state === 'overdue' && (
-                    <span className="text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
-                  )}
-                  {t.state === 'upcoming' && (
-                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間前</span>
+                  {isPendingUncheck ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="whitespace-nowrap text-xs text-gray-500">外しますか？</span>
+                      <button
+                        type="button"
+                        onClick={() => { setPendingGlobalUncheck(null); toggleGlobal(t.field) }}
+                        className="rounded px-1.5 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/10"
+                      >
+                        外す
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingGlobalUncheck(null)}
+                        className="rounded px-1.5 py-0.5 text-xs text-gray-400 hover:bg-gray-100"
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-xs text-gray-400">{t.dueLabel}</span>
+                      {t.state === 'overdue' && (
+                        <span className="text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
+                      )}
+                      {t.state === 'upcoming' && (
+                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間前</span>
+                      )}
+                    </>
                   )}
                 </div>
               )

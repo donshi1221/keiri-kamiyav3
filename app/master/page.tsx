@@ -132,6 +132,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Contractor | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
+  const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
 
   async function confirmDeleteContractor() {
     if (!deleteTarget) return
@@ -231,7 +232,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id, `${a.clients?.name ?? ''} — ${a.role_name}`)} className="text-xs text-danger hover:underline">削除</button>
+                          <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
                         )}
                       </div>
                     ))}
@@ -307,6 +308,29 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={!!deleteAssignTarget} onOpenChange={(open) => { if (!open) setDeleteAssignTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>アサインを削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteAssignTarget?.label}」のアサインを削除します。月次記録が存在する場合は削除できず、非アクティブ化を案内します。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteAssignTarget) deleteAssignment(deleteAssignTarget.id, deleteAssignTarget.label)
+                setDeleteAssignTarget(null)
+              }}
+            >
+              削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -326,6 +350,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
+  const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
 
   async function confirmDeleteClient() {
     if (!deleteTarget) return
@@ -424,7 +449,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
                         {a.active && (
-                          <button onClick={() => deleteAssignment(a.id, `${a.contractors?.name ?? ''} — ${a.role_name}`)} className="text-xs text-danger hover:underline">削除</button>
+                          <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
                         )}
                       </div>
                     ))}
@@ -495,6 +520,29 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
               }}
             >
               非アクティブにする
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteAssignTarget} onOpenChange={(open) => { if (!open) setDeleteAssignTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>アサインを削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteAssignTarget?.label}」のアサインを削除します。月次記録が存在する場合は削除できず、非アクティブ化を案内します。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteAssignTarget) deleteAssignment(deleteAssignTarget.id, deleteAssignTarget.label)
+                setDeleteAssignTarget(null)
+              }}
+            >
+              削除する
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

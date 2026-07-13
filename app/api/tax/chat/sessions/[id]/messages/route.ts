@@ -1,9 +1,14 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { taxAdviceEntries, taxChatMessages, taxChatSessions } from '@/lib/schema'
 import { eq, asc } from 'drizzle-orm'
 import { getGeminiClient } from '@/lib/gemini'
 import { GEMINI_MODEL } from '@/lib/config'
+
+// 関数のタイムアウト上限（秒）。GeminiのストリーミングはAIの応答時間ぶん待つため、
+// 既定の短いタイムアウトだと長い回答が途中で切れうる。Vercel の仕様上リテラルで指定する。
+export const maxDuration = 60
 
 const SESSION_TITLE_MAX_LENGTH = 30
 
@@ -18,7 +23,7 @@ export async function GET(
       .orderBy(asc(taxChatMessages.created_at))
     return Response.json(data)
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }
 

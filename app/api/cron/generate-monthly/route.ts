@@ -1,6 +1,11 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { nowJST } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
+
+// 関数のタイムアウト上限（秒）。全アサイン・クライアント分の月次レコードを生成するため、
+// 既定の短いタイムアウトだと途中で切れうる。Vercel の仕様上リテラルで指定する必要がある。
+export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
   // CRON_SECRET 未設定時は素通しさせず、必ず拒否する（フェイルクローズ）。
@@ -21,6 +26,6 @@ export async function GET(req: NextRequest) {
 
     return Response.json({ ok: true, year, month, assignmentCount, clientCount })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }

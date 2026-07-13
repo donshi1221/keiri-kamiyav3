@@ -41,9 +41,25 @@ DB は Neon (PostgreSQL) + Drizzle ORM。スキーマの唯一の正本（source
 
 > **本番 DB は開発中に `db:push` で作られた既存スキーマがすでに入っている。**
 > 初期マイグレーション `drizzle/0000_*.sql` はその「現状」を表すベースライン。
-> 既存の本番 DB に対しては、このベースラインを「適用済み」として扱い（初回は流さない）、
-> **今後追加される `0001` 以降のマイグレーションのみ `db:migrate` で適用する**こと。
-> 何もテーブルが無い新規環境では `db:migrate` が全テーブルを一から構築する。
+> 何もテーブルが無い新規環境では `db:migrate` が全テーブルを一から構築するので、そのまま実行してよい。
+
+### 既存の本番 DB を初めて `db:migrate` に載せるとき（ベースライン登録）
+
+既存の本番 DB には drizzle の管理テーブル `drizzle.__drizzle_migrations` が無い。
+この状態で `db:migrate` すると、`0000`（全テーブルの `CREATE TABLE`）から流そうとして
+「テーブルが既に存在する」で失敗する。`db:migrate` には「特定の番号だけスキップ」する機能が無いため、
+**`0000` を『適用済み』として1行登録するベースライン作業を、最初に一度だけ行う**必要がある。
+
+手順（本番に対して一度だけ）:
+
+```bash
+# .env.local の DATABASE_URL が本番を指していることを確認してから
+npm run db:baseline     # = node scripts/baseline-migrations.mjs
+```
+
+このスクリプトは SQL マイグレーションを一切実行せず、`__drizzle_migrations` に `0000` の
+ハッシュを1行入れるだけ（ハッシュは drizzle 自身の読み取りで算出するので改行コード差でズレない）。
+既にレコードがある場合は何もしない。登録後は、以降 `0001` 以降のみが `db:migrate` で適用される。
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 

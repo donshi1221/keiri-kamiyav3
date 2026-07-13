@@ -1,3 +1,4 @@
+import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { monthlyCustomGlobalTasks } from '@/lib/schema'
@@ -35,7 +36,7 @@ export async function PATCH(
 
     return Response.json(data)
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }
 
@@ -48,6 +49,6 @@ export async function DELETE(
     await db.delete(monthlyCustomGlobalTasks).where(eq(monthlyCustomGlobalTasks.id, id))
     return new Response(null, { status: 204 })
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Database error' }, { status: 500 })
+    return serverError(err)
   }
 }
