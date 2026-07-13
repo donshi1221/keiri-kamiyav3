@@ -1,6 +1,7 @@
 import { db } from './db'
 import { moneyforwardTokens } from './schema'
 import { eq } from 'drizzle-orm'
+import { encryptSecret, decryptSecret } from './crypto'
 
 const MF_AUTH_URL = 'https://id.moneyforward.com/oauth/authorize'
 const MF_TOKEN_URL = 'https://id.moneyforward.com/oauth/token'
@@ -54,18 +55,22 @@ async function refreshAccessToken(refreshToken: string) {
 
 export async function saveTokens(accessToken: string, refreshToken: string, expiresIn: number) {
   const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+  // トークンは平文でDBに残さず、必ず暗号化して保存する。
+  // ENCRYPTION_KEY 未設定なら encryptSecret が例外→保存自体を失敗させる（フェイルクローズ）。
+  const encAccess = encryptSecret(accessToken)
+  const encRefresh = encryptSecret(refreshToken)
   const [existing] = await db.select({ id: moneyforwardTokens.id }).from(moneyforwardTokens).limit(1)
   if (existing) {
     await db.update(moneyforwardTokens).set({
-      access_token: accessToken,
-      refresh_token: refreshToken,
+      access_token: encAccess,
+      refresh_token: encRefresh,
       expires_at: expiresAt,
       updated_at: new Date().toISOString(),
     }).where(eq(moneyforwardTokens.id, existing.id))
   } else {
     await db.insert(moneyforwardTokens).values({
-      access_token: accessToken,
-      refresh_token: refreshToken,
+      access_token: encAccess,
+      refresh_token: encRefresh,
       expires_at: expiresAt,
     })
   }
@@ -76,16 +81,27 @@ export async function getValidAccessToken(): Promise<string | null> {
   const [token] = await db.select().from(moneyforwardTokens).limit(1)
   if (!token) return null
 
+  // 暗号化済みのトークンを復号する。旧・平文データや ENCRYPTION_KEY 未設定/不一致では
+  // 復号に失敗する。その場合は「連携なし」とみなし、再連携を促す（袋小路にしない）。
+  let accessToken: string
+  let refreshToken: string
+  try {
+    accessToken = decryptSecret(token.access_token)
+    refreshToken = decryptSecret(token.refresh_token)
+  } catch {
+    return null
+  }
+
   const expiresAt = new Date(token.expires_at)
   const now = new Date()
   const fiveMinutes = 5 * 60 * 1000
 
   if (expiresAt.getTime() - now.getTime() > fiveMinutes) {
-    return token.access_token
+    return accessToken
   }
 
   try {
-    const refreshed = await refreshAccessToken(token.refresh_token)
+    const refreshed = await refreshAccessToken(refreshToken)
     await saveTokens(refreshed.access_token, refreshed.refresh_token, refreshed.expires_in)
     return refreshed.access_token
   } catch {

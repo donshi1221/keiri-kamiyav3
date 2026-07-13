@@ -133,6 +133,8 @@ export default function DashboardClient({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [mfExpense, setMfExpense] = useState(initialMfExpense)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [snapshotConfirm, setSnapshotConfirm] = useState(false)
+  const [snapshotBusy, setSnapshotBusy] = useState(false)
 
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -303,6 +305,27 @@ export default function DashboardClient({
       showError('MF経費の同期に失敗しました。通信状況をご確認ください。')
     } finally {
       setIsSyncing(false)
+    }
+  }
+
+  // 表示中の月のスナップショット欠損（生成漏れ等でnullの金額）を、現在のマスタ値で埋める。
+  // 既存の値は上書きしない安全な補完（fill-missing）のみをUIから提供する。
+  async function backfillSnapshots() {
+    setSnapshotConfirm(false)
+    setSnapshotBusy(true)
+    try {
+      const res = await fetch('/api/snapshots/backfill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, month, mode: 'fill-missing' }),
+      })
+      if (!res.ok) throw new Error('backfill failed')
+      // 補完結果を画面へ反映するため再取得する。
+      startTransition(() => router.refresh())
+    } catch {
+      showError('スナップショットの補完に失敗しました。もう一度お試しください。')
+    } finally {
+      setSnapshotBusy(false)
     }
   }
 
@@ -1022,6 +1045,41 @@ export default function DashboardClient({
               </button>
             )}
           </div>
+        </div>
+
+        {/* スナップショット補完（欠損のみ）: 生成漏れ等でnullの金額を現マスタ値で埋める安全操作 */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+          <p className="text-xs text-gray-400">
+            金額スナップショットの欠損を、現在のマスタ値で補完します（既存の値は変更しません）。
+          </p>
+          {snapshotConfirm ? (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-500">補完しますか？</span>
+              <button
+                type="button"
+                onClick={backfillSnapshots}
+                disabled={snapshotBusy}
+                className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+              >
+                {snapshotBusy ? '実行中…' : '実行する'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSnapshotConfirm(false)}
+                className="rounded px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-100"
+              >
+                戻る
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSnapshotConfirm(true)}
+              className="shrink-0 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+            >
+              スナップショット補完
+            </button>
+          )}
         </div>
       </section>
     </div>

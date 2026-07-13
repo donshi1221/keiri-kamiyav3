@@ -58,6 +58,13 @@ export const assignmentCreateSchema = z.object({
   active: z.boolean().optional(),
 })
 
+export const snapshotBackfillSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+  // fill-missing: 欠損(null)のみ補完 / overwrite: 現マスタ値で全上書き
+  mode: z.enum(['fill-missing', 'overwrite']).default('fill-missing'),
+})
+
 type ParseResult<T> = { ok: true; data: T } | { ok: false; message: string }
 
 // スキーマで body を検証し、失敗時は最初のエラーメッセージ（利用者向け）を返す。

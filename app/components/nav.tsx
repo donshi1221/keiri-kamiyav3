@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, History, Users, BookText, LogOut } from 'lucide-react'
+import { LayoutDashboard, History, Users, BookText, LogOut, Download } from 'lucide-react'
 
 const links = [
   { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
@@ -49,10 +49,18 @@ export default function Nav() {
               )
             })}
           </div>
+          <a
+            href="/api/backup/export"
+            download
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
+          >
+            <Download size={16} />
+            バックアップ
+          </a>
           <button
             type="button"
             onClick={handleLogout}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
           >
             <LogOut size={16} />
             ログアウト
@@ -64,11 +72,19 @@ export default function Nav() {
       <header className="border-b bg-white sticky top-0 z-10 md:hidden">
         <div className="px-4 flex items-center h-12">
           <span className="font-bold text-sm text-gray-800">keiri-v3</span>
+          <a
+            href="/api/backup/export"
+            download
+            aria-label="バックアップをダウンロード"
+            className="ml-auto flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+          >
+            <Download size={18} />
+          </a>
           <button
             type="button"
             onClick={handleLogout}
             aria-label="ログアウト"
-            className="ml-auto flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+            className="flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
           >
             <LogOut size={18} />
           </button>

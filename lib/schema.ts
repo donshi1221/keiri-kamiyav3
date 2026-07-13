@@ -122,6 +122,13 @@ export const moneyforwardExpenses = pgTable('moneyforward_expenses', {
   synced_at: timestamp('synced_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month)])
 
+// cron（自動処理）の死活監視用。cronが成功するたびに last_success_at を更新し、
+// 一定期間更新が無ければ「止まっている」とみなしてアラートを出す。
+export const cronRuns = pgTable('cron_runs', {
+  name: text('name').primaryKey(),
+  last_success_at: timestamp('last_success_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const contractorsRelations = relations(contractors, ({ many }) => ({
@@ -182,3 +189,4 @@ export type CustomGlobalTask = typeof monthlyCustomGlobalTasks.$inferSelect
 export type TaxAdviceEntry = typeof taxAdviceEntries.$inferSelect
 export type TaxChatSession = typeof taxChatSessions.$inferSelect
 export type TaxChatMessage = typeof taxChatMessages.$inferSelect
+export type CronRun = typeof cronRuns.$inferSelect
