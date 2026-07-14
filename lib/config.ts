@@ -17,3 +17,9 @@ export const UPLOAD_MAX_BYTES = intFromEnv('UPLOAD_MAX_BYTES', 5 * 1024 * 1024)
 
 // 月次生成cronが何日成功していなければ「止まっている疑い」とみなすか。既定35日（1か月分の未実行を検知）。
 export const CRON_STALE_ALERT_DAYS = intFromEnv('CRON_STALE_ALERT_DAYS', 35)
+
+// 「その他経費」に含めるMF勘定科目（コードまたは名前）。外注費は含めない。
+export const MF_EXPENSE_ACCOUNTS = (process.env.MF_EXPENSE_ACCOUNTS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)

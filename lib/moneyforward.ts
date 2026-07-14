@@ -2,17 +2,23 @@ import { db } from './db'
 import { moneyforwardTokens } from './schema'
 import { eq } from 'drizzle-orm'
 import { encryptSecret, decryptSecret } from './crypto'
+import { MF_EXPENSE_ACCOUNTS } from './config'
 
-const MF_AUTH_URL = 'https://id.moneyforward.com/oauth/authorize'
-const MF_TOKEN_URL = 'https://id.moneyforward.com/oauth/token'
-const MF_API_BASE = 'https://accounting.api.moneyforward.com/api/v1'
+const MF_AUTH_URL = 'https://api.biz.moneyforward.com/authorize'
+const MF_TOKEN_URL = 'https://api.biz.moneyforward.com/token'
+const MF_API_BASE = 'https://api-accounting.moneyforward.com/api/v3'
+const MF_TRIAL_BALANCE_PATH = '/reports/trial_balance_pl'
+const MF_SCOPES = [
+  'mfc/accounting/accounts.read',
+  'mfc/accounting/report.read',
+].join(' ')
 
 export function getMFAuthUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: process.env.MF_CLIENT_ID!,
     redirect_uri: process.env.MF_REDIRECT_URI!,
     response_type: 'code',
-    scope: 'mf_accounting',
+    scope: MF_SCOPES,
     state,
   })
   return `${MF_AUTH_URL}?${params}`
@@ -109,41 +115,95 @@ export async function getValidAccessToken(): Promise<string | null> {
   }
 }
 
-// 指定月の経費合計をMFから取得
+type TrialBalanceRow = {
+  type?: string
+  name?: string
+  code?: string | number
+  account_code?: string | number
+  values?: unknown[]
+  rows?: TrialBalanceRow[]
+  debit_amount?: number | string
+  credit_amount?: number | string
+}
+
+type TrialBalanceResponse = {
+  start_date?: string
+  end_date?: string
+  columns?: string[]
+  rows?: TrialBalanceRow[]
+  data?: { columns?: string[]; rows?: TrialBalanceRow[] }
+}
+
+function numberValue(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return 0
+  const parsed = Number(value.replaceAll(',', ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function flattenAccountRows(rows: TrialBalanceRow[]): TrialBalanceRow[] {
+  return rows.flatMap((row) => [
+    ...(row.type === 'account' ? [row] : []),
+    ...flattenAccountRows(row.rows ?? []),
+  ])
+}
+
+function getTrialBalanceRows(data: TrialBalanceResponse): { columns: string[]; rows: TrialBalanceRow[] } {
+  const source = data.data ?? data
+  if (!Array.isArray(source.columns) || !Array.isArray(source.rows)) {
+    throw new Error('MF API returned an unexpected trial balance response')
+  }
+  return { columns: source.columns, rows: flattenAccountRows(source.rows) }
+}
+
+function getAccountKeys(row: TrialBalanceRow): string[] {
+  return [row.code, row.account_code, row.name]
+    .filter((key): key is string | number => key !== undefined && key !== null)
+    .map((key) => String(key).trim())
+    .filter(Boolean)
+}
+
+function getCurrentPeriodExpense(row: TrialBalanceRow, columns: string[]): number {
+  if (row.debit_amount !== undefined || row.credit_amount !== undefined) {
+    return numberValue(row.debit_amount) - numberValue(row.credit_amount)
+  }
+  if (!Array.isArray(row.values)) return 0
+  const debitIndex = columns.indexOf('debit_amount')
+  const creditIndex = columns.indexOf('credit_amount')
+  if (debitIndex < 0 || creditIndex < 0) {
+    throw new Error('MF API trial balance response has no debit/credit columns')
+  }
+  return numberValue(row.values[debitIndex]) - numberValue(row.values[creditIndex])
+}
+
+// 指定月の「その他経費」をMFの損益試算表から取得する。
 export async function fetchMFExpenses(year: number, month: number): Promise<number> {
   const accessToken = await getValidAccessToken()
   if (!accessToken) throw new Error('MF_NOT_CONNECTED')
+
+  // 科目未設定時は、意図しない科目の取り込みを防ぐため0円として扱う。
+  if (MF_EXPENSE_ACCOUNTS.length === 0) return 0
 
   const startDate = `${year}-${String(month).padStart(2, '0')}-01`
   const lastDay = new Date(year, month, 0).getDate()
   const endDate = `${year}-${String(month).padStart(2, '0')}-${lastDay}`
 
-  // MFクラウド会計 APIから支出取引（type=payment）を全件取得（無限ループ防止のためページ数に上限を設ける）
-  const MAX_PAGES = 50
-  let total = 0
-  let page = 1
-  while (page <= MAX_PAGES) {
-    const params = new URLSearchParams({
-      start_date: startDate,
-      end_date: endDate,
-      type: 'payment',
-      page: String(page),
-      limit: '100',
-    })
-    const res = await fetch(`${MF_API_BASE}/deals?${params}`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(MF_FETCH_TIMEOUT_MS),
-    })
-    if (!res.ok) throw new Error(`MF API error: ${res.status}`)
-    const data = await res.json() as { data: Array<{ amount: number }>; meta?: { total_count?: number } }
-    for (const deal of data.data ?? []) {
-      total += Math.abs(deal.amount)
-    }
-    if ((data.data?.length ?? 0) < 100) break
-    page++
-  }
-  return total
+  const params = new URLSearchParams({ start_date: startDate, end_date: endDate })
+  if (process.env.MF_OFFICE_ID) params.set('office_id', process.env.MF_OFFICE_ID)
+  const res = await fetch(`${MF_API_BASE}${MF_TRIAL_BALANCE_PATH}?${params}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(MF_FETCH_TIMEOUT_MS),
+  })
+  if (!res.ok) throw new Error(`MF API error: ${res.status}`)
+
+  const data = await res.json() as TrialBalanceResponse
+  const { columns, rows } = getTrialBalanceRows(data)
+  return rows.reduce((total, row) => {
+    const keys = getAccountKeys(row)
+    if (!keys.some((key) => MF_EXPENSE_ACCOUNTS.includes(key))) return total
+    return total + getCurrentPeriodExpense(row, columns)
+  }, 0)
 }
