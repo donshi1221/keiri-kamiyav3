@@ -14,8 +14,11 @@
 
 import { neon } from '@neondatabase/serverless'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
-import { loadEnvConfig } from '@next/env'
+// @next/env は CommonJS のため、.mjs からは default import で受けて分割代入する
+// （named import だと "loadEnvConfig not found" になる）。
+import nextEnv from '@next/env'
 
+const { loadEnvConfig } = nextEnv
 loadEnvConfig(process.cwd())
 
 const url = process.env.DATABASE_URL
