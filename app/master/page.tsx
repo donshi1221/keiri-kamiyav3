@@ -144,6 +144,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
   const [addOpen, setAddOpen] = useState(false)
   const [editContractor, setEditContractor] = useState<Contractor | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
+  const [editAssign, setEditAssign] = useState<AssignmentWithRelations | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Contractor | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
   const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
@@ -245,6 +246,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                           {a.clients?.name} — {a.role_name}
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
+                        <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
                         {a.active && (
                           <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
                         )}
@@ -283,6 +285,19 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
           fixedContractorId={addAssignOpen}
           fixedContractorType={contractors.find((c) => c.id === addAssignOpen)?.contractor_type ?? 'daiko'}
           initial={null}
+        />
+      )}
+      {editAssign && (
+        <AssignFormDialog
+          open={!!editAssign}
+          onClose={() => setEditAssign(null)}
+          onSaved={() => { setEditAssign(null); onRefresh() }}
+          onError={onError}
+          clients={clients}
+          contractors={[]}
+          fixedContractorId={editAssign.contractor_id}
+          fixedContractorType={contractors.find((c) => c.id === editAssign.contractor_id)?.contractor_type ?? 'daiko'}
+          initial={editAssign}
         />
       )}
 
@@ -362,6 +377,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
   const [addClientOpen, setAddClientOpen] = useState(false)
   const [editClient, setEditClient] = useState<ClientWithItems | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
+  const [editAssign, setEditAssign] = useState<AssignmentWithRelations | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
   const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
@@ -487,6 +503,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                           {a.contractors?.name} — {a.role_name}
                           {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                         </span>
+                        <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
                         {a.active && (
                           <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
                         )}
@@ -524,6 +541,18 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
           contractors={contractors}
           fixedClientId={addAssignOpen}
           initial={null}
+        />
+      )}
+      {editAssign && (
+        <AssignFormDialog
+          open={!!editAssign}
+          onClose={() => setEditAssign(null)}
+          onSaved={() => { setEditAssign(null); onRefresh() }}
+          onError={onError}
+          clients={[]}
+          contractors={contractors}
+          fixedClientId={editAssign.client_id}
+          initial={editAssign}
         />
       )}
 
@@ -899,19 +928,23 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
   const [roleName, setRoleName] = useState('')
   const [payoutAmount, setPayoutAmount] = useState('')
   const [spreadsheetUrl, setSpreadsheetUrl] = useState('')
+  const [selectedType, setSelectedType] = useState<'daiko' | 'video_editor'>('daiko')
   const [saving, setSaving] = useState(false)
 
+  // 委託者が固定されていない（＝クライアント側からのアサイン）ときは、委託者側と同じく
+  // 「種別」を先に選ぶ形にし、その種別で入力欄の自動表示と委託者ドロップダウンの絞り込みを行う。
+  const showTypeSelector = !fixedContractorId && !fixedContractorType
+
   const selectedContractorType = fixedContractorType
-    ?? contractors.find((c) => c.id === contractorId)?.contractor_type
-    ?? 'daiko'
+    ?? (showTypeSelector
+      ? selectedType
+      : (contractors.find((c) => c.id === contractorId)?.contractor_type ?? 'daiko'))
 
   const isVideoEditor = selectedContractorType === 'video_editor'
 
-  const dialogTitle = fixedContractorId
-    ? `アサインを追加（${isVideoEditor ? '動画編集者' : '代行者'}）`
-    : contractorId
-      ? `アサインを追加（${isVideoEditor ? '動画編集者' : '代行者'}）`
-      : 'アサインを追加'
+  const dialogTitle = initial
+    ? 'アサインを編集'
+    : `アサインを追加（${isVideoEditor ? '動画編集者' : '代行者'}）`
 
   useEffect(() => {
     if (open) {
@@ -920,25 +953,36 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       setRoleName(initial?.role_name ?? '')
       setPayoutAmount(initial?.contractor_payout_amount?.toString() ?? '')
       setSpreadsheetUrl(initial?.spreadsheet_url ?? '')
+      // 編集時は既存の委託者の種別に合わせる。新規は既定で代行者。
+      const initType = initial
+        ? contractors.find((c) => c.id === initial.contractor_id)?.contractor_type ?? 'daiko'
+        : 'daiko'
+      setSelectedType(initType)
     }
-  }, [open, initial, fixedContractorId, fixedClientId])
+  }, [open, initial, fixedContractorId, fixedClientId, contractors])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    const payload = {
-      contractor_id: contractorId,
-      client_id: clientId,
+    const payload: Record<string, unknown> = {
       role_name: isVideoEditor ? '動画編集' : roleName,
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
+    // 委託者・クライアントは新規作成時は必須。編集時は「変更したときだけ」送る。
+    // 未変更なのに送ると、月次記録があるアサインでサーバ側の変更禁止ガード（409）に掛かるため。
+    if (!initial || contractorId !== initial.contractor_id) payload.contractor_id = contractorId
+    if (!initial || clientId !== initial.client_id) payload.client_id = clientId
     try {
-      const res = await fetch('/api/master/assignments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      // 既存アサインの編集はPATCH、新規はPOST。
+      const res = await fetch(
+        initial ? `/api/master/assignments/${initial.id}` : '/api/master/assignments',
+        {
+          method: initial ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      )
       setSaving(false)
       if (!res.ok) {
         onError(await readErrorMessage(res, 'アサインの保存に失敗しました。'))
@@ -951,27 +995,34 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
     }
   }
 
-  const daikoContractors = contractors.filter((c) => c.contractor_type === 'daiko')
-  const videoEditorContractors = contractors.filter((c) => c.contractor_type === 'video_editor')
+  // 種別セレクタありのとき（クライアント側）は、選んだ種別の委託者だけをドロップダウンに出す。
+  const availableContractors = showTypeSelector
+    ? contractors.filter((c) => c.contractor_type === selectedType)
+    : contractors
 
   return (
     <Dialog open={open} onClose={onClose} title={dialogTitle}>
       <form onSubmit={submit} className="space-y-4">
+        {showTypeSelector && (
+          <div>
+            <label className="text-sm font-medium block mb-1">種別 <span className="text-destructive">*</span></label>
+            <select
+              value={selectedType}
+              onChange={(e) => { setSelectedType(e.target.value as 'daiko' | 'video_editor'); setContractorId('') }}
+              className="w-full border rounded px-3 py-2 text-sm"
+            >
+              <option value="daiko">代行者</option>
+              <option value="video_editor">動画編集者</option>
+            </select>
+          </div>
+        )}
+
         {!fixedContractorId && (
           <div>
             <label className="text-sm font-medium block mb-1">委託者 <span className="text-destructive">*</span></label>
             <select required value={contractorId} onChange={(e) => setContractorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               <option value="">選択してください</option>
-              {daikoContractors.length > 0 && (
-                <optgroup label="代行者">
-                  {daikoContractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </optgroup>
-              )}
-              {videoEditorContractors.length > 0 && (
-                <optgroup label="動画編集者">
-                  {videoEditorContractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </optgroup>
-              )}
+              {availableContractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
         )}
