@@ -1,7 +1,7 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { clients, assignments, monthlyClientRecords } from '@/lib/schema'
+import { clients, clientBillingItems, assignments, monthlyClientRecords } from '@/lib/schema'
 import { eq, sql } from 'drizzle-orm'
 import { parseBody, clientPatchSchema } from '@/lib/validation'
 
@@ -20,9 +20,6 @@ export async function PATCH(
     const patch: Partial<typeof clients.$inferInsert> = {}
     if (v.name !== undefined) patch.name = v.name
     if (v.contact_person !== undefined) patch.contact_person = v.contact_person ?? null
-    if (v.billing_amount !== undefined) patch.billing_amount = v.billing_amount
-    if (v.contract_start !== undefined) patch.contract_start = v.contract_start ?? null
-    if (v.contract_months !== undefined) patch.contract_months = v.contract_months
     if (v.notes !== undefined) patch.notes = v.notes ?? null
 
     if (Object.keys(patch).length === 0) {
@@ -70,6 +67,9 @@ export async function DELETE(
       )
     }
 
+    // 月次記録が無いことを確認済みなので、内訳（billing_items）は安全に削除できる。
+    // クライアント本体より先に、参照している内訳を消してから本体を消す。
+    await db.delete(clientBillingItems).where(eq(clientBillingItems.client_id, id))
     await db.delete(clients).where(eq(clients.id, id))
     return new Response(null, { status: 204 })
   } catch (err) {

@@ -43,9 +43,8 @@ export default async function DashboardPage({
       where: and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)),
       orderBy: [asc(monthlyClientRecords.created_at)],
       with: {
-        clients: {
-          columns: { id: true, name: true, billing_amount: true, contract_start: true, contract_months: true },
-        },
+        clients: { columns: { id: true, name: true } },
+        billing_items: { columns: { id: true, label: true, contract_months: true } },
       },
     }),
     db.query.monthlyGlobalTasks.findFirst({
@@ -56,12 +55,12 @@ export default async function DashboardPage({
       where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
     }),
     db.select({ updated_at: moneyforwardTokens.updated_at }).from(moneyforwardTokens).limit(1),
-    // クライアントごとの送付済み・入金確認済み件数をSQL側で集計（請求回数超過の判定に使用）
+    // 内訳ごとの送付済み・入金確認済み件数をSQL側で集計（請求回数超過の判定に使用）
     db.select({
-      client_id: monthlyClientRecords.client_id,
+      billing_item_id: monthlyClientRecords.billing_item_id,
       billed: sql<number>`count(*) filter (where ${monthlyClientRecords.invoice_sent_at} is not null)`,
       paid: sql<number>`count(*) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null)`,
-    }).from(monthlyClientRecords).groupBy(monthlyClientRecords.client_id),
+    }).from(monthlyClientRecords).groupBy(monthlyClientRecords.billing_item_id),
     db.select({
       year: monthlyRecords.year,
       month: monthlyRecords.month,
@@ -88,11 +87,12 @@ export default async function DashboardPage({
     (t) => t.months.length === 0 || t.months.includes(month)
   )
 
+  // キーは内訳(billing_item_id)。回数超過は内訳ごとに判定する。
   const billedCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
   for (const row of clientBillingCounts) {
-    billedCounts[row.client_id] = Number(row.billed)
-    paidCounts[row.client_id] = Number(row.paid)
+    billedCounts[row.billing_item_id] = Number(row.billed)
+    paidCounts[row.billing_item_id] = Number(row.paid)
   }
 
   // トークンの行が存在するだけでは「連携中」と言えない（リフレッシュトークン失効時も行は残る）。

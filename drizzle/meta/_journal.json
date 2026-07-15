@@ -15,6 +15,13 @@
       "when": 1783947422102,
       "tag": "0001_perpetual_deathbird",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784074959698,
+      "tag": "0002_melodic_riptide",
+      "breakpoints": true
     }
   ]
 }

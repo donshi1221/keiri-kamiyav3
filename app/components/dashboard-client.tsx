@@ -271,7 +271,7 @@ export default function DashboardClient({
   const yearMonth = year * 100 + month
 
   // 売上・外注費・利益の計算（マスタ改定後も過去月表示が変わらないよう、スナップショットを優先）
-  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? cr.clients?.billing_amount ?? 0), 0)
+  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
   const contractorCost = localRecords.reduce((sum, r) => {
     const asgn = r.assignments
     if (asgn?.contractors?.contractor_type === 'video_editor') {
@@ -421,6 +421,23 @@ export default function DashboardClient({
   const recordDueState = (r: RecordWithRelations, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at', dueDay: number): DueState =>
     isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
 
+  // クライアント請求記録を「クライアント単位」でグループ化する（1クライアントに複数の内訳がぶら下がる）。
+  // created_at 順で内訳が飛び飛びに並んでも、同じクライアントの内訳が隣り合うようにまとめ直す。
+  const clientGroups: { clientId: string; clientName: string; items: ClientRecordWithClient[] }[] = []
+  const groupIndexByClient = new Map<string, number>()
+  for (const cr of localClientRecords) {
+    let idx = groupIndexByClient.get(cr.client_id)
+    if (idx === undefined) {
+      idx = clientGroups.length
+      groupIndexByClient.set(cr.client_id, idx)
+      clientGroups.push({ clientId: cr.client_id, clientName: cr.clients?.name ?? '?', items: [] })
+    }
+    clientGroups[idx].items.push(cr)
+  }
+  // 内訳名。生成時点の控え(label_snapshot)を優先し、無ければ内訳マスタの現在名。
+  const itemLabel = (cr: ClientRecordWithClient): string =>
+    (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
+
   const overdueItems: { label: string }[] = []
   const inWindowItems: { label: string }[] = []
   if (isCurrentMonth) {
@@ -429,7 +446,11 @@ export default function DashboardClient({
       else if (t.state === 'inWindow') inWindowItems.push({ label: `${t.label}` })
     }
     for (const cr of localClientRecords) {
-      const name = cr.clients?.name ?? '?'
+      const baseName = cr.clients?.name ?? '?'
+      // 同じクライアントに内訳が複数ある場合は「クライアント / 内訳名」で区別する。
+      const isMulti = (clientGroups.find((g) => g.clientId === cr.client_id)?.items.length ?? 0) > 1
+      const label = itemLabel(cr)
+      const name = isMulti && label ? `${baseName} / ${label}` : baseName
       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
       if (sentState === 'overdue') overdueItems.push({ label: `${name} — 請求書送付` })
       else if (sentState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書送付` })
@@ -696,110 +717,125 @@ export default function DashboardClient({
                   </tr>
                 </thead>
                 <tbody>
-                  {localClientRecords.map((cr) => {
-                    const client = cr.clients
-                    const clientId = cr.client_id
-                    const billedCount = billedCounts[clientId] ?? 0
-                    const contractMonths = client?.contract_months
-                    const overBilled = contractMonths != null && billedCount >= contractMonths
-                    const sentState = clientDueState(cr, 'invoice_sent_at', 15)
-                    const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-                    const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
-                    return (
-                      <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
-                        <td className="py-3 px-4">
-                          <span className="font-medium">{client?.name ?? '?'}</span>
-                          {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
-                        </td>
-                        <td className="py-3 px-3 text-right text-gray-600">
-                          {(() => {
-                            const billing = cr.billing_amount_snapshot ?? client?.billing_amount
-                            return billing ? `¥${billing.toLocaleString()}` : '—'
-                          })()}
-                        </td>
-                        <td className="text-center py-3 px-3">
-                          <MoneyCheckControl
-                            checked={!!cr.invoice_sent_at}
-                            checkedAt={cr.invoice_sent_at}
-                            pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
-                            label={`${client?.name ?? '?'}の請求書送付`}
-                            onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
-                            onConfirm={confirmUncheck}
-                            onCancel={cancelUncheck}
-                            badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
-                          />
-                        </td>
-                        <td className="text-center py-3 px-3">
-                          <MoneyCheckControl
-                            checked={!!cr.payment_confirmed_at}
-                            checkedAt={cr.payment_confirmed_at}
-                            pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
-                            label={`${client?.name ?? '?'}の入金確認`}
-                            onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
-                            onConfirm={confirmUncheck}
-                            onCancel={cancelUncheck}
-                            badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
-                          />
-                        </td>
-                      </tr>
-                    )
+                  {clientGroups.flatMap((g) => {
+                    const multi = g.items.length > 1
+                    return g.items.map((cr, i) => {
+                      const label = itemLabel(cr)
+                      const billedCount = billedCounts[cr.billing_item_id] ?? 0
+                      const contractMonths = cr.billing_items?.contract_months
+                      const overBilled = contractMonths != null && billedCount >= contractMonths
+                      const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+                      const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+                      const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
+                      const labelPart = multi && label ? `（${label}）` : ''
+                      return (
+                        <tr key={cr.id} className={`border-b last:border-0 ${rowClass} ${multi && i > 0 ? 'border-t-0' : ''}`}>
+                          <td className="py-3 px-4">
+                            {/* 複数内訳のときは2行目以降クライアント名を薄くしてグループを示す */}
+                            <span className={multi && i > 0 ? 'font-medium text-gray-300' : 'font-medium'}>{g.clientName}</span>
+                            {multi && <span className="ml-2 text-xs text-gray-500">{label || '（内訳名なし）'}</span>}
+                            {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
+                          </td>
+                          <td className="py-3 px-3 text-right text-gray-600">
+                            {(() => {
+                              const billing = cr.billing_amount_snapshot
+                              return billing ? `¥${billing.toLocaleString()}` : '—'
+                            })()}
+                          </td>
+                          <td className="text-center py-3 px-3">
+                            <MoneyCheckControl
+                              checked={!!cr.invoice_sent_at}
+                              checkedAt={cr.invoice_sent_at}
+                              pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
+                              label={`${g.clientName}${labelPart}の請求書送付`}
+                              onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
+                              onConfirm={confirmUncheck}
+                              onCancel={cancelUncheck}
+                              badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
+                            />
+                          </td>
+                          <td className="text-center py-3 px-3">
+                            <MoneyCheckControl
+                              checked={!!cr.payment_confirmed_at}
+                              checkedAt={cr.payment_confirmed_at}
+                              pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
+                              label={`${g.clientName}${labelPart}の入金確認`}
+                              onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
+                              onConfirm={confirmUncheck}
+                              onCancel={cancelUncheck}
+                              badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
+                            />
+                          </td>
+                        </tr>
+                      )
+                    })
                   })}
                 </tbody>
               </table>
             </div>
 
-            {/* スマホ表示（md未満）: カード形式（1カード=1クライアント） */}
+            {/* スマホ表示（md未満）: カード形式（1カード=1クライアント。内訳が複数あれば内側に並べる） */}
             <div className="divide-y md:hidden">
-              {localClientRecords.map((cr) => {
-                const client = cr.clients
-                const clientId = cr.client_id
-                const billedCount = billedCounts[clientId] ?? 0
-                const contractMonths = client?.contract_months
-                const overBilled = contractMonths != null && billedCount >= contractMonths
-                const sentState = clientDueState(cr, 'invoice_sent_at', 15)
-                const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-                const cardClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
+              {clientGroups.map((g) => {
+                const multi = g.items.length > 1
                 return (
-                  <div key={cr.id} className={`px-4 py-3 ${cardClass}`}>
-                    <div className="mb-2 flex items-start justify-between gap-2">
-                      <div>
-                        <span className="font-medium">{client?.name ?? '?'}</span>
-                        {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
-                      </div>
-                      <span className="shrink-0 text-sm text-gray-600">
-                        {(() => {
-                          const billing = cr.billing_amount_snapshot ?? client?.billing_amount
-                          return billing ? `¥${billing.toLocaleString()}` : '—'
-                        })()}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2">
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-400">15日</span></span>
-                        <MoneyCheckControl
-                          checked={!!cr.invoice_sent_at}
-                          checkedAt={cr.invoice_sent_at}
-                          pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
-                          label={`${client?.name ?? '?'}の請求書送付`}
-                          onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
-                          onConfirm={confirmUncheck}
-                          onCancel={cancelUncheck}
-                          badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
-                        />
-                      </div>
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-400">25日</span></span>
-                        <MoneyCheckControl
-                          checked={!!cr.payment_confirmed_at}
-                          checkedAt={cr.payment_confirmed_at}
-                          pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
-                          label={`${client?.name ?? '?'}の入金確認`}
-                          onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
-                          onConfirm={confirmUncheck}
-                          onCancel={cancelUncheck}
-                          badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
-                        />
-                      </div>
+                  <div key={g.clientId} className="px-4 py-3">
+                    <div className="mb-2 font-medium">{g.clientName}</div>
+                    <div className="space-y-2">
+                      {g.items.map((cr) => {
+                        const label = itemLabel(cr)
+                        const labelPart = multi && label ? `（${label}）` : ''
+                        const billedCount = billedCounts[cr.billing_item_id] ?? 0
+                        const contractMonths = cr.billing_items?.contract_months
+                        const overBilled = contractMonths != null && billedCount >= contractMonths
+                        const sentState = clientDueState(cr, 'invoice_sent_at', 15)
+                        const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
+                        const cardClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
+                        const billing = cr.billing_amount_snapshot
+                        return (
+                          <div key={cr.id} className={`rounded-lg ${cardClass}`}>
+                            <div className="mb-1 flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                {multi && (
+                                  <span className="text-sm text-gray-600">{label || '（内訳名なし）'}</span>
+                                )}
+                                {overBilled && <Badge variant="destructive" className="ml-1 text-xs">請求回数超過</Badge>}
+                              </div>
+                              <span className="shrink-0 text-sm text-gray-600">
+                                {billing ? `¥${billing.toLocaleString()}` : '—'}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2">
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-400">15日</span></span>
+                                <MoneyCheckControl
+                                  checked={!!cr.invoice_sent_at}
+                                  checkedAt={cr.invoice_sent_at}
+                                  pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'invoice_sent_at'}
+                                  label={`${g.clientName}${labelPart}の請求書送付`}
+                                  onRequest={() => requestToggleClientRecord(cr.id, 'invoice_sent_at', !!cr.invoice_sent_at)}
+                                  onConfirm={confirmUncheck}
+                                  onCancel={cancelUncheck}
+                                  badge={isCurrentMonth && !cr.invoice_sent_at && <DueBadge state={sentState} />}
+                                />
+                              </div>
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-400">25日</span></span>
+                                <MoneyCheckControl
+                                  checked={!!cr.payment_confirmed_at}
+                                  checkedAt={cr.payment_confirmed_at}
+                                  pending={pendingUncheck?.kind === 'client' && pendingUncheck.id === cr.id && pendingUncheck.field === 'payment_confirmed_at'}
+                                  label={`${g.clientName}${labelPart}の入金確認`}
+                                  onRequest={() => requestToggleClientRecord(cr.id, 'payment_confirmed_at', !!cr.payment_confirmed_at)}
+                                  onConfirm={confirmUncheck}
+                                  onCancel={cancelUncheck}
+                                  badge={isCurrentMonth && !cr.payment_confirmed_at && <DueBadge state={confirmedState} />}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )
@@ -978,7 +1014,7 @@ export default function DashboardClient({
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">売上</p>
             <p className="text-xl font-medium text-gray-900">¥{revenue.toLocaleString()}</p>
-            <p className="text-xs text-gray-400 mt-0.5">クライアント {localClientRecords.length}件</p>
+            <p className="text-xs text-gray-400 mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">外注費</p>

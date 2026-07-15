@@ -31,15 +31,25 @@ const optionalUrl = z.preprocess(
   z.url({ message: 'URLの形式が正しくありません' }).nullable()
 )
 
+// クライアント本体（内訳は含まない）。金額・契約期間は請求内訳（client_billing_items）側で管理する。
 export const clientCreateSchema = z.object({
   name: z.string().trim().min(1, { message: 'クライアント名は必須です' }),
   contact_person: z.string().nullish(),
-  billing_amount: moneyInt.optional(),
-  contract_start: z.string().nullish(),
-  contract_months: monthsField.optional(),
   notes: z.string().nullish(),
 })
 export const clientPatchSchema = clientCreateSchema.partial()
+
+// 請求内訳（明細）。金額と契約期間を内訳ごとに個別に持つ。
+export const billingItemCreateSchema = z.object({
+  client_id: z.uuid({ message: 'クライアントの選択が不正です' }),
+  label: z.string().trim().nullish(),
+  billing_amount: moneyInt.optional(),
+  contract_start: z.string().nullish(),
+  contract_months: monthsField.optional(),
+  active: z.boolean().optional(),
+  sort_order: z.coerce.number().int().min(0).optional(),
+})
+export const billingItemPatchSchema = billingItemCreateSchema.partial().omit({ client_id: true })
 
 export const contractorCreateSchema = z.object({
   name: z.string().trim().min(1, { message: '委託者名は必須です' }),

@@ -32,7 +32,7 @@ export default async function HistoryPage({
       where: and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)),
       orderBy: [asc(monthlyClientRecords.created_at)],
       with: {
-        clients: { columns: { id: true, name: true, billing_amount: true } },
+        clients: { columns: { id: true, name: true } },
       },
     }),
     db.query.monthlyGlobalTasks.findFirst({

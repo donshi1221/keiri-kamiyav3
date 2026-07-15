@@ -22,10 +22,27 @@ export const clients = pgTable('clients', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   contact_person: text('contact_person'),
+  // billing_amount / contract_start / contract_months は請求内訳（client_billing_items）へ移行済み。
+  // 列は移行の履歴と後方互換のため残すが、金額・契約期間の正本は client_billing_items 側。
   billing_amount: integer('billing_amount').notNull().default(0),
   contract_start: date('contract_start', { mode: 'string' }),
   contract_months: integer('contract_months'),
   notes: text('notes'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// 請求内訳（明細）。1クライアントに複数ぶら下がり、内訳ごとに金額と契約期間を個別に持つ。
+// 例: 同じクライアントの「YouTube運用費（4月開始6ヶ月）」「Instagram運用費（6月開始12ヶ月）」を
+// それぞれ別行として管理し、契約開始・期間がズレても各内訳が独立して有効/終了する。
+export const clientBillingItems = pgTable('client_billing_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  client_id: uuid('client_id').notNull().references(() => clients.id),
+  label: text('label').notNull().default(''),
+  billing_amount: integer('billing_amount').notNull().default(0),
+  contract_start: date('contract_start', { mode: 'string' }),
+  contract_months: integer('contract_months'),
+  active: boolean('active').notNull().default(true),
+  sort_order: integer('sort_order').notNull().default(0),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
@@ -57,12 +74,17 @@ export const monthlyClientRecords = pgTable('monthly_client_records', {
   id: uuid('id').primaryKey().defaultRandom(),
   year: integer('year').notNull(),
   month: integer('month').notNull(),
+  // client_id は請求内訳の親クライアント。グループ表示・集計のため非正規化して保持する。
   client_id: uuid('client_id').notNull().references(() => clients.id),
+  // billing_item_id が「どの内訳の月次記録か」を表す正本。二重生成防止の一意制約もこの列で行う。
+  billing_item_id: uuid('billing_item_id').notNull().references(() => clientBillingItems.id),
   billing_amount_snapshot: integer('billing_amount_snapshot'),
+  // 内訳名の控え。後で内訳名を変更・削除しても過去月の表示が変わらないよう、生成時点の名称を保存する。
+  label_snapshot: text('label_snapshot'),
   invoice_sent_at: timestamp('invoice_sent_at', { withTimezone: true, mode: 'string' }),
   payment_confirmed_at: timestamp('payment_confirmed_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (t) => [unique().on(t.year, t.month, t.client_id)])
+}, (t) => [unique().on(t.year, t.month, t.billing_item_id)])
 
 export const monthlyGlobalTasks = pgTable('monthly_global_tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -138,6 +160,15 @@ export const contractorsRelations = relations(contractors, ({ many }) => ({
 export const clientsRelations = relations(clients, ({ many }) => ({
   assignments: many(assignments),
   monthly_client_records: many(monthlyClientRecords),
+  billing_items: many(clientBillingItems),
+}))
+
+export const clientBillingItemsRelations = relations(clientBillingItems, ({ one, many }) => ({
+  clients: one(clients, {
+    fields: [clientBillingItems.client_id],
+    references: [clients.id],
+  }),
+  monthly_client_records: many(monthlyClientRecords),
 }))
 
 export const assignmentsRelations = relations(assignments, ({ one, many }) => ({
@@ -164,6 +195,10 @@ export const monthlyClientRecordsRelations = relations(monthlyClientRecords, ({ 
     fields: [monthlyClientRecords.client_id],
     references: [clients.id],
   }),
+  billing_items: one(clientBillingItems, {
+    fields: [monthlyClientRecords.billing_item_id],
+    references: [clientBillingItems.id],
+  }),
 }))
 
 export const taxChatSessionsRelations = relations(taxChatSessions, ({ many }) => ({
@@ -181,6 +216,7 @@ export const taxChatMessagesRelations = relations(taxChatMessages, ({ one }) => 
 
 export type Contractor = typeof contractors.$inferSelect
 export type Client = typeof clients.$inferSelect
+export type ClientBillingItem = typeof clientBillingItems.$inferSelect
 export type Assignment = typeof assignments.$inferSelect
 export type MonthlyRecord = typeof monthlyRecords.$inferSelect
 export type MonthlyClientRecord = typeof monthlyClientRecords.$inferSelect

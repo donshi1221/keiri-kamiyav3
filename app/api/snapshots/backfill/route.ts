@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, assignments, clients } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, assignments, clientBillingItems } from '@/lib/schema'
 import { and, eq } from 'drizzle-orm'
 import { parseBody, snapshotBackfillSchema } from '@/lib/validation'
 
@@ -36,21 +36,27 @@ export async function POST(req: NextRequest) {
       recordsUpdated++
     }
 
-    // クライアント側: billing_amount_snapshot ← clients.billing_amount
+    // クライアント側: billing_amount_snapshot / label_snapshot ← client_billing_items（内訳）
     const clientRecs = await db.select({
       id: monthlyClientRecords.id,
       snapshot: monthlyClientRecords.billing_amount_snapshot,
-      billing: clients.billing_amount,
+      labelSnapshot: monthlyClientRecords.label_snapshot,
+      billing: clientBillingItems.billing_amount,
+      label: clientBillingItems.label,
     })
       .from(monthlyClientRecords)
-      .innerJoin(clients, eq(monthlyClientRecords.client_id, clients.id))
+      .innerJoin(clientBillingItems, eq(monthlyClientRecords.billing_item_id, clientBillingItems.id))
       .where(and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)))
 
     let clientRecordsUpdated = 0
     for (const r of clientRecs) {
-      if (mode === 'fill-missing' && r.snapshot !== null) continue
-      if (r.snapshot === r.billing) continue
-      await db.update(monthlyClientRecords).set({ billing_amount_snapshot: r.billing }).where(eq(monthlyClientRecords.id, r.id))
+      const amountNeedsFill = !(mode === 'fill-missing' && r.snapshot !== null) && r.snapshot !== r.billing
+      const labelNeedsFill = !(mode === 'fill-missing' && r.labelSnapshot !== null) && r.labelSnapshot !== r.label
+      if (!amountNeedsFill && !labelNeedsFill) continue
+      const set: Partial<typeof monthlyClientRecords.$inferInsert> = {}
+      if (amountNeedsFill) set.billing_amount_snapshot = r.billing
+      if (labelNeedsFill) set.label_snapshot = r.label
+      await db.update(monthlyClientRecords).set(set).where(eq(monthlyClientRecords.id, r.id))
       clientRecordsUpdated++
     }
 

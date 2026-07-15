@@ -4,6 +4,7 @@ import type {
   Assignment,
   Contractor,
   Client,
+  ClientBillingItem,
 } from './schema'
 
 // ダッシュボード（app/page.tsx）と履歴（app/history/page.tsx）で共通に使う
@@ -19,11 +20,11 @@ export type RecordWithRelations = MonthlyRecord & {
   }) | null
 }
 
-// monthlyClientRecords。contract_start / contract_months はダッシュボードのみ
-// 取得するため任意（履歴側は billing_amount までしか取らない）。
+// monthlyClientRecords（クライアント請求記録）。
+// billing_item_id / label_snapshot は MonthlyClientRecord 本体に含まれる。
+// billing_items（内訳マスタ）はダッシュボードのみ取得（回数超過の判定に contract_months を使う）。
+// 履歴側は内訳マスタまでは取らないため任意。
 export type ClientRecordWithClient = MonthlyClientRecord & {
-  clients: (Pick<Client, 'id' | 'name' | 'billing_amount'> & {
-    contract_start?: string | null
-    contract_months?: number | null
-  }) | null
+  clients: Pick<Client, 'id' | 'name'> | null
+  billing_items?: Pick<ClientBillingItem, 'id' | 'label' | 'contract_months'> | null
 }

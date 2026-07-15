@@ -95,12 +95,14 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
                 <tbody>
                   {clientRecords.map((cr) => (
                     <tr key={cr.id} className="border-b last:border-0">
-                      <td className="py-3 px-4 font-medium">{cr.clients?.name ?? '?'}</td>
+                      <td className="py-3 px-4">
+                        <span className="font-medium">{cr.clients?.name ?? '?'}</span>
+                        {cr.label_snapshot && (
+                          <span className="ml-2 text-xs text-gray-400">{cr.label_snapshot}</span>
+                        )}
+                      </td>
                       <td className="py-3 px-3 text-right text-gray-600">
-                        {(() => {
-                          const billing = cr.billing_amount_snapshot ?? cr.clients?.billing_amount
-                          return billing ? `¥${billing.toLocaleString()}` : '—'
-                        })()}
+                        {cr.billing_amount_snapshot ? `¥${cr.billing_amount_snapshot.toLocaleString()}` : '—'}
                       </td>
                       <td className="text-center py-3 px-3">
                         <CheckIcon done={!!cr.invoice_sent_at} label="送付" />
@@ -115,11 +117,14 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
             </div>
             <div className="divide-y md:hidden">
               {clientRecords.map((cr) => {
-                const billing = cr.billing_amount_snapshot ?? cr.clients?.billing_amount
+                const billing = cr.billing_amount_snapshot
                 return (
                   <div key={cr.id} className="px-4 py-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="font-medium">{cr.clients?.name ?? '?'}</span>
+                      <span className="font-medium">
+                        {cr.clients?.name ?? '?'}
+                        {cr.label_snapshot && <span className="ml-2 text-xs text-gray-400">{cr.label_snapshot}</span>}
+                      </span>
                       <span className="text-sm text-gray-600">{billing ? `¥${billing.toLocaleString()}` : '—'}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2 text-xs text-gray-500">

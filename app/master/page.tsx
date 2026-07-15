@@ -13,11 +13,25 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import ErrorToast from '@/app/components/error-toast'
-import type { Contractor, Client, Assignment } from '@/lib/schema'
+import { Plus, Trash2 } from 'lucide-react'
+import type { Contractor, Client, Assignment, ClientBillingItem } from '@/lib/schema'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
   clients: Pick<Client, 'id' | 'name'> | null
+}
+
+// GET /api/master/clients はクライアントに請求内訳(billing_items)をぶら下げて返す。
+type ClientWithItems = Client & { billing_items: ClientBillingItem[] }
+
+// フォーム内で編集中の内訳1行。既存はid付き、新規追加はid未設定（保存時にPOSTで採番）。
+type ItemDraft = {
+  id?: string
+  label: string
+  billing_amount: string
+  contract_start: string
+  contract_months: string
+  active: boolean
 }
 
 async function readErrorMessage(res: Response, fallback: string) {
@@ -60,7 +74,7 @@ function Dialog({ open, onClose, title, children }: {
 export default function MasterPage() {
   const [tab, setTab] = useState<'contractor' | 'client'>('contractor')
   const [contractors, setContractors] = useState<Contractor[]>([])
-  const [clients, setClients] = useState<Client[]>([])
+  const [clients, setClients] = useState<ClientWithItems[]>([])
   const [assignments, setAssignments] = useState<AssignmentWithRelations[]>([])
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -339,14 +353,14 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
 // Client Tab
 // ─────────────────────────────────────────────
 function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
-  clients: Client[]
+  clients: ClientWithItems[]
   contractors: Contractor[]
   assignments: AssignmentWithRelations[]
   onRefresh: () => void
   onError: (msg: string) => void
 }) {
   const [addClientOpen, setAddClientOpen] = useState(false)
-  const [editClient, setEditClient] = useState<Client | null>(null)
+  const [editClient, setEditClient] = useState<ClientWithItems | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
@@ -418,19 +432,44 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
       ) : (
         clients.map((cl) => {
           const myAssignments = assignments.filter((a) => a.client_id === cl.id)
+          const items = cl.billing_items ?? []
+          const activeItems = items.filter((it) => it.active)
+          const totalBilling = activeItems.reduce((sum, it) => sum + it.billing_amount, 0)
           return (
             <div key={cl.id} className="rounded-lg border bg-white">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
                 <span className="font-medium flex-1 min-w-[8rem]">{cl.name}</span>
-                {cl.billing_amount > 0 && (
-                  <span className="text-sm text-gray-600">¥{cl.billing_amount.toLocaleString()}</span>
-                )}
-                {cl.contract_months && (
-                  <span className="text-xs text-gray-400">{cl.contract_months}ヶ月</span>
+                {totalBilling > 0 && (
+                  <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
                 )}
                 <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline">編集</button>
                 <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline">削除</button>
               </div>
+              {/* 請求内訳の一覧（金額・契約期間・停止中を一目で確認） */}
+              {items.length > 0 && (
+                <div className="px-4 py-2 border-b bg-gray-50/50">
+                  <div className="mb-1 text-xs font-medium text-gray-500">請求内訳</div>
+                  <div className="space-y-1">
+                    {items.map((it) => (
+                      <div key={it.id} className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className={`flex-1 min-w-[6rem] ${!it.active ? 'text-gray-400 line-through' : ''}`}>
+                          {it.label || '（内訳名なし）'}
+                        </span>
+                        <span className={!it.active ? 'text-gray-400' : 'text-gray-600'}>
+                          {it.billing_amount > 0 ? `¥${it.billing_amount.toLocaleString()}` : '—'}
+                        </span>
+                        {it.contract_start && (
+                          <span className="text-xs text-gray-400">
+                            {it.contract_start.slice(0, 7)}
+                            {it.contract_months ? `〜${it.contract_months}ヶ月` : '〜'}
+                          </span>
+                        )}
+                        {!it.active && <span className="text-xs text-gray-400">（停止中）</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
@@ -632,58 +671,139 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
 // ─────────────────────────────────────────────
 // Client Form Dialog
 // ─────────────────────────────────────────────
+// 内訳ドラフトの空行を作る。
+function emptyItemDraft(): ItemDraft {
+  return { label: '', billing_amount: '', contract_start: '', contract_months: '', active: true }
+}
+
+// APIへ送る内訳ペイロードを組み立てる。
+// 契約開始は type="month"（YYYY-MM）で受け取り、date列に入れられるよう「月初(YYYY-MM-01)」へ正規化する。
+function itemPayload(d: ItemDraft) {
+  return {
+    label: d.label.trim(),
+    billing_amount: d.billing_amount ? Number(d.billing_amount) : 0,
+    contract_start: d.contract_start ? `${d.contract_start}-01` : null,
+    contract_months: d.contract_months ? Number(d.contract_months) : null,
+    active: d.active,
+  }
+}
+
 function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   open: boolean
   onClose: () => void
   onSaved: () => void
   onError: (msg: string) => void
-  initial: Client | null
+  initial: ClientWithItems | null
 }) {
   const [name, setName] = useState('')
-  const [billingAmount, setBillingAmount] = useState('')
-  const [contractStart, setContractStart] = useState('')
-  const [contractMonths, setContractMonths] = useState('')
+  const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
+  const [removedIds, setRemovedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? '')
-      setBillingAmount(initial?.billing_amount?.toString() ?? '')
-      setContractStart(initial?.contract_start ?? '')
-      setContractMonths(initial?.contract_months?.toString() ?? '')
+      setRemovedIds([])
+      const existing = initial?.billing_items ?? []
+      if (existing.length > 0) {
+        setItems(existing.map((it) => ({
+          id: it.id,
+          label: it.label,
+          billing_amount: it.billing_amount ? it.billing_amount.toString() : '',
+          contract_start: it.contract_start ? it.contract_start.slice(0, 7) : '',
+          contract_months: it.contract_months ? it.contract_months.toString() : '',
+          active: it.active,
+        })))
+      } else {
+        // 新規、または内訳が未登録のクライアントは空行を1つ用意する。
+        setItems([emptyItemDraft()])
+      }
     }
   }, [open, initial])
 
+  function updateItem(index: number, patch: Partial<ItemDraft>) {
+    setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)))
+  }
+
+  function addItem() {
+    setItems((prev) => [...prev, emptyItemDraft()])
+  }
+
+  function removeItem(index: number) {
+    setItems((prev) => {
+      const target = prev[index]
+      if (target?.id) setRemovedIds((ids) => [...ids, target.id!])
+      const next = prev.filter((_, i) => i !== index)
+      return next.length > 0 ? next : [emptyItemDraft()]
+    })
+  }
+
+  const multi = items.length > 1
+
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    setSaving(true)
-    const payload = {
-      name,
-      billing_amount: billingAmount ? Number(billingAmount) : 0,
-      contract_start: contractStart || null,
-      contract_months: contractMonths ? Number(contractMonths) : null,
+    // 内訳が2つ以上あるのに名前が空の行があると区別できないため、名前を必須にする。
+    if (multi && items.some((it) => !it.label.trim())) {
+      onError('内訳が複数あるときは、それぞれに内訳名を入力してください。')
+      return
     }
+    setSaving(true)
     try {
-      const res = initial
-        ? await fetch(`/api/master/clients/${initial.id}`, {
+      // 1) クライアント本体（名前）を作成/更新して client_id を確定させる。
+      let clientId = initial?.id
+      if (initial) {
+        if (name !== initial.name) {
+          const res = await fetch(`/api/master/clients/${initial.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ name }),
           })
-        : await fetch('/api/master/clients', {
+          if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
+        }
+      } else {
+        const res = await fetch('/api/master/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+        if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
+        clientId = (await res.json()).id
+      }
+
+      // 2) 削除された内訳を消す（月次記録があるとサーバ側で弾かれる＝過去データを守る）。
+      for (const id of removedIds) {
+        const res = await fetch(`/api/master/billing-items/${id}`, { method: 'DELETE' })
+        if (!res.ok && res.status !== 404) {
+          throw new Error(await readErrorMessage(res, '内訳の削除に失敗しました（過去の請求記録がある内訳は削除できません。停止に切り替えてください）。'))
+        }
+      }
+
+      // 3) 内訳を作成/更新する。表示順は並び順(index)で保存する。
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        const body = { ...itemPayload(it), sort_order: i }
+        if (it.id) {
+          const res = await fetch(`/api/master/billing-items/${it.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) throw new Error(await readErrorMessage(res, '内訳の保存に失敗しました。'))
+        } else {
+          const res = await fetch('/api/master/billing-items', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ ...body, client_id: clientId }),
           })
-      setSaving(false)
-      if (!res.ok) {
-        onError(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
-        return
+          if (!res.ok) throw new Error(await readErrorMessage(res, '内訳の保存に失敗しました。'))
+        }
       }
-      onSaved()
-    } catch {
+
       setSaving(false)
-      onError('通信に失敗しました。接続を確認して再度お試しください。')
+      onSaved()
+    } catch (err) {
+      setSaving(false)
+      onError(err instanceof Error ? err.message : '通信に失敗しました。接続を確認して再度お試しください。')
     }
   }
 
@@ -694,20 +814,62 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
+
         <div>
-          <label className="text-sm font-medium block mb-1">請求額</label>
-          <input type="number" inputMode="numeric" value={billingAmount} onChange={(e) => setBillingAmount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm font-medium block mb-1">契約開始月</label>
-            <input type="month" value={contractStart} onChange={(e) => setContractStart(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-sm font-medium">請求内訳</label>
+            <button type="button" onClick={addItem} className="flex items-center gap-1 text-xs text-info hover:underline">
+              <Plus size={12} /> 内訳を追加
+            </button>
           </div>
-          <div>
-            <label className="text-sm font-medium block mb-1">契約期間（月）</label>
-            <input type="number" inputMode="numeric" value={contractMonths} onChange={(e) => setContractMonths(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="なし" min="1" />
+          <p className="mb-2 text-xs text-gray-400">
+            内訳ごとに金額と契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
+          </p>
+
+          <div className="space-y-3">
+            {items.map((it, index) => (
+              <div key={it.id ?? `new-${index}`} className="rounded-lg border p-3 space-y-2 bg-gray-50/50">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={it.label}
+                    onChange={(e) => updateItem(index, { label: e.target.value })}
+                    placeholder={multi ? '内訳名（例: YouTube運用費）' : '内訳名（任意）'}
+                    className="flex-1 min-w-0 border rounded px-3 py-2 text-sm"
+                  />
+                  {items.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeItem(index)}
+                      aria-label="この内訳を削除"
+                      className="shrink-0 text-gray-300 hover:text-destructive"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">請求額</label>
+                    <input type="number" inputMode="numeric" value={it.billing_amount} onChange={(e) => updateItem(index, { billing_amount: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">契約開始月</label>
+                    <input type="month" value={it.contract_start} onChange={(e) => updateItem(index, { contract_start: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1">契約期間（月）</label>
+                    <input type="number" inputMode="numeric" value={it.contract_months} onChange={(e) => updateItem(index, { contract_months: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="なし" min="1" />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <input type="checkbox" checked={it.active} onChange={(e) => updateItem(index, { active: e.target.checked })} />
+                  この内訳を有効にする（外すと今後の請求チェックに出さない）
+                </label>
+              </div>
+            ))}
           </div>
         </div>
+
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" type="button" onClick={onClose}>キャンセル</Button>
           <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>

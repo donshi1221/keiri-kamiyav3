@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import {
   contractors,
   clients,
+  clientBillingItems,
   assignments,
   monthlyRecords,
   monthlyClientRecords,
@@ -26,6 +27,7 @@ export async function GET() {
     const [
       contractorsData,
       clientsData,
+      clientBillingItemsData,
       assignmentsData,
       monthlyRecordsData,
       monthlyClientRecordsData,
@@ -38,6 +40,7 @@ export async function GET() {
     ] = await Promise.all([
       db.select().from(contractors),
       db.select().from(clients),
+      db.select().from(clientBillingItems),
       db.select().from(assignments),
       db.select().from(monthlyRecords),
       db.select().from(monthlyClientRecords),
@@ -56,6 +59,7 @@ export async function GET() {
       tables: {
         contractors: contractorsData,
         clients: clientsData,
+        client_billing_items: clientBillingItemsData,
         assignments: assignmentsData,
         monthly_records: monthlyRecordsData,
         monthly_client_records: monthlyClientRecordsData,

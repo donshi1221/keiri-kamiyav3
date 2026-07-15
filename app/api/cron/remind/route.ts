@@ -18,6 +18,13 @@ function overdueMark(day: number, dueDay: number): string {
   return day > dueDay ? '（期限超過）' : ''
 }
 
+// クライアント名に内訳名を添える（内訳名がある内訳のみ「クライアント / 内訳」表記にする）。
+function clientLabel(r: { clients: { name: string } | null; label_snapshot: string | null }): string {
+  const name = r.clients?.name ?? '?'
+  const label = r.label_snapshot?.trim()
+  return label ? `${name} / ${label}` : name
+}
+
 export async function GET(req: NextRequest) {
   // CRON_SECRET 未設定時は素通しさせず、必ず拒否する（フェイルクローズ）。
   if (!process.env.CRON_SECRET) {
@@ -67,7 +74,7 @@ export async function GET(req: NextRequest) {
       }),
       db.query.monthlyClientRecords.findMany({
         where: and(eq(monthlyClientRecords.year, year), eq(monthlyClientRecords.month, month)),
-        columns: { invoice_sent_at: true, payment_confirmed_at: true },
+        columns: { invoice_sent_at: true, payment_confirmed_at: true, label_snapshot: true },
         with: { clients: { columns: { name: true } } },
       }),
       db.query.monthlyGlobalTasks.findFirst({
@@ -121,7 +128,7 @@ export async function GET(req: NextRequest) {
     if (remindDay15) {
       const unsentClients = clientRecords.filter((r) => !r.invoice_sent_at)
       if (unsentClients.length > 0) {
-        const lines = unsentClients.map((r) => `  □ ${r.clients?.name ?? '?'}${overdueMark(day, 15)}`)
+        const lines = unsentClients.map((r) => `  □ ${clientLabel(r)}${overdueMark(day, 15)}`)
         sections.push(`■ クライアント — 請求書送付（期日: 15日）\n${lines.join('\n')}`)
       }
 
@@ -137,7 +144,7 @@ export async function GET(req: NextRequest) {
     if (remindDay25) {
       const unconfirmedClients = clientRecords.filter((r) => !r.payment_confirmed_at)
       if (unconfirmedClients.length > 0) {
-        const lines = unconfirmedClients.map((r) => `  □ ${r.clients?.name ?? '?'}${overdueMark(day, 25)}`)
+        const lines = unconfirmedClients.map((r) => `  □ ${clientLabel(r)}${overdueMark(day, 25)}`)
         sections.push(`■ クライアント — 入金確認（期日: 25日）\n${lines.join('\n')}`)
       }
     }
