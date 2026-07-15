@@ -100,6 +100,8 @@ export const monthlyCustomGlobalTasks = pgTable('monthly_custom_global_tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
   title: text('title').notNull(),
   months: integer('months').array().notNull().default(sql`'{}'::integer[]`),
+  // 表示用の日にち（1〜31）。期限判定には使わず、「◯日」の表示・メモとしてのみ用いる。任意。
+  day: integer('day'),
   completed_months: integer('completed_months').array().notNull().default(sql`'{}'::integer[]`),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })

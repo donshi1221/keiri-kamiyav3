@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_custom_global_tasks" ADD COLUMN "day" integer;

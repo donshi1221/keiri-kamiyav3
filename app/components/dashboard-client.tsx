@@ -124,6 +124,7 @@ export default function DashboardClient({
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [newDay, setNewDay] = useState('')
   const [monthMode, setMonthMode] = useState<'all' | 'specific'>('all')
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
   const [isAdding, setIsAdding] = useState(false)
@@ -335,11 +336,14 @@ export default function DashboardClient({
     if (isAdding) return
     setIsAdding(true)
     const months = monthMode === 'all' ? [] : selectedMonths
+    // 表示用の日にち。1〜31以外・未入力は送らない（サーバ側で null になる）。
+    const dayNum = Number(newDay)
+    const day = Number.isInteger(dayNum) && dayNum >= 1 && dayNum <= 31 ? dayNum : null
     try {
       const res = await fetch('/api/checklist/custom-global', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newTitle.trim(), months }),
+        body: JSON.stringify({ title: newTitle.trim(), months, day }),
       })
       if (!res.ok) throw new Error('add failed')
       const created = await res.json()
@@ -347,6 +351,7 @@ export default function DashboardClient({
         setCustomTasks((prev) => [...prev, created])
       }
       setNewTitle('')
+      setNewDay('')
       setSelectedMonths([])
       setMonthMode('all')
       setShowAddForm(false)
@@ -871,6 +876,23 @@ export default function DashboardClient({
               className="w-full text-sm border border-gray-200 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400"
               autoFocus
             />
+            {/* 日付（任意）: 表示・メモ用。毎月・特定月どちらのモードでも入力できる。 */}
+            <div className="flex items-center gap-2 text-sm">
+              <label htmlFor="task-day" className="text-gray-600">日付（任意）</label>
+              <input
+                id="task-day"
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="31"
+                value={newDay}
+                onChange={(e) => setNewDay(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
+                placeholder="—"
+                className="w-16 text-sm border border-gray-200 rounded px-2 py-1.5 text-right focus:outline-none focus:ring-1 focus:ring-gray-400 [appearance:textfield] [-moz-appearance:textfield]"
+              />
+              <span className="text-gray-500">日</span>
+            </div>
             <div className="flex items-center gap-3 text-sm">
               <label htmlFor="mode-all" className="flex items-center gap-1 cursor-pointer">
                 <input type="radio" name="month-mode" id="mode-all" checked={monthMode === 'all'} onChange={() => setMonthMode('all')} />
@@ -904,7 +926,7 @@ export default function DashboardClient({
               <Button size="sm" variant="outline" onClick={addCustomTask} disabled={!canAdd || isAdding}>
                 {isAdding ? '追加中…' : '追加'}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => { setShowAddForm(false); setNewTitle(''); setSelectedMonths([]); setMonthMode('all') }}>キャンセル</Button>
+              <Button size="sm" variant="outline" onClick={() => { setShowAddForm(false); setNewTitle(''); setNewDay(''); setSelectedMonths([]); setMonthMode('all') }}>キャンセル</Button>
             </div>
           </div>
         )}
@@ -962,6 +984,9 @@ export default function DashboardClient({
                     <div key={t.id} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} />
                       <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
+                      {t.day != null && (
+                        <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{t.day}日</span>
+                      )}
                       {t.months.length > 0 && (
                         <div className="flex flex-wrap gap-1 shrink-0">
                           {t.months.length <= 4
