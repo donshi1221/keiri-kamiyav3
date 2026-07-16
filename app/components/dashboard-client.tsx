@@ -726,7 +726,25 @@ export default function DashboardClient({
                 <tbody>
                   {clientGroups.flatMap((g) => {
                     const multi = g.items.length > 1
-                    return g.items.map((cr, i) => {
+                    // クライアント単位の合計請求額（その月の内訳スナップショットの合算）
+                    const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
+                    // 複数内訳のクライアントは「ヘッダー行（名前＋合計）＋内訳行（インデント）」でグループ表示する。
+                    // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
+                    const headerRow = multi
+                      ? [(
+                          <tr key={`header-${g.clientId}`} className="border-b bg-gray-100/80">
+                            <td className="py-2 px-4">
+                              <span className="font-semibold text-gray-800">{g.clientName}</span>
+                            </td>
+                            <td className="py-2 px-3 text-right">
+                              <span className="text-xs text-gray-500 mr-1">合計</span>
+                              <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                            </td>
+                            <td colSpan={2} />
+                          </tr>
+                        )]
+                      : []
+                    const itemRows = g.items.map((cr) => {
                       const label = itemLabel(cr)
                       const billedCount = billedCounts[cr.billing_item_id] ?? 0
                       const contractMonths = cr.billing_items?.contract_months
@@ -736,11 +754,13 @@ export default function DashboardClient({
                       const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
                       const labelPart = multi && label ? `（${label}）` : ''
                       return (
-                        <tr key={cr.id} className={`border-b last:border-0 ${rowClass} ${multi && i > 0 ? 'border-t-0' : ''}`}>
-                          <td className="py-3 px-4">
-                            {/* 複数内訳のときは2行目以降クライアント名を薄くしてグループを示す */}
-                            <span className={multi && i > 0 ? 'font-medium text-gray-300' : 'font-medium'}>{g.clientName}</span>
-                            {multi && <span className="ml-2 text-xs text-gray-500">{label || '（内訳名なし）'}</span>}
+                        <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
+                          <td className={multi ? 'py-3 pl-10 pr-4' : 'py-3 px-4'}>
+                            {multi ? (
+                              <span className="text-gray-700">{label || '（内訳名なし）'}</span>
+                            ) : (
+                              <span className="font-medium">{g.clientName}</span>
+                            )}
                             {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
                           </td>
                           <td className="py-3 px-3 text-right text-gray-600">
@@ -776,6 +796,7 @@ export default function DashboardClient({
                         </tr>
                       )
                     })
+                    return [...headerRow, ...itemRows]
                   })}
                 </tbody>
               </table>
@@ -785,9 +806,19 @@ export default function DashboardClient({
             <div className="divide-y md:hidden">
               {clientGroups.map((g) => {
                 const multi = g.items.length > 1
+                const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
                 return (
                   <div key={g.clientId} className="px-4 py-3">
-                    <div className="mb-2 font-medium">{g.clientName}</div>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="font-medium">{g.clientName}</span>
+                      {/* 複数内訳のクライアントは、ヘッダーに合計請求額を表示する */}
+                      {multi && (
+                        <span className="shrink-0 text-sm">
+                          <span className="text-xs text-gray-500 mr-1">合計</span>
+                          <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                        </span>
+                      )}
+                    </div>
                     <div className="space-y-2">
                       {g.items.map((cr) => {
                         const label = itemLabel(cr)
