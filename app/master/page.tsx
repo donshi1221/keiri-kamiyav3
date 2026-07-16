@@ -911,6 +911,15 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
 // ─────────────────────────────────────────────
 // Assign Form Dialog
 // ─────────────────────────────────────────────
+// 種別ごとの役割名の既定値。フォームには自動入力されるが、自由に書き換え可能（例: 紹介者）。
+const DEFAULT_ROLE_NAMES: Record<'daiko' | 'video_editor', string> = {
+  daiko: '代行者',
+  video_editor: '編集者',
+}
+// 「自動入力のまま（ユーザーが手で変えていない）」とみなす値。種別を切り替えたときだけ
+// これらの値は新しい既定値に置き換え、手入力されたカスタム役割名は保持する。
+const AUTO_ROLE_VALUES = ['', '代行者', '編集者', '動画編集']
+
 function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractors, fixedContractorId, fixedContractorType, fixedClientId, initial }: {
   open: boolean
   onClose: () => void
@@ -950,7 +959,6 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
     if (open) {
       setContractorId(fixedContractorId ?? initial?.contractor_id ?? '')
       setClientId(fixedClientId ?? initial?.client_id ?? '')
-      setRoleName(initial?.role_name ?? '')
       setPayoutAmount(initial?.contractor_payout_amount?.toString() ?? '')
       setSpreadsheetUrl(initial?.spreadsheet_url ?? '')
       // 編集時は既存の委託者の種別に合わせる。新規は既定で代行者。
@@ -958,14 +966,18 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         ? contractors.find((c) => c.id === initial.contractor_id)?.contractor_type ?? 'daiko'
         : 'daiko'
       setSelectedType(initType)
+      // 役割名: 編集時は既存値を、新規は種別の既定値（代行者/編集者）を自動入力する。
+      const effectiveType = fixedContractorType ?? initType
+      setRoleName(initial?.role_name ?? DEFAULT_ROLE_NAMES[effectiveType])
     }
-  }, [open, initial, fixedContractorId, fixedClientId, contractors])
+  }, [open, initial, fixedContractorId, fixedContractorType, fixedClientId, contractors])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
     const payload: Record<string, unknown> = {
-      role_name: isVideoEditor ? '動画編集' : roleName,
+      // 役割名は種別からの自動入力値 or ユーザーの手入力値をそのまま保存する。
+      role_name: roleName.trim(),
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
@@ -1008,7 +1020,13 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
             <label className="text-sm font-medium block mb-1">種別 <span className="text-destructive">*</span></label>
             <select
               value={selectedType}
-              onChange={(e) => { setSelectedType(e.target.value as 'daiko' | 'video_editor'); setContractorId('') }}
+              onChange={(e) => {
+                const t = e.target.value as 'daiko' | 'video_editor'
+                setSelectedType(t)
+                setContractorId('')
+                // 役割名が自動入力のままなら新しい種別の既定値へ置き換える（手入力済みなら保持）。
+                setRoleName((prev) => (AUTO_ROLE_VALUES.includes(prev.trim()) ? DEFAULT_ROLE_NAMES[t] : prev))
+              }}
               className="w-full border rounded px-3 py-2 text-sm"
             >
               <option value="daiko">代行者</option>
@@ -1037,16 +1055,11 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
           </div>
         )}
 
-        <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
+        <div>
           <label className="text-sm font-medium block mb-1">役割名 <span className="text-destructive">*</span></label>
-          <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required={!isVideoEditor} className="w-full border rounded px-3 py-2 text-sm" placeholder="例: ライター" />
+          <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" placeholder="例: 紹介者" />
+          <p className="mt-1 text-xs text-gray-400">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
         </div>
-
-        {isVideoEditor && (
-          <div>
-            <label className="text-sm font-medium block mb-1 text-gray-400">役割名: 動画編集（自動設定）</label>
-          </div>
-        )}
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
           <label className="text-sm font-medium block mb-1">報酬額</label>
