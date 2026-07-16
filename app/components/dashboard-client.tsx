@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem } from '@/lib/ui-types'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 
@@ -443,8 +443,8 @@ export default function DashboardClient({
   const itemLabel = (cr: ClientRecordWithClient): string =>
     (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
 
-  const overdueItems: { label: string }[] = []
-  const inWindowItems: { label: string }[] = []
+  const overdueItems: TaskItem[] = []
+  const inWindowItems: TaskItem[] = []
   if (isCurrentMonth) {
     for (const t of visibleGlobalTasks) {
       if (t.state === 'overdue') overdueItems.push({ label: `${t.label}` })
@@ -456,12 +456,14 @@ export default function DashboardClient({
       const isMulti = (clientGroups.find((g) => g.clientId === cr.client_id)?.items.length ?? 0) > 1
       const label = itemLabel(cr)
       const name = isMulti && label ? `${baseName} / ${label}` : baseName
+      // クライアント系は件数が多くなるため group を付け、「今日やること」側でグループ折りたたみ表示にする。
+      // グループ見出しに作業名（請求書送付/入金確認）が出るので、項目ラベルは名前だけにする。
       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
-      if (sentState === 'overdue') overdueItems.push({ label: `${name} — 請求書送付` })
-      else if (sentState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書送付` })
+      if (sentState === 'overdue') overdueItems.push({ label: name, group: 'clientInvoice' })
+      else if (sentState === 'inWindow') inWindowItems.push({ label: name, group: 'clientInvoice' })
       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-      if (confirmedState === 'overdue') overdueItems.push({ label: `${name} — 入金確認` })
-      else if (confirmedState === 'inWindow') inWindowItems.push({ label: `${name} — 入金確認` })
+      if (confirmedState === 'overdue') overdueItems.push({ label: name, group: 'clientPayment' })
+      else if (confirmedState === 'inWindow') inWindowItems.push({ label: name, group: 'clientPayment' })
     }
     for (const r of localRecords) {
       const name = r.assignments?.contractors?.name ?? '?'

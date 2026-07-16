@@ -20,6 +20,14 @@ export type RecordWithRelations = MonthlyRecord & {
   }) | null
 }
 
+// 「今日やること」の1項目。クライアント系（請求書送付・入金確認）は件数が多くなるため、
+// group を付けてグループ単位の折りたたみ表示にする。group なしは従来どおり個別表示。
+export type TaskGroup = 'clientInvoice' | 'clientPayment'
+export interface TaskItem {
+  label: string
+  group?: TaskGroup
+}
+
 // monthlyClientRecords（クライアント請求記録）。
 // billing_item_id / label_snapshot は MonthlyClientRecord 本体に含まれる。
 // billing_items（内訳マスタ）はダッシュボードのみ取得（回数超過の判定に contract_months を使う）。
