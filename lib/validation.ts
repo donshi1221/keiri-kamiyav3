@@ -11,6 +11,13 @@ const moneyInt = z.coerce
   .refine((n) => n >= 0, { message: '金額は0以上で入力してください' })
   .transform((n) => Math.round(n))
 
+// 本数: 数値化 → 有限かつ0以上を要求 → 整数に丸める（integer列に小数を渡すと500になるため）。
+const countInt = z.coerce
+  .number()
+  .refine((n) => Number.isFinite(n), { message: '本数には数値を入力してください' })
+  .refine((n) => n >= 0, { message: '本数は0以上で入力してください' })
+  .transform((n) => Math.round(n))
+
 // 契約期間（月）: 空文字/未指定/null は null（=期間なし）扱い。値があれば1以上の整数。
 const monthsField = z.preprocess(
   (v) => (v === '' || v === null || v === undefined ? null : v),
@@ -35,6 +42,7 @@ const optionalUrl = z.preprocess(
 export const clientCreateSchema = z.object({
   name: z.string().trim().min(1, { message: 'クライアント名は必須です' }),
   contact_person: z.string().nullish(),
+  monthly_video_count: countInt.optional(),
   notes: z.string().nullish(),
 })
 export const clientPatchSchema = clientCreateSchema.partial()
@@ -54,6 +62,7 @@ export const billingItemPatchSchema = billingItemCreateSchema.partial().omit({ c
 export const contractorCreateSchema = z.object({
   name: z.string().trim().min(1, { message: '委託者名は必須です' }),
   contractor_type: z.enum(['daiko', 'video_editor']).optional(),
+  unit_price: moneyInt.optional(),
   email: optionalEmail.optional(),
   notes: z.string().nullish(),
 })

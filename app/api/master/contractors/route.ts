@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
     const [data] = await db.insert(contractors).values({
       name: body.name,
       contractor_type: body.contractor_type ?? 'daiko',
+      unit_price: body.unit_price ?? 0,
       email: body.email ?? null,
       notes: body.notes ?? null,
     }).returning()

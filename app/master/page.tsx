@@ -222,6 +222,9 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                 <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
                   {c.contractor_type === 'daiko' ? '代行者' : '動画編集者'}
                 </span>
+                {c.contractor_type === 'video_editor' && c.unit_price > 0 && (
+                  <span className="text-xs text-gray-500">単価 ¥{c.unit_price.toLocaleString()}/本</span>
+                )}
                 {c.email && <span className="text-xs text-gray-400">{c.email}</span>}
                 <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline">編集</button>
                 <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline">削除</button>
@@ -240,18 +243,33 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                   <p className="text-xs text-gray-400 py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
-                    {myAssignments.map((a) => (
-                      <div key={a.id} className="flex items-center gap-2 text-sm">
-                        <span className={`flex-1 ${!a.active ? 'text-gray-400 line-through' : ''}`}>
-                          {a.clients?.name} — {a.role_name}
-                          {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
-                        </span>
-                        <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
-                        {a.active && (
-                          <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
-                        )}
-                      </div>
-                    ))}
+                    {myAssignments.map((a) => {
+                      // 編集者のフル納品額 = 委託者の単価 × 担当クライアントの月本数。
+                      // 保存はせず表示のたびに計算する（マスタ変更時の再計算漏れを防ぐ）。
+                      const assignClient = clients.find((cl) => cl.id === a.client_id)
+                      const videoCount = assignClient?.monthly_video_count ?? 0
+                      const fullDelivery =
+                        c.contractor_type === 'video_editor' && c.unit_price > 0 && videoCount > 0
+                          ? c.unit_price * videoCount
+                          : null
+                      return (
+                        <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
+                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-gray-400 line-through' : ''}`}>
+                            {a.clients?.name} — {a.role_name}
+                            {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
+                            {fullDelivery !== null && (
+                              <span className="text-xs text-gray-500">
+                                {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{c.unit_price.toLocaleString()}×{videoCount}本）
+                              </span>
+                            )}
+                          </span>
+                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
+                          {a.active && (
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -455,6 +473,9 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
             <div key={cl.id} className="rounded-lg border bg-white">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
                 <span className="font-medium flex-1 min-w-[8rem]">{cl.name}</span>
+                {cl.monthly_video_count > 0 && (
+                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">月{cl.monthly_video_count}本</span>
+                )}
                 {totalBilling > 0 && (
                   <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
                 )}
@@ -497,18 +518,30 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                   <p className="text-xs text-gray-400 py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
-                    {myAssignments.map((a) => (
-                      <div key={a.id} className="flex items-center gap-2 text-sm">
-                        <span className={`flex-1 ${!a.active ? 'text-gray-400 line-through' : ''}`}>
-                          {a.contractors?.name} — {a.role_name}
-                          {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
-                        </span>
-                        <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
-                        {a.active && (
-                          <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
-                        )}
-                      </div>
-                    ))}
+                    {myAssignments.map((a) => {
+                      // 編集者のフル納品額 = 委託者の単価 × このクライアントの月本数（表示時に計算）。
+                      const assignContractor = contractors.find((c) => c.id === a.contractor_id)
+                      const unitPrice = assignContractor?.contractor_type === 'video_editor' ? assignContractor.unit_price : 0
+                      const fullDelivery =
+                        unitPrice > 0 && cl.monthly_video_count > 0 ? unitPrice * cl.monthly_video_count : null
+                      return (
+                        <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
+                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-gray-400 line-through' : ''}`}>
+                            {a.contractors?.name} — {a.role_name}
+                            {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
+                            {fullDelivery !== null && (
+                              <span className="text-xs text-gray-500">
+                                {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{unitPrice.toLocaleString()}×{cl.monthly_video_count}本）
+                              </span>
+                            )}
+                          </span>
+                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
+                          {a.active && (
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -632,6 +665,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [contractorType, setContractorType] = useState<'daiko' | 'video_editor'>('daiko')
+  const [unitPrice, setUnitPrice] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -639,23 +673,32 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
       setName(initial?.name ?? '')
       setEmail(initial?.email ?? '')
       setContractorType(initial?.contractor_type ?? 'daiko')
+      setUnitPrice(initial?.unit_price ? initial.unit_price.toString() : '')
     }
   }, [open, initial])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
+    // 単価は動画編集者のときだけ送る。代行者編集時に送らないことで、
+    // 種別を一時的に切り替えても保存済みの単価が 0 で消えないようにする。
+    const payload = {
+      name,
+      email: email || null,
+      contractor_type: contractorType,
+      ...(contractorType === 'video_editor' ? { unit_price: unitPrice ? Number(unitPrice) : 0 } : {}),
+    }
     try {
       const res = initial
         ? await fetch(`/api/master/contractors/${initial.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+            body: JSON.stringify(payload),
           })
         : await fetch('/api/master/contractors', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email: email || null, contractor_type: contractorType }),
+            body: JSON.stringify(payload),
           })
       setSaving(false)
       if (!res.ok) {
@@ -684,6 +727,13 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
             <option value="video_editor">動画編集者</option>
           </select>
         </div>
+        {contractorType === 'video_editor' && (
+          <div>
+            <label className="text-sm font-medium block mb-1">単価（1本あたり）</label>
+            <input type="number" inputMode="numeric" min="0" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
+            <p className="mt-1 text-xs text-gray-400">クライアントの月本数と掛け合わせて、フル納品時の支払額を自動計算します。</p>
+          </div>
+        )}
         <div>
           <label className="text-sm font-medium block mb-1">メール</label>
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
@@ -725,6 +775,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   initial: ClientWithItems | null
 }) {
   const [name, setName] = useState('')
+  const [monthlyVideoCount, setMonthlyVideoCount] = useState('')
   const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
   const [removedIds, setRemovedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
@@ -732,6 +783,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? '')
+      setMonthlyVideoCount(initial?.monthly_video_count ? initial.monthly_video_count.toString() : '')
       setRemovedIds([])
       const existing = initial?.billing_items ?? []
       if (existing.length > 0) {
@@ -778,14 +830,19 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     }
     setSaving(true)
     try {
-      // 1) クライアント本体（名前）を作成/更新して client_id を確定させる。
+      // 1) クライアント本体（名前・月本数）を作成/更新して client_id を確定させる。
+      const countNum = monthlyVideoCount ? Number(monthlyVideoCount) : 0
       let clientId = initial?.id
       if (initial) {
-        if (name !== initial.name) {
+        // 変更のあった項目だけ送る（未送信の項目はサーバ側で触らない仕様）。
+        const patch: Record<string, unknown> = {}
+        if (name !== initial.name) patch.name = name
+        if (countNum !== initial.monthly_video_count) patch.monthly_video_count = countNum
+        if (Object.keys(patch).length > 0) {
           const res = await fetch(`/api/master/clients/${initial.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
+            body: JSON.stringify(patch),
           })
           if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         }
@@ -793,7 +850,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         const res = await fetch('/api/master/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, monthly_video_count: countNum }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         clientId = (await res.json()).id
@@ -842,6 +899,12 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium block mb-1">月本数（動画）</label>
+          <input type="number" inputMode="numeric" min="0" value={monthlyVideoCount} onChange={(e) => setMonthlyVideoCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
+          <p className="mt-1 text-xs text-gray-400">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
         </div>
 
         <div>

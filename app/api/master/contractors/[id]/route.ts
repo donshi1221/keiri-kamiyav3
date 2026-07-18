@@ -20,6 +20,7 @@ export async function PATCH(
     const patch: Partial<typeof contractors.$inferInsert> = {}
     if (v.name !== undefined) patch.name = v.name
     if (v.contractor_type !== undefined) patch.contractor_type = v.contractor_type
+    if (v.unit_price !== undefined) patch.unit_price = v.unit_price
     if (v.email !== undefined) patch.email = v.email ?? null
     if (v.notes !== undefined) patch.notes = v.notes ?? null
 

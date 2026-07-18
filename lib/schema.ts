@@ -13,6 +13,9 @@ export const contractors = pgTable('contractors', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   contractor_type: contractorTypeEnum('contractor_type').notNull().default('daiko'),
+  // 動画1本あたりの単価（円）。編集者ごとに一律のためマスタ本体に持つ。
+  // フル納品時の支払額は保存せず「unit_price × clients.monthly_video_count」で表示時に計算する。
+  unit_price: integer('unit_price').notNull().default(0),
   email: text('email'),
   notes: text('notes'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -27,6 +30,8 @@ export const clients = pgTable('clients', {
   billing_amount: integer('billing_amount').notNull().default(0),
   contract_start: date('contract_start', { mode: 'string' }),
   contract_months: integer('contract_months'),
+  // 月あたりの動画本数。編集者のフル納品額（単価×本数）の計算に使う。
+  monthly_video_count: integer('monthly_video_count').notNull().default(0),
   notes: text('notes'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
