@@ -9,7 +9,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
-import type { MonthlyGlobalTask, CustomGlobalTask } from '@/lib/schema'
+import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem } from '@/lib/ui-types'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
@@ -96,6 +96,8 @@ interface Props {
   clientRecords: ClientRecordWithClient[]
   globalTask: MonthlyGlobalTask | null
   customTasks: CustomGlobalTask[]
+  oneTimeTasks: OneTimeTask[]
+  oneTimeWindowDays: number
   today: string
   billedCounts: Record<string, number>
   paidCounts: Record<string, number>
@@ -108,7 +110,7 @@ interface Props {
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -122,11 +124,14 @@ export default function DashboardClient({
   const [localClientRecords, setLocalClientRecords] = useState(clientRecords)
   const [localGlobal, setLocalGlobal] = useState(globalTask)
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
+  const [oneTimeTasks, setOneTimeTasks] = useState(initialOneTimeTasks)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newDay, setNewDay] = useState('')
-  const [monthMode, setMonthMode] = useState<'all' | 'specific'>('all')
+  // タスク種別: all=毎月 / specific=特定月のみ / single=単発。単発のみ due date を使う。
+  const [monthMode, setMonthMode] = useState<'all' | 'specific' | 'single'>('all')
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
+  const [newDueDate, setNewDueDate] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
@@ -330,8 +335,19 @@ export default function DashboardClient({
     }
   }
 
+  function resetAddForm() {
+    setNewTitle('')
+    setNewDay('')
+    setSelectedMonths([])
+    setNewDueDate('')
+    setMonthMode('all')
+    setShowAddForm(false)
+  }
+
   async function addCustomTask() {
     if (!newTitle.trim()) return
+    // 単発は別テーブル・別APIへ。繰り返し（毎月/特定月）とは処理を分ける。
+    if (monthMode === 'single') { await addOneTimeTask(); return }
     if (monthMode === 'specific' && selectedMonths.length === 0) return
     if (isAdding) return
     setIsAdding(true)
@@ -350,15 +366,77 @@ export default function DashboardClient({
       if (monthMode === 'all' || months.includes(month)) {
         setCustomTasks((prev) => [...prev, created])
       }
-      setNewTitle('')
-      setNewDay('')
-      setSelectedMonths([])
-      setMonthMode('all')
-      setShowAddForm(false)
+      resetAddForm()
     } catch {
       showError('タスクの追加に失敗しました。もう一度お試しください。')
     } finally {
       setIsAdding(false)
+    }
+  }
+
+  async function addOneTimeTask() {
+    if (!newTitle.trim() || !newDueDate) return
+    if (isAdding) return
+    setIsAdding(true)
+    try {
+      const res = await fetch('/api/checklist/one-time', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle.trim(), due_date: newDueDate }),
+      })
+      if (!res.ok) throw new Error('add failed')
+      const created: OneTimeTask = await res.json()
+      // サーバの表示条件（期日の月が表示中の月以前）と同じ判定で、当月に出すべきものだけ追加する。
+      const [dy, dm] = created.due_date.split('-').map(Number)
+      if (dy * 100 + dm <= year * 100 + month) {
+        setOneTimeTasks((prev) => [...prev, created])
+      }
+      resetAddForm()
+    } catch {
+      showError('タスクの追加に失敗しました。もう一度お試しください。')
+    } finally {
+      setIsAdding(false)
+    }
+  }
+
+  async function toggleOneTimeTask(id: string) {
+    const task = oneTimeTasks.find((t) => t.id === id)
+    if (!task) return
+    const nextCompleted = !task.completed_at
+    const prev = task.completed_at
+    // 楽観的更新: 完了時刻を即座に反映（失敗時は元へ戻す）。
+    setOneTimeTasks((list) =>
+      list.map((t) => (t.id === id ? { ...t, completed_at: nextCompleted ? today : null } : t))
+    )
+    try {
+      const res = await fetch(`/api/checklist/one-time/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: nextCompleted }),
+      })
+      if (!res.ok) throw new Error('save failed')
+    } catch {
+      setOneTimeTasks((list) => list.map((t) => (t.id === id ? { ...t, completed_at: prev } : t)))
+      showError('保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  async function deleteOneTimeTask(id: string) {
+    setPendingDeleteId(null)
+    const index = oneTimeTasks.findIndex((t) => t.id === id)
+    const removed = oneTimeTasks[index]
+    if (!removed) return
+    setOneTimeTasks((prev) => prev.filter((t) => t.id !== id))
+    try {
+      const res = await fetch(`/api/checklist/one-time/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+    } catch {
+      setOneTimeTasks((prev) => {
+        const next = [...prev]
+        next.splice(index, 0, removed)
+        return next
+      })
+      showError('削除に失敗しました。もう一度お試しください。')
     }
   }
 
@@ -443,6 +521,23 @@ export default function DashboardClient({
   const itemLabel = (cr: ClientRecordWithClient): string =>
     (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
 
+  // 単発タスクの期日判定（日付のみで比較）。'YYYY-MM-DD' 文字列は辞書順＝日付順なので直接比較できる。
+  const pad2 = (n: number) => String(n).padStart(2, '0')
+  const todayYmd = `${todayDate.getFullYear()}-${pad2(todayDate.getMonth() + 1)}-${pad2(todayDate.getDate())}`
+  const windowEndDate = new Date(todayDate)
+  windowEndDate.setDate(windowEndDate.getDate() + oneTimeWindowDays)
+  const windowEndYmd = `${windowEndDate.getFullYear()}-${pad2(windowEndDate.getMonth() + 1)}-${pad2(windowEndDate.getDate())}`
+  const oneTimeDueState = (due: string): 'overdue' | 'inWindow' | 'upcoming' => {
+    if (due < todayYmd) return 'overdue'
+    if (due <= windowEndYmd) return 'inWindow'
+    return 'upcoming'
+  }
+  // 期日 'YYYY-MM-DD' を「M/D」表示に。
+  const formatDueMd = (due: string): string => {
+    const [, m, d] = due.split('-').map(Number)
+    return `${m}/${d}`
+  }
+
   const overdueItems: TaskItem[] = []
   const inWindowItems: TaskItem[] = []
   if (isCurrentMonth) {
@@ -477,9 +572,21 @@ export default function DashboardClient({
       if (paidState === 'overdue') overdueItems.push({ label: `${name} — 支払い確認` })
       else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い確認` })
     }
+    // 単発タスク: 期日超過なら「期限超過」、期日が近い（既定3日以内）なら「対応期間中」に載せる。
+    for (const t of oneTimeTasks) {
+      if (t.completed_at) continue
+      const st = oneTimeDueState(t.due_date)
+      const label = `${t.title}（${formatDueMd(t.due_date)}）`
+      if (st === 'overdue') overdueItems.push({ label })
+      else if (st === 'inWindow') inWindowItems.push({ label })
+    }
   }
 
-  const canAdd = newTitle.trim().length > 0 && (monthMode === 'all' || selectedMonths.length > 0)
+  const canAdd = newTitle.trim().length > 0 && (
+    monthMode === 'all' ||
+    (monthMode === 'specific' && selectedMonths.length > 0) ||
+    (monthMode === 'single' && newDueDate.length > 0)
+  )
 
   return (
     <div className="space-y-6">
@@ -909,24 +1016,26 @@ export default function DashboardClient({
               className="w-full text-sm border border-gray-200 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400"
               autoFocus
             />
-            {/* 日付（任意）: 表示・メモ用。毎月・特定月どちらのモードでも入力できる。 */}
-            <div className="flex items-center gap-2 text-sm">
-              <label htmlFor="task-day" className="text-gray-600">日付（任意）</label>
-              <input
-                id="task-day"
-                type="number"
-                inputMode="numeric"
-                min="1"
-                max="31"
-                value={newDay}
-                onChange={(e) => setNewDay(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
-                placeholder="—"
-                className="w-16 text-sm border border-gray-200 rounded px-2 py-1.5 text-right focus:outline-none focus:ring-1 focus:ring-gray-400 [appearance:textfield] [-moz-appearance:textfield]"
-              />
-              <span className="text-gray-500">日</span>
-            </div>
-            <div className="flex items-center gap-3 text-sm">
+            {/* 日付（任意）: 表示・メモ用。繰り返し（毎月・特定月）のときだけ入力できる。単発は下の期日を使う。 */}
+            {monthMode !== 'single' && (
+              <div className="flex items-center gap-2 text-sm">
+                <label htmlFor="task-day" className="text-gray-600">日付（任意）</label>
+                <input
+                  id="task-day"
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max="31"
+                  value={newDay}
+                  onChange={(e) => setNewDay(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
+                  placeholder="—"
+                  className="w-16 text-sm border border-gray-200 rounded px-2 py-1.5 text-right focus:outline-none focus:ring-1 focus:ring-gray-400 [appearance:textfield] [-moz-appearance:textfield]"
+                />
+                <span className="text-gray-500">日</span>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3 text-sm">
               <label htmlFor="mode-all" className="flex items-center gap-1 cursor-pointer">
                 <input type="radio" name="month-mode" id="mode-all" checked={monthMode === 'all'} onChange={() => setMonthMode('all')} />
                 毎月
@@ -935,7 +1044,24 @@ export default function DashboardClient({
                 <input type="radio" name="month-mode" id="mode-specific" checked={monthMode === 'specific'} onChange={() => setMonthMode('specific')} />
                 特定月のみ
               </label>
+              <label htmlFor="mode-single" className="flex items-center gap-1 cursor-pointer">
+                <input type="radio" name="month-mode" id="mode-single" checked={monthMode === 'single'} onChange={() => setMonthMode('single')} />
+                単発
+              </label>
             </div>
+            {monthMode === 'single' && (
+              <div className="flex items-center gap-2 text-sm">
+                <label htmlFor="task-due-date" className="text-gray-600">期日</label>
+                <input
+                  id="task-due-date"
+                  type="date"
+                  value={newDueDate}
+                  onChange={(e) => setNewDueDate(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
+                  className="text-sm border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400"
+                />
+              </div>
+            )}
             {monthMode === 'specific' && (
               <div className="space-y-1">
                 <div className="flex flex-wrap gap-1">
@@ -959,7 +1085,7 @@ export default function DashboardClient({
               <Button size="sm" variant="outline" onClick={addCustomTask} disabled={!canAdd || isAdding}>
                 {isAdding ? '追加中…' : '追加'}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => { setShowAddForm(false); setNewTitle(''); setNewDay(''); setSelectedMonths([]); setMonthMode('all') }}>キャンセル</Button>
+              <Button size="sm" variant="outline" onClick={resetAddForm}>キャンセル</Button>
             </div>
           </div>
         )}
@@ -1035,6 +1161,54 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => deleteCustomTask(t.id)}
+                            className="text-xs text-danger hover:text-danger font-medium px-1.5 py-0.5 rounded hover:bg-danger-subtle"
+                          >
+                            削除
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteId(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-0.5 rounded hover:bg-gray-100"
+                          >
+                            戻る
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPendingDeleteId(t.id)}
+                          aria-label={`${t.title}を削除`}
+                          className="text-gray-300 hover:text-danger shrink-0"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </>
+            )}
+            {oneTimeTasks.length > 0 && (
+              <>
+                <div className="border-t my-2" />
+                <p className="text-xs font-medium text-gray-500">単発</p>
+                {oneTimeTasks.map((t) => {
+                  const done = !!t.completed_at
+                  const isPendingDelete = pendingDeleteId === t.id
+                  const overdue = !done && oneTimeDueState(t.due_date) === 'overdue'
+                  return (
+                    <div key={t.id} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
+                      <Checkbox checked={done} onCheckedChange={() => toggleOneTimeTask(t.id)} />
+                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
+                      <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{formatDueMd(t.due_date)}</span>
+                      {overdue && (
+                        <span className="shrink-0 text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
+                      )}
+                      {isPendingDelete ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => deleteOneTimeTask(t.id)}
                             className="text-xs text-danger hover:text-danger font-medium px-1.5 py-0.5 rounded hover:bg-danger-subtle"
                           >
                             削除

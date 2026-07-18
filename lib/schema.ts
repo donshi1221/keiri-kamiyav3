@@ -111,6 +111,16 @@ export const monthlyCustomGlobalTasks = pgTable('monthly_custom_global_tasks', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// 単発タスク。特定の日付に1回だけ行うタスクを管理する（繰り返しの monthly_custom_global_tasks とは別物）。
+// 完了は月ごとではなく単一の completed_at で持つ。未完了のうちは期日の月以降ずっとダッシュボードに出す。
+export const oneTimeTasks = pgTable('one_time_tasks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: text('title').notNull(),
+  due_date: date('due_date', { mode: 'string' }).notNull(),
+  completed_at: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 export const taxAdviceEntries = pgTable('tax_advice_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
   title: text('title').notNull(),
@@ -229,6 +239,7 @@ export type MonthlyRecord = typeof monthlyRecords.$inferSelect
 export type MonthlyClientRecord = typeof monthlyClientRecords.$inferSelect
 export type MonthlyGlobalTask = typeof monthlyGlobalTasks.$inferSelect
 export type CustomGlobalTask = typeof monthlyCustomGlobalTasks.$inferSelect
+export type OneTimeTask = typeof oneTimeTasks.$inferSelect
 export type TaxAdviceEntry = typeof taxAdviceEntries.$inferSelect
 export type TaxChatSession = typeof taxChatSessions.$inferSelect
 export type TaxChatMessage = typeof taxChatMessages.$inferSelect

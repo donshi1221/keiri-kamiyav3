@@ -36,6 +36,13 @@
       "when": 1784274267850,
       "tag": "0004_bright_dark_phoenix",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784339185562,
+      "tag": "0005_slim_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }

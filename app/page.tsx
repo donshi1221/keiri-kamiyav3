@@ -1,9 +1,10 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
+import { ONE_TIME_TASK_WINDOW_DAYS } from '@/lib/config'
 import DashboardClient from './components/dashboard-client'
 
 export default async function DashboardPage({
@@ -21,6 +22,7 @@ export default async function DashboardPage({
     clientRecords,
     globalTask,
     allCustomTasks,
+    allOneTimeTasks,
     mfExpense,
     mfToken,
     clientBillingCounts,
@@ -51,6 +53,7 @@ export default async function DashboardPage({
       where: and(eq(monthlyGlobalTasks.year, year), eq(monthlyGlobalTasks.month, month)),
     }),
     db.select().from(monthlyCustomGlobalTasks).orderBy(asc(monthlyCustomGlobalTasks.created_at)),
+    db.select().from(oneTimeTasks).orderBy(asc(oneTimeTasks.due_date), asc(oneTimeTasks.created_at)),
     db.query.moneyforwardExpenses.findFirst({
       where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
     }),
@@ -87,6 +90,15 @@ export default async function DashboardPage({
     (t) => t.months.length === 0 || t.months.includes(month)
   )
 
+  // 単発タスク: 未完了 かつ 期日の月が「表示中の月」以前 のものだけ渡す。
+  // これで期日の月になったら現れ、完了するまで翌月以降も残る（期限超過でも見逃さない）。
+  const viewedYearMonth = year * 100 + month
+  const oneTimeTasksForMonth = allOneTimeTasks.filter((t) => {
+    if (t.completed_at) return false
+    const [dy, dm] = t.due_date.split('-').map(Number)
+    return dy * 100 + dm <= viewedYearMonth
+  })
+
   // キーは内訳(billing_item_id)。回数超過は内訳ごとに判定する。
   const billedCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
@@ -111,6 +123,8 @@ export default async function DashboardPage({
       clientRecords={clientRecords}
       globalTask={globalTask ?? null}
       customTasks={customTasks}
+      oneTimeTasks={oneTimeTasksForMonth}
+      oneTimeWindowDays={ONE_TIME_TASK_WINDOW_DAYS}
       today={today.toISOString()}
       billedCounts={billedCounts}
       paidCounts={paidCounts}
