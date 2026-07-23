@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow } from '@/lib/ui-types'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 
@@ -142,6 +142,8 @@ export default function DashboardClient({
   const [isSyncing, setIsSyncing] = useState(false)
   const [snapshotConfirm, setSnapshotConfirm] = useState(false)
   const [snapshotBusy, setSnapshotBusy] = useState(false)
+  const [deliveryRows, setDeliveryRows] = useState<DeliveryCheckRow[] | null>(null)
+  const [deliveryLoading, setDeliveryLoading] = useState(false)
 
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -149,6 +151,26 @@ export default function DashboardClient({
     setErrorMsg(msg)
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
     errorTimerRef.current = setTimeout(() => setErrorMsg(null), 4000)
+  }
+
+  async function runDeliveryCheck() {
+    setDeliveryLoading(true)
+    try {
+      const res = await fetch(`/api/delivery/check?year=${year}&month=${month}`, { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { rows?: DeliveryCheckRow[]; error?: string } | null
+      if (!res.ok) throw new Error(data?.error ?? '編集者の本数チェックに失敗しました。')
+      setDeliveryRows(data?.rows ?? [])
+    } catch (err) {
+      setDeliveryRows(null)
+      showError(err instanceof Error ? err.message : '編集者の本数チェックに失敗しました。')
+    } finally {
+      setDeliveryLoading(false)
+    }
+  }
+
+  function deliveryResult(assignmentId: string | undefined): DeliveryCheckRow | null {
+    if (!assignmentId || !deliveryRows) return null
+    return deliveryRows.find((row) => row.assignmentId === assignmentId) ?? null
   }
 
   useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
@@ -629,9 +651,22 @@ export default function DashboardClient({
 
       {/* 委託者 — 請求書受領・支払管理 */}
       <section className="rounded-lg border bg-white">
-        <div className="px-4 pt-4 pb-2 border-b">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
+          {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
+            <Button size="sm" variant="outline" onClick={runDeliveryCheck} disabled={deliveryLoading}>
+              {deliveryLoading ? '本数チェック中…' : '編集者の本数をチェック'}
+            </Button>
+          )}
         </div>
+        {deliveryRows && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-gray-50 px-4 py-2 text-xs">
+            <span className="text-gray-600">本数チェック: {deliveryRows.length}件</span>
+            <span className="text-success">揃った {deliveryRows.filter((r) => r.status === 'ok' && (r.expected ?? 0) > 0 && (r.delivered ?? 0) >= (r.expected ?? 0)).length}件</span>
+            <span className="text-warning">未達 {deliveryRows.filter((r) => r.status === 'ok' && (r.expected ?? 0) > (r.delivered ?? 0)).length}件</span>
+            <span className="text-danger">要確認 {deliveryRows.filter((r) => r.status !== 'ok').length}件</span>
+          </div>
+        )}
         {localRecords.length === 0 ? (
           <p className="text-sm text-gray-400 p-4">レコード未生成</p>
         ) : (
@@ -664,6 +699,12 @@ export default function DashboardClient({
                           {asgn && assignmentPaymentCounts[asgn.id] && (
                             <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
                           )}
+                          {isVideoEditor && (() => {
+                            const result = deliveryResult(asgn?.id)
+                            if (!result) return null
+                            if (result.status !== 'ok') return <div className="text-xs text-danger">本数チェック: 要確認</div>
+                            return <div className={`text-xs ${(result.delivered ?? 0) >= (result.expected ?? 0) ? 'text-success' : 'text-warning'}`}>本数チェック: {result.delivered ?? 0}/{result.expected ?? 0}本</div>
+                          })()}
                         </td>
                         <td className="py-3 px-3 text-right">
                           {isVideoEditor ? (
@@ -747,6 +788,12 @@ export default function DashboardClient({
                         {asgn && assignmentPaymentCounts[asgn.id] && (
                           <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
                         )}
+                        {isVideoEditor && (() => {
+                          const result = deliveryResult(asgn?.id)
+                          if (!result) return null
+                          if (result.status !== 'ok') return <div className="text-xs text-danger">本数チェック: 要確認</div>
+                          return <div className={`text-xs ${(result.delivered ?? 0) >= (result.expected ?? 0) ? 'text-success' : 'text-warning'}`}>本数チェック: {result.delivered ?? 0}/{result.expected ?? 0}本</div>
+                        })()}
                       </div>
                       {isVideoEditor ? (
                         <PayoutInput
