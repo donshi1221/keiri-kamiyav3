@@ -57,6 +57,10 @@ export const assignments = pgTable('assignments', {
   client_id: uuid('client_id').notNull().references(() => clients.id),
   role_name: text('role_name').notNull().default('撮影+台本'),
   contractor_payout_amount: integer('contractor_payout_amount').notNull().default(0),
+  // 支払い対象となる契約の開始月。未設定は既存データとの互換性のため継続扱い。
+  payment_start_month: date('payment_start_month', { mode: 'string' }),
+  // 支払い回数。未設定は回数制限なし。
+  payment_count: integer('payment_count'),
   spreadsheet_url: text('spreadsheet_url'),
   active: boolean('active').notNull().default(true),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

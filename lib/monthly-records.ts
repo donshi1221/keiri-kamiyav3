@@ -2,6 +2,18 @@ import { db } from './db'
 import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks } from './schema'
 import { eq } from 'drizzle-orm'
 
+function isPaymentActiveForMonth(
+  assignment: { payment_start_month: string | null; payment_count: number | null },
+  year: number,
+  month: number,
+): boolean {
+  if (!assignment.payment_start_month) return true
+  const [startYear, startMonth] = assignment.payment_start_month.split('-').map(Number)
+  const index = (year - startYear) * 12 + (month - startMonth)
+  if (index < 0) return false
+  return assignment.payment_count == null || index < assignment.payment_count
+}
+
 // 契約開始月・契約期間から、その (year, month) に内訳が有効かを判定する。
 // contract_start が無ければ常に有効。contract_months が無ければ開始月以降ずっと有効。
 function isBillingItemActiveForMonth(
@@ -23,11 +35,15 @@ export async function generateMonthlyRecords(year: number, month: number) {
   const activeAssignments = await db.select({
     id: assignments.id,
     contractor_payout_amount: assignments.contractor_payout_amount,
+    payment_start_month: assignments.payment_start_month,
+    payment_count: assignments.payment_count,
   }).from(assignments).where(eq(assignments.active, true))
 
-  if (activeAssignments.length > 0) {
+  const payableAssignments = activeAssignments.filter((a) => isPaymentActiveForMonth(a, year, month))
+
+  if (payableAssignments.length > 0) {
     await db.insert(monthlyRecords)
-      .values(activeAssignments.map((a) => ({
+      .values(payableAssignments.map((a) => ({
         year,
         month,
         assignment_id: a.id,
@@ -67,5 +83,5 @@ export async function generateMonthlyRecords(year: number, month: number) {
     .values({ year, month })
     .onConflictDoNothing()
 
-  return { assignmentCount: activeAssignments.length, clientCount: activeItems.length }
+  return { assignmentCount: payableAssignments.length, clientCount: activeItems.length }
 }

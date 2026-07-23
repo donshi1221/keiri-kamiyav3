@@ -43,6 +43,13 @@
       "when": 1784339185562,
       "tag": "0005_slim_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784800000000,
+      "tag": "0006_payment_period_on_assignments",
+      "breakpoints": true
     }
   ]
 }

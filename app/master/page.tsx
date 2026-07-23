@@ -262,6 +262,11 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                                 {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{c.unit_price.toLocaleString()}×{videoCount}本）
                               </span>
                             )}
+                            {(a.payment_start_month || a.payment_count) && (
+                              <span className="block text-xs text-gray-500">
+                                支払期間: {a.payment_start_month ? a.payment_start_month.slice(0, 7) : '設定なし'}から {a.payment_count ? `${a.payment_count}回` : '継続'}
+                              </span>
+                            )}
                           </span>
                           <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
                           {a.active && (
@@ -999,6 +1004,8 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
   const [clientId, setClientId] = useState(fixedClientId ?? '')
   const [roleName, setRoleName] = useState('')
   const [payoutAmount, setPayoutAmount] = useState('')
+  const [paymentStartMonth, setPaymentStartMonth] = useState('')
+  const [paymentCount, setPaymentCount] = useState('')
   const [spreadsheetUrl, setSpreadsheetUrl] = useState('')
   const [selectedType, setSelectedType] = useState<'daiko' | 'video_editor'>('daiko')
   const [saving, setSaving] = useState(false)
@@ -1023,6 +1030,8 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       setContractorId(fixedContractorId ?? initial?.contractor_id ?? '')
       setClientId(fixedClientId ?? initial?.client_id ?? '')
       setPayoutAmount(initial?.contractor_payout_amount?.toString() ?? '')
+      setPaymentStartMonth(initial?.payment_start_month?.slice(0, 7) ?? (initial ? '' : new Date().toISOString().slice(0, 7)))
+      setPaymentCount(initial?.payment_count?.toString() ?? '')
       setSpreadsheetUrl(initial?.spreadsheet_url ?? '')
       // 編集時は既存の委託者の種別に合わせる。新規は既定で代行者。
       const initType = initial
@@ -1042,6 +1051,8 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       // 役割名は種別からの自動入力値 or ユーザーの手入力値をそのまま保存する。
       role_name: roleName.trim(),
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
+      payment_start_month: paymentStartMonth || null,
+      payment_count: paymentCount ? Number(paymentCount) : null,
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
     // 委託者・クライアントは新規作成時は必須。編集時は「変更したときだけ」送る。
@@ -1127,6 +1138,19 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
           <label className="text-sm font-medium block mb-1">報酬額</label>
           <input type="number" inputMode="numeric" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="text-sm font-medium block mb-1">支払い開始月</label>
+            <input type="month" value={paymentStartMonth} onChange={(e) => setPaymentStartMonth(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+            <p className="mt-1 text-xs text-gray-400">未入力なら開始月を限定しません。</p>
+          </div>
+          <div>
+            <label className="text-sm font-medium block mb-1">支払い回数</label>
+            <input type="number" inputMode="numeric" min="1" value={paymentCount} onChange={(e) => setPaymentCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="継続" />
+            <p className="mt-1 text-xs text-gray-400">未入力なら継続扱いです。</p>
+          </div>
         </div>
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>

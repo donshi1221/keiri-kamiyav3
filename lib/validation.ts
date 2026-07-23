@@ -73,6 +73,8 @@ export const assignmentCreateSchema = z.object({
   client_id: z.uuid({ message: 'クライアントの選択が不正です' }),
   role_name: z.string().optional(),
   contractor_payout_amount: moneyInt.optional(),
+  payment_start_month: z.string().regex(/^\d{4}-\d{2}$/, { message: '支払い開始月はYYYY-MM形式で入力してください' }).nullish(),
+  payment_count: z.coerce.number().int().min(1, { message: '支払い回数は1回以上で入力してください' }).nullish(),
   spreadsheet_url: optionalUrl.optional(),
   active: z.boolean().optional(),
 })

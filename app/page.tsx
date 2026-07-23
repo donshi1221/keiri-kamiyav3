@@ -26,6 +26,7 @@ export default async function DashboardPage({
     mfExpense,
     mfToken,
     clientBillingCounts,
+    assignmentPaymentCountRows,
     allRecordsForCarryOver,
     allClientRecordsForCarryOver,
   ] = await Promise.all([
@@ -64,6 +65,11 @@ export default async function DashboardPage({
       billed: sql<number>`count(*) filter (where ${monthlyClientRecords.invoice_sent_at} is not null)`,
       paid: sql<number>`count(*) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null)`,
     }).from(monthlyClientRecords).groupBy(monthlyClientRecords.billing_item_id),
+    db.select({
+      assignment_id: monthlyRecords.assignment_id,
+      scheduled: sql<number>`count(*)`,
+      paid: sql<number>`count(*) filter (where ${monthlyRecords.contractor_paid_at} is not null)`,
+    }).from(monthlyRecords).groupBy(monthlyRecords.assignment_id),
     db.select({
       year: monthlyRecords.year,
       month: monthlyRecords.month,
@@ -106,6 +112,10 @@ export default async function DashboardPage({
     billedCounts[row.billing_item_id] = Number(row.billed)
     paidCounts[row.billing_item_id] = Number(row.paid)
   }
+  const assignmentPaymentCounts: Record<string, { scheduled: number; paid: number }> = {}
+  for (const row of assignmentPaymentCountRows) {
+    assignmentPaymentCounts[row.assignment_id] = { scheduled: Number(row.scheduled), paid: Number(row.paid) }
+  }
 
   // トークンの行が存在するだけでは「連携中」と言えない（リフレッシュトークン失効時も行は残る）。
   // 実際に有効なアクセストークンを取得できるかで連携状態を判定する。
@@ -128,6 +138,7 @@ export default async function DashboardPage({
       today={today.toISOString()}
       billedCounts={billedCounts}
       paidCounts={paidCounts}
+      assignmentPaymentCounts={assignmentPaymentCounts}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
       mfConnected={mfConnected}
       mfExpired={mfExpired}

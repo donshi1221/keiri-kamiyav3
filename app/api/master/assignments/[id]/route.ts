@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { assignments, monthlyRecords } from '@/lib/schema'
 import { eq, sql } from 'drizzle-orm'
+import { nowJST } from '@/lib/dates'
+import { generateMonthlyRecords } from '@/lib/monthly-records'
 
 export async function PATCH(
   req: NextRequest,
@@ -33,6 +35,8 @@ export async function PATCH(
     if (body.client_id !== undefined) patch.client_id = body.client_id
     if (body.role_name !== undefined) patch.role_name = body.role_name
     if (body.contractor_payout_amount !== undefined) patch.contractor_payout_amount = body.contractor_payout_amount
+    if (body.payment_start_month !== undefined) patch.payment_start_month = body.payment_start_month ? `${body.payment_start_month}-01` : null
+    if (body.payment_count !== undefined) patch.payment_count = body.payment_count
     if (body.spreadsheet_url !== undefined) patch.spreadsheet_url = body.spreadsheet_url
     if (body.active !== undefined) patch.active = body.active
 
@@ -41,6 +45,10 @@ export async function PATCH(
     }
 
     await db.update(assignments).set(patch).where(eq(assignments.id, id))
+
+    // 開始月・回数の編集後も、表示中の月に該当する月次レコードを自動生成する。
+    const today = nowJST()
+    await generateMonthlyRecords(today.getFullYear(), today.getMonth() + 1)
 
     const data = await db.query.assignments.findFirst({
       where: (a, { eq: eqFn }) => eqFn(a.id, id),

@@ -32,6 +32,8 @@ export async function POST(req: NextRequest) {
       client_id: body.client_id,
       role_name: body.role_name ?? '撮影+台本',
       contractor_payout_amount: body.contractor_payout_amount ?? 0,
+      payment_start_month: body.payment_start_month ? `${body.payment_start_month}-01` : null,
+      payment_count: body.payment_count ?? null,
       spreadsheet_url: body.spreadsheet_url ?? null,
       active: body.active ?? true,
     }).returning()

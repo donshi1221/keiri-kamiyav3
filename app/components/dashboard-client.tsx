@@ -101,6 +101,7 @@ interface Props {
   today: string
   billedCounts: Record<string, number>
   paidCounts: Record<string, number>
+  assignmentPaymentCounts: Record<string, { scheduled: number; paid: number }>
   mfExpense: { amount: number; syncedAt: string } | null
   mfConnected: boolean
   mfExpired: boolean
@@ -110,7 +111,7 @@ interface Props {
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -660,6 +661,9 @@ export default function DashboardClient({
                         <td className="py-3 px-4">
                           <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
                           <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                          {asgn && assignmentPaymentCounts[asgn.id] && (
+                            <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-right">
                           {isVideoEditor ? (
@@ -740,6 +744,9 @@ export default function DashboardClient({
                       <div>
                         <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
                         <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                        {asgn && assignmentPaymentCounts[asgn.id] && (
+                          <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
+                        )}
                       </div>
                       {isVideoEditor ? (
                         <PayoutInput
