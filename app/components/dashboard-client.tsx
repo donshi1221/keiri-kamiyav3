@@ -822,25 +822,15 @@ export default function DashboardClient({
                           })()}
                         </td>
                         <td className="py-3 px-3 text-right">
-                          {isVideoEditor ? (
-                            <PayoutInput
-                              recordId={r.id}
-                              initialValue={r.actual_payout_amount}
-                              onSaved={(val) =>
-                                setLocalRecords((prev) =>
-                                  prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
-                                )
-                              }
-                              onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
-                            />
-                          ) : (
-                            <span className="text-gray-600">
-                              {(() => {
-                                const payout = r.payout_amount_snapshot ?? asgn?.contractor_payout_amount
-                                return payout ? `¥${payout.toLocaleString()}` : '—'
-                              })()}
-                            </span>
-                          )}
+                          <span className="text-gray-600">
+                            {(() => {
+                              // 編集者は本数チェックの「反映」で入る実支払額、代行者はマスタの契約額を表示（いずれも表示専用）。
+                              const payout = isVideoEditor
+                                ? r.actual_payout_amount
+                                : (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount)
+                              return payout ? `¥${payout.toLocaleString()}` : '—'
+                            })()}
+                          </span>
                         </td>
                         <td className="text-center py-3 px-3">
                           <MoneyCheckControl
@@ -916,25 +906,14 @@ export default function DashboardClient({
                           )
                         })()}
                       </div>
-                      {isVideoEditor ? (
-                        <PayoutInput
-                          recordId={r.id}
-                          initialValue={r.actual_payout_amount}
-                          onSaved={(val) =>
-                            setLocalRecords((prev) =>
-                              prev.map((x) => x.id === r.id ? { ...x, actual_payout_amount: val } : x)
-                            )
-                          }
-                          onError={() => showError('金額の保存に失敗しました。もう一度お試しください。')}
-                        />
-                      ) : (
-                        <span className="shrink-0 text-sm text-gray-600">
-                          {(() => {
-                            const payout = r.payout_amount_snapshot ?? asgn?.contractor_payout_amount
-                            return payout ? `¥${payout.toLocaleString()}` : '—'
-                          })()}
-                        </span>
-                      )}
+                      <span className="shrink-0 text-sm text-gray-600">
+                        {(() => {
+                          const payout = isVideoEditor
+                            ? r.actual_payout_amount
+                            : (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount)
+                          return payout ? `¥${payout.toLocaleString()}` : '—'
+                        })()}
+                      </span>
                     </div>
                     <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2">
                       <div className="flex flex-col items-center gap-1">
@@ -1533,57 +1512,3 @@ export default function DashboardClient({
   )
 }
 
-function PayoutInput({ recordId, initialValue, onSaved, onError }: {
-  recordId: string
-  initialValue: number | null
-  onSaved: (val: number | null) => void
-  onError: () => void
-}) {
-  const [value, setValue] = useState(initialValue?.toString() ?? '')
-  const [feedback, setFeedback] = useState<'idle' | 'saving' | 'saved'>('idle')
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // 本数チェックの「反映」ボタンなど、この入力欄の外から金額が変わったときに表示を追従させる。
-  useEffect(() => { setValue(initialValue?.toString() ?? '') }, [initialValue])
-
-  async function save() {
-    setFeedback('saving')
-    try {
-      const res = await fetch(`/api/checklist/records/${recordId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ field: 'actual_payout_amount', value }),
-      })
-      if (!res.ok) throw new Error('save failed')
-      const data = await res.json()
-      onSaved(data.actual_payout_amount)
-      setFeedback('saved')
-      if (timerRef.current) clearTimeout(timerRef.current)
-      timerRef.current = setTimeout(() => setFeedback('idle'), 1500)
-    } catch {
-      setFeedback('idle')
-      onError()
-    }
-  }
-
-  return (
-    <div className="flex items-center justify-end gap-1">
-      <div className="relative flex items-center">
-        <input
-          type="number"
-          inputMode="numeric"
-          value={value}
-          placeholder="未入力"
-          onChange={(e) => setValue(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
-          className="w-[88px] rounded border border-gray-200 bg-gray-50 pl-2 pr-6 py-1 text-right text-sm [appearance:textfield] [-moz-appearance:textfield] focus:outline-none focus:ring-1 focus:ring-gray-400"
-        />
-        <span className="absolute right-1.5 text-gray-400 pointer-events-none text-xs">✏️</span>
-      </div>
-      {feedback === 'saved' && (
-        <span className="text-xs text-success whitespace-nowrap">保存 ✓</span>
-      )}
-    </div>
-  )
-}
