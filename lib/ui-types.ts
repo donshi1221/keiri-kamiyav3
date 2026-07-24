@@ -36,3 +36,29 @@ export type ClientRecordWithClient = MonthlyClientRecord & {
   clients: Pick<Client, 'id' | 'name'> | null
   billing_items?: Pick<ClientBillingItem, 'id' | 'label' | 'contract_months'> | null
 }
+
+// ─── 納品チェック（app/delivery）─────────────────────────────
+// 編集者スプレッドシートを読んで「対象月に納品すべき本数／実際に納品済みの本数」を数えた結果の1行。
+// システムはDBに書き込まず、この集計結果を表示するだけ（合否判定・請求書との照合は人が行う）。
+export type DeliveryCheckStatus =
+  | 'ok' //            集計成功
+  | 'no_url' //        アサインにスプレッドシートURLが未登録
+  | 'bad_url' //       URLからスプレッドシートIDを取り出せない
+  | 'no_tab' //        対象月のタブが見つからない
+  | 'ambiguous_tab' // 対象月に一致するタブが複数あり特定できない
+  | 'no_api_key' //    GOOGLE_SHEETS_API_KEY 未設定
+  | 'forbidden' //     非公開シート or APIキー権限不足で読めない
+  | 'fetch_error' //   その他の取得失敗
+
+export interface DeliveryCheckRow {
+  assignmentId: string
+  contractorName: string
+  clientName: string
+  roleName: string
+  spreadsheetUrl: string | null
+  status: DeliveryCheckStatus
+  tabTitle: string | null //  実際に読んだタブ名（例:「6月度」）
+  expected: number | null //  納品すべき本数（A列の〆切が対象月の行数）
+  delivered: number | null // 納品済み本数（うちD列にURLがある行数）
+  message: string | null //   補足・エラー内容（人間向け）
+}

@@ -26,3 +26,11 @@ export const MF_EXPENSE_ACCOUNTS = (process.env.MF_EXPENSE_ACCOUNTS ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)
+
+// ─── 納品チェック（編集者スプレッドシート）─────────────────────────────
+// 編集者の納品スプレッドシートは全員同じ列構成（A:納品〆切 / B:本数 / C:動画のNo / D:納品URL）。
+// 列は0始まりのインデックスで持ち、将来レイアウトが変わっても env で追従できるようにする。
+export const DELIVERY_COL_DEADLINE = intFromEnv('DELIVERY_COL_DEADLINE', 0) // A列: 納品〆切
+export const DELIVERY_COL_URL = intFromEnv('DELIVERY_COL_URL', 3) //          D列: 納品URL
+// 先頭の見出し行を読み飛ばす行数。既定1（1行目が「納品〆切, 本数, 動画のNo, 納品URL」の見出し）。
+export const DELIVERY_HEADER_ROWS = intFromEnv('DELIVERY_HEADER_ROWS', 1)

@@ -3,11 +3,12 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, History, Users, BookText, LogOut, Download } from 'lucide-react'
+import { LayoutDashboard, History, PackageCheck, Users, BookText, LogOut, Download } from 'lucide-react'
 
 const links = [
   { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
   { href: '/history', label: '履歴', icon: History },
+  { href: '/delivery', label: '納品チェック', icon: PackageCheck },
   { href: '/master', label: 'マスタ管理', icon: Users },
   { href: '/tax', label: '税務メモ', icon: BookText },
 ]

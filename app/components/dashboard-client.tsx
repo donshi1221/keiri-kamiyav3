@@ -11,6 +11,7 @@ import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow } from '@/lib/ui-types'
+import { DELIVERY_STATUS_LABEL, deliveryTone } from '@/lib/delivery-status'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 
@@ -35,6 +36,33 @@ function DueBadge({ state }: { state: DueState }) {
 function formatShortDate(iso: string): string {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+// 編集者1人分の本数チェック結果。「要確認」とだけ出すと原因が分からず調べようがないため、
+// 理由のラベルと具体的な説明文（どのタブが無い・何の権限が足りない等）を必ず添える。
+function DeliveryCheckNote({ row }: { row: DeliveryCheckRow }) {
+  const tone = deliveryTone(row)
+  if (row.status !== 'ok') {
+    const label = DELIVERY_STATUS_LABEL[row.status]
+    // 対象月のタブが未作成なだけのケースは、設定不備と混ざらないよう控えめに出す。
+    if (tone === 'none') {
+      return <div className="text-xs text-muted-foreground">本数チェック: 対象なし（{label}）</div>
+    }
+    return (
+      <div className="text-xs text-danger">
+        <div>本数チェック: 要確認（{label}）</div>
+        {row.message && <div className="text-muted-foreground">{row.message}</div>}
+      </div>
+    )
+  }
+  if (tone === 'none') {
+    return <div className="text-xs text-muted-foreground">本数チェック: 対象なし</div>
+  }
+  return (
+    <div className={`text-xs ${tone === 'done' ? 'text-success' : 'text-warning'}`}>
+      本数チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
+    </div>
+  )
 }
 
 // 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
@@ -662,9 +690,10 @@ export default function DashboardClient({
         {deliveryRows && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-gray-50 px-4 py-2 text-xs">
             <span className="text-gray-600">本数チェック: {deliveryRows.length}件</span>
-            <span className="text-success">揃った {deliveryRows.filter((r) => r.status === 'ok' && (r.expected ?? 0) > 0 && (r.delivered ?? 0) >= (r.expected ?? 0)).length}件</span>
-            <span className="text-warning">未達 {deliveryRows.filter((r) => r.status === 'ok' && (r.expected ?? 0) > (r.delivered ?? 0)).length}件</span>
-            <span className="text-danger">要確認 {deliveryRows.filter((r) => r.status !== 'ok').length}件</span>
+            <span className="text-success">揃った {deliveryRows.filter((r) => deliveryTone(r) === 'done').length}件</span>
+            <span className="text-warning">未達 {deliveryRows.filter((r) => deliveryTone(r) === 'short').length}件</span>
+            <span className="text-muted-foreground">対象なし {deliveryRows.filter((r) => deliveryTone(r) === 'none').length}件</span>
+            <span className="text-danger">要確認 {deliveryRows.filter((r) => deliveryTone(r) === 'attention').length}件</span>
           </div>
         )}
         {localRecords.length === 0 ? (
@@ -701,9 +730,7 @@ export default function DashboardClient({
                           )}
                           {isVideoEditor && (() => {
                             const result = deliveryResult(asgn?.id)
-                            if (!result) return null
-                            if (result.status !== 'ok') return <div className="text-xs text-danger">本数チェック: 要確認</div>
-                            return <div className={`text-xs ${(result.delivered ?? 0) >= (result.expected ?? 0) ? 'text-success' : 'text-warning'}`}>本数チェック: {result.delivered ?? 0}/{result.expected ?? 0}本</div>
+                            return result ? <DeliveryCheckNote row={result} /> : null
                           })()}
                         </td>
                         <td className="py-3 px-3 text-right">
@@ -790,9 +817,7 @@ export default function DashboardClient({
                         )}
                         {isVideoEditor && (() => {
                           const result = deliveryResult(asgn?.id)
-                          if (!result) return null
-                          if (result.status !== 'ok') return <div className="text-xs text-danger">本数チェック: 要確認</div>
-                          return <div className={`text-xs ${(result.delivered ?? 0) >= (result.expected ?? 0) ? 'text-success' : 'text-warning'}`}>本数チェック: {result.delivered ?? 0}/{result.expected ?? 0}本</div>
+                          return result ? <DeliveryCheckNote row={result} /> : null
                         })()}
                       </div>
                       {isVideoEditor ? (
