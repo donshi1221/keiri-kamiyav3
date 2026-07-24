@@ -59,6 +59,8 @@ export interface DeliveryCheckRow {
   spreadsheetUrl: string | null
   status: DeliveryCheckStatus
   tabTitle: string | null //  実際に読んだタブ名（例:「6月度」）
+  // 該当月タブを直接開くURL。タブを特定できたときだけ入る（未特定時は spreadsheetUrl で代用する）。
+  tabUrl: string | null
   expected: number | null //  納品すべき本数（A列の〆切が対象月の行数）
   delivered: number | null // 納品済み本数（うちD列にURLがある行数）
   message: string | null //   補足・エラー内容（人間向け）

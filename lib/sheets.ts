@@ -34,6 +34,12 @@ export function extractSpreadsheetId(url: string): string | null {
   return m ? m[1] : null
 }
 
+// 特定のタブを直接開くURL。gid はタブごとの内部IDで、これを付けるとそのタブが選択された状態で開く。
+// 本数がずれたときに「どの行が未記入か」をすぐ確認できるようにするため、月タブまで案内する。
+export function buildTabUrl(spreadsheetId: string, sheetId: number): string {
+  return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`
+}
+
 // タブ名から対象月（N月）を含むものを選ぶ。数字直前に別の数字が来る誤検出（例:16月）は除外する。
 export function pickMonthTab(
   tabs: SheetTab[],
@@ -111,6 +117,7 @@ export async function checkAssignmentDelivery(
     spreadsheetUrl: input.spreadsheetUrl,
     status: 'ok',
     tabTitle: null,
+    tabUrl: null,
     expected: null,
     delivered: null,
     message: null,
@@ -127,17 +134,19 @@ export async function checkAssignmentDelivery(
     const tabs = await fetchTabs(spreadsheetId, apiKey)
     const { tab, ambiguous, matchedTitles } = pickMonthTab(tabs, month)
     if (!tab) return { ...base, status: 'no_tab', message: `「${month}月」を含むタブが見つかりません` }
+    const tabUrl = buildTabUrl(spreadsheetId, tab.sheetId)
     if (ambiguous) {
       return {
         ...base,
         status: 'ambiguous_tab',
         tabTitle: tab.title,
+        tabUrl,
         message: `「${month}月」に一致するタブが複数あります（${matchedTitles.join(' / ')}）。タブ名を1つに整理してください`,
       }
     }
     const values = await fetchTabValues(spreadsheetId, tab.title, apiKey)
     const { expected, delivered } = countDeliveries(values, month)
-    return { ...base, status: 'ok', tabTitle: tab.title, expected, delivered }
+    return { ...base, status: 'ok', tabTitle: tab.title, tabUrl, expected, delivered }
   } catch (err) {
     if (err instanceof SheetsError) {
       if (err.httpStatus === 403) {

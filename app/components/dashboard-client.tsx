@@ -51,6 +51,20 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
   const [confirming, setConfirming] = useState(false)
   const tone = deliveryTone(row)
 
+  // 本数がずれている・確認が要るときは、その場でシートを開けるようにする。
+  // タブを特定できていれば該当月のタブへ、できていなければシート本体へ飛ばす。
+  const sheetHref = row.tabUrl ?? row.spreadsheetUrl
+  const sheetLink = sheetHref && (
+    <a
+      href={sheetHref}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex h-11 items-center rounded px-1 font-medium text-info underline underline-offset-2 hover:bg-info-subtle md:h-6"
+    >
+      {row.tabTitle ? `${row.tabTitle.trim()}を開く` : 'シートを開く'}
+    </a>
+  )
+
   if (row.status !== 'ok') {
     const label = DELIVERY_STATUS_LABEL[row.status]
     // 対象月のタブが未作成なだけのケースは、設定不備と混ざらないよう控えめに出す。
@@ -59,7 +73,10 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
     }
     return (
       <div className="text-xs text-danger">
-        <div>本数チェック: 要確認（{label}）</div>
+        <div className="flex flex-wrap items-center gap-x-2">
+          <span>本数チェック: 要確認（{label}）</span>
+          {sheetLink}
+        </div>
         {row.message && <div className="text-muted-foreground">{row.message}</div>}
       </div>
     )
@@ -74,6 +91,8 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
       <span className={tone === 'done' ? 'text-success' : 'text-warning'}>
         本数チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
       </span>
+      {/* 揃っていない月だけ、未記入の行を確かめられるようシートへの導線を出す。 */}
+      {tone === 'short' && sheetLink}
       {tone === 'done' && unitPrice <= 0 && <span className="text-muted-foreground">単価未設定</span>}
       {amount !== null && amount === currentAmount && <span className="text-muted-foreground">金額反映済み</span>}
       {amount !== null && amount !== currentAmount && !confirming && (
