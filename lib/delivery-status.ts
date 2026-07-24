@@ -30,3 +30,24 @@ export function deliveryTone(row: DeliveryCheckRow): DeliveryTone {
   if (expected === 0) return 'none'
   return (row.delivered ?? 0) >= expected ? 'done' : 'short'
 }
+
+// 支払いは前月に納品された分に対して行うため、ダッシュボードの「N月」の行に対応する納品月は N-1 月。
+// 1月表示なら前年12月に繰り下がる。
+export function deliveryTargetMonth(year: number, month: number): { year: number; month: number } {
+  const d = new Date(year, month - 2, 1)
+  return { year: d.getFullYear(), month: d.getMonth() + 1 }
+}
+
+// チェック結果はダッシュボードと納品チェック画面で共有する。画面を移動しても消えないよう、
+// タブを閉じれば消える sessionStorage に対象年月ごとに分けて置く（DBには保存しない集計結果のため）。
+export function deliveryCacheKey(year: number, month: number): string {
+  return `delivery-check:${year}-${month}`
+}
+
+// 実支払額の候補。「揃った月だけ 本数 × 単価」（ユーザー決定）。
+// 未達の月に満額が入ると過払いにつながるため、揃っていなければ候補を出さない。
+export function suggestedPayout(row: DeliveryCheckRow, unitPrice: number): number | null {
+  if (deliveryTone(row) !== 'done') return null
+  if (unitPrice <= 0) return null
+  return (row.delivered ?? 0) * unitPrice
+}

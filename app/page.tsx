@@ -36,7 +36,7 @@ export default async function DashboardPage({
       with: {
         assignments: {
           with: {
-            contractors: { columns: { id: true, name: true, contractor_type: true } },
+            contractors: { columns: { id: true, name: true, contractor_type: true, unit_price: true } },
             clients: { columns: { id: true, name: true } },
           },
         },

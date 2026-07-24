@@ -11,7 +11,7 @@ import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow } from '@/lib/ui-types'
-import { DELIVERY_STATUS_LABEL, deliveryTone } from '@/lib/delivery-status'
+import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 
@@ -40,8 +40,17 @@ function formatShortDate(iso: string): string {
 
 // 編集者1人分の本数チェック結果。「要確認」とだけ出すと原因が分からず調べようがないため、
 // 理由のラベルと具体的な説明文（どのタブが無い・何の権限が足りない等）を必ず添える。
-function DeliveryCheckNote({ row }: { row: DeliveryCheckRow }) {
+// 本数が揃っている場合だけ、実支払額（本数×単価）を反映するボタンを出す。
+function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
+  row: DeliveryCheckRow
+  unitPrice: number
+  currentAmount: number | null
+  onApply: (amount: number) => void
+}) {
+  // 金額の上書きは戻せないため、既存の金額と食い違うときだけ確認ステップを挟む。
+  const [confirming, setConfirming] = useState(false)
   const tone = deliveryTone(row)
+
   if (row.status !== 'ok') {
     const label = DELIVERY_STATUS_LABEL[row.status]
     // 対象月のタブが未作成なだけのケースは、設定不備と混ざらないよう控えめに出す。
@@ -58,9 +67,43 @@ function DeliveryCheckNote({ row }: { row: DeliveryCheckRow }) {
   if (tone === 'none') {
     return <div className="text-xs text-muted-foreground">本数チェック: 対象なし</div>
   }
+
+  const amount = suggestedPayout(row, unitPrice)
   return (
-    <div className={`text-xs ${tone === 'done' ? 'text-success' : 'text-warning'}`}>
-      本数チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
+    <div className="flex flex-wrap items-center gap-x-2 text-xs">
+      <span className={tone === 'done' ? 'text-success' : 'text-warning'}>
+        本数チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
+      </span>
+      {tone === 'done' && unitPrice <= 0 && <span className="text-muted-foreground">単価未設定</span>}
+      {amount !== null && amount === currentAmount && <span className="text-muted-foreground">金額反映済み</span>}
+      {amount !== null && amount !== currentAmount && !confirming && (
+        <button
+          type="button"
+          onClick={() => currentAmount === null ? onApply(amount) : setConfirming(true)}
+          className="flex h-11 items-center rounded border border-info/40 px-2 font-medium text-info hover:bg-info-subtle md:h-6"
+        >
+          ¥{amount.toLocaleString()} を反映
+        </button>
+      )}
+      {amount !== null && confirming && (
+        <span className="flex flex-wrap items-center gap-x-1">
+          <span className="text-gray-500">¥{(currentAmount ?? 0).toLocaleString()} → ¥{amount.toLocaleString()} に上書き？</span>
+          <button
+            type="button"
+            onClick={() => { onApply(amount); setConfirming(false) }}
+            className="flex h-11 items-center rounded px-2 font-medium text-destructive hover:bg-destructive/10 md:h-6"
+          >
+            上書き
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+          >
+            戻る
+          </button>
+        </span>
+      )}
     </div>
   )
 }
@@ -181,13 +224,28 @@ export default function DashboardClient({
     errorTimerRef.current = setTimeout(() => setErrorMsg(null), 4000)
   }
 
+  // 支払いは前月納品分に対して行うため、チェック対象は表示中の月ではなく前月。
+  const deliveryTarget = deliveryTargetMonth(year, month)
+
+  // 納品チェック画面（/delivery）で実行した結果をそのまま引き継ぐ。
+  // 画面を移動するたびに数え直すと、シートを人数分読むぶん待たされるため。
+  useEffect(() => {
+    const cached = sessionStorage.getItem(deliveryCacheKey(deliveryTarget.year, deliveryTarget.month))
+    setDeliveryRows(cached ? (JSON.parse(cached) as DeliveryCheckRow[]) : null)
+  }, [deliveryTarget.year, deliveryTarget.month])
+
   async function runDeliveryCheck() {
     setDeliveryLoading(true)
     try {
-      const res = await fetch(`/api/delivery/check?year=${year}&month=${month}`, { cache: 'no-store' })
+      const res = await fetch(
+        `/api/delivery/check?year=${deliveryTarget.year}&month=${deliveryTarget.month}`,
+        { cache: 'no-store' }
+      )
       const data = (await res.json().catch(() => null)) as { rows?: DeliveryCheckRow[]; error?: string } | null
       if (!res.ok) throw new Error(data?.error ?? '編集者の本数チェックに失敗しました。')
-      setDeliveryRows(data?.rows ?? [])
+      const rows = data?.rows ?? []
+      setDeliveryRows(rows)
+      sessionStorage.setItem(deliveryCacheKey(deliveryTarget.year, deliveryTarget.month), JSON.stringify(rows))
     } catch (err) {
       setDeliveryRows(null)
       showError(err instanceof Error ? err.message : '編集者の本数チェックに失敗しました。')
@@ -199,6 +257,24 @@ export default function DashboardClient({
   function deliveryResult(assignmentId: string | undefined): DeliveryCheckRow | null {
     if (!assignmentId || !deliveryRows) return null
     return deliveryRows.find((row) => row.assignmentId === assignmentId) ?? null
+  }
+
+  // 納品チェックの結果から実支払額を保存する。金額はDBに入る値のため、押されたときだけ実行する。
+  async function applyDeliveryPayout(recordId: string, amount: number) {
+    try {
+      const res = await fetch(`/api/checklist/records/${recordId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field: 'actual_payout_amount', value: String(amount) }),
+      })
+      if (!res.ok) throw new Error('save failed')
+      const data = (await res.json()) as { actual_payout_amount: number | null }
+      setLocalRecords((prev) =>
+        prev.map((x) => x.id === recordId ? { ...x, actual_payout_amount: data.actual_payout_amount } : x)
+      )
+    } catch {
+      showError('金額の保存に失敗しました。もう一度お試しください。')
+    }
   }
 
   useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
@@ -683,13 +759,13 @@ export default function DashboardClient({
           <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
           {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
             <Button size="sm" variant="outline" onClick={runDeliveryCheck} disabled={deliveryLoading}>
-              {deliveryLoading ? '本数チェック中…' : '編集者の本数をチェック'}
+              {deliveryLoading ? '本数チェック中…' : `編集者の本数をチェック（${deliveryTarget.month}月分）`}
             </Button>
           )}
         </div>
         {deliveryRows && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-gray-50 px-4 py-2 text-xs">
-            <span className="text-gray-600">本数チェック: {deliveryRows.length}件</span>
+            <span className="text-gray-600">{deliveryTarget.year}年{deliveryTarget.month}月分の納品: {deliveryRows.length}件</span>
             <span className="text-success">揃った {deliveryRows.filter((r) => deliveryTone(r) === 'done').length}件</span>
             <span className="text-warning">未達 {deliveryRows.filter((r) => deliveryTone(r) === 'short').length}件</span>
             <span className="text-muted-foreground">対象なし {deliveryRows.filter((r) => deliveryTone(r) === 'none').length}件</span>
@@ -730,7 +806,15 @@ export default function DashboardClient({
                           )}
                           {isVideoEditor && (() => {
                             const result = deliveryResult(asgn?.id)
-                            return result ? <DeliveryCheckNote row={result} /> : null
+                            if (!result) return null
+                            return (
+                              <DeliveryCheckNote
+                                row={result}
+                                unitPrice={asgn?.contractors?.unit_price ?? 0}
+                                currentAmount={r.actual_payout_amount}
+                                onApply={(amount) => applyDeliveryPayout(r.id, amount)}
+                              />
+                            )
                           })()}
                         </td>
                         <td className="py-3 px-3 text-right">
@@ -817,7 +901,15 @@ export default function DashboardClient({
                         )}
                         {isVideoEditor && (() => {
                           const result = deliveryResult(asgn?.id)
-                          return result ? <DeliveryCheckNote row={result} /> : null
+                          if (!result) return null
+                          return (
+                            <DeliveryCheckNote
+                              row={result}
+                              unitPrice={asgn?.contractors?.unit_price ?? 0}
+                              currentAmount={r.actual_payout_amount}
+                              onApply={(amount) => applyDeliveryPayout(r.id, amount)}
+                            />
+                          )
                         })()}
                       </div>
                       {isVideoEditor ? (
@@ -1442,6 +1534,9 @@ function PayoutInput({ recordId, initialValue, onSaved, onError }: {
   const [value, setValue] = useState(initialValue?.toString() ?? '')
   const [feedback, setFeedback] = useState<'idle' | 'saving' | 'saved'>('idle')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 本数チェックの「反映」ボタンなど、この入力欄の外から金額が変わったときに表示を追従させる。
+  useEffect(() => { setValue(initialValue?.toString() ?? '') }, [initialValue])
 
   async function save() {
     setFeedback('saving')

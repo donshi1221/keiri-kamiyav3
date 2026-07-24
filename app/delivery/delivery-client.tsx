@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { DeliveryCheckRow } from '@/lib/ui-types'
-import { DELIVERY_STATUS_LABEL, deliveryTone, type DeliveryTone } from '@/lib/delivery-status'
+import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryCacheKey, type DeliveryTone } from '@/lib/delivery-status'
 
 interface Props {
   initialYear: number
@@ -36,6 +36,14 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
   const [rows, setRows] = useState<DeliveryCheckRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // 対象月ごとの結果はダッシュボードと共有する。ここでチェックすればダッシュボードでも
+  // そのまま金額の反映まで進められるようにするため（画面を往復しても数え直さない）。
+  useEffect(() => {
+    const cached = sessionStorage.getItem(deliveryCacheKey(year, month))
+    setRows(cached ? (JSON.parse(cached) as DeliveryCheckRow[]) : null)
+    setError(null)
+  }, [year, month])
+
   function shiftMonth(delta: number) {
     let y = year
     let m = month + delta
@@ -43,9 +51,6 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
     if (m < 1) { m = 12; y-- }
     setYear(y)
     setMonth(m)
-    // 対象月を変えたら前回の結果は消す（別の月の結果を見間違えないため）。
-    setRows(null)
-    setError(null)
   }
 
   async function runCheck() {
@@ -59,6 +64,7 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
       }
       const data = (await res.json()) as { rows: DeliveryCheckRow[] }
       setRows(data.rows)
+      sessionStorage.setItem(deliveryCacheKey(year, month), JSON.stringify(data.rows))
     } catch (e) {
       setError(e instanceof Error ? e.message : '通信に失敗しました')
       setRows(null)

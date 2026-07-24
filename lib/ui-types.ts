@@ -15,7 +15,8 @@ import type {
 // monthlyRecords（両画面のクエリは同一）
 export type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {
-    contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
+    // unit_price は納品チェックの結果から実支払額（本数×単価）を出すために取得する。
+    contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type' | 'unit_price'> | null
     clients: Pick<Client, 'id' | 'name'> | null
   }) | null
 }
