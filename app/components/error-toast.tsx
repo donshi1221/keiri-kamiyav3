@@ -6,7 +6,7 @@ export default function ErrorToast({ message, onClose }: { message: string; onCl
   return (
     <div
       role="alert"
-      className="flex items-center justify-between gap-3 rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm text-danger"
+      className="fixed inset-x-4 bottom-20 z-[60] flex items-center justify-between gap-3 rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm text-danger shadow-lg md:inset-x-auto md:right-4 md:bottom-4 md:max-w-md"
     >
       <span>{message}</span>
       <button

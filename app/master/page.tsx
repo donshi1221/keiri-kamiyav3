@@ -60,7 +60,7 @@ function Dialog({ open, onClose, title, children }: {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6 max-h-[85dvh] overflow-y-auto">
         <h2 className="text-base font-semibold mb-4">{title}</h2>
         {children}
       </div>
@@ -77,6 +77,7 @@ export default function MasterPage() {
   const [clients, setClients] = useState<ClientWithItems[]>([])
   const [assignments, setAssignments] = useState<AssignmentWithRelations[]>([])
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const showError = useCallback((msg: string) => {
@@ -99,6 +100,8 @@ export default function MasterPage() {
       setAssignments(a ?? [])
     } catch {
       showError('データの読み込みに失敗しました。接続を確認して再読み込みしてください。')
+    } finally {
+      setLoading(false)
     }
   }, [showError])
 
@@ -121,11 +124,17 @@ export default function MasterPage() {
         ))}
       </div>
 
-      {tab === 'contractor' && (
-        <ContractorTab contractors={contractors} assignments={assignments} clients={clients} onRefresh={load} onError={showError} />
-      )}
-      {tab === 'client' && (
-        <ClientTab clients={clients} contractors={contractors} assignments={assignments} onRefresh={load} onError={showError} />
+      {loading ? (
+        <p className="text-sm text-gray-500">読み込み中…</p>
+      ) : (
+        <>
+          {tab === 'contractor' && (
+            <ContractorTab contractors={contractors} assignments={assignments} clients={clients} onRefresh={load} onError={showError} />
+          )}
+          {tab === 'client' && (
+            <ClientTab clients={clients} contractors={contractors} assignments={assignments} onRefresh={load} onError={showError} />
+          )}
+        </>
       )}
     </div>
   )
@@ -211,7 +220,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
       </div>
 
       {contractors.length === 0 ? (
-        <p className="text-sm text-gray-400">委託者が登録されていません</p>
+        <p className="text-sm text-gray-600">委託者が登録されていません</p>
       ) : (
         contractors.map((c) => {
           const myAssignments = assignments.filter((a) => a.contractor_id === c.id)
@@ -225,22 +234,22 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                 {c.contractor_type === 'video_editor' && c.unit_price > 0 && (
                   <span className="text-xs text-gray-500">単価 ¥{c.unit_price.toLocaleString()}/本</span>
                 )}
-                {c.email && <span className="text-xs text-gray-400">{c.email}</span>}
-                <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline">編集</button>
-                <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline">削除</button>
+                {c.email && <span className="text-xs text-gray-500">{c.email}</span>}
+                <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
+                <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
                   <button
                     onClick={() => setAddAssignOpen(c.id)}
-                    className="text-xs text-info hover:underline"
+                    className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0"
                   >
                     + アサインを追加
                   </button>
                 </div>
                 {myAssignments.length === 0 ? (
-                  <p className="text-xs text-gray-400 py-1">なし</p>
+                  <p className="text-xs text-gray-600 py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
                     {myAssignments.map((a) => {
@@ -268,9 +277,9 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                               </span>
                             )}
                           </span>
-                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
+                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
                           {a.active && (
-                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
                           )}
                         </div>
                       )
@@ -467,7 +476,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
       </div>
 
       {clients.length === 0 ? (
-        <p className="text-sm text-gray-400">クライアントが登録されていません</p>
+        <p className="text-sm text-gray-600">クライアントが登録されていません</p>
       ) : (
         clients.map((cl) => {
           const myAssignments = assignments.filter((a) => a.client_id === cl.id)
@@ -484,8 +493,8 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                 {totalBilling > 0 && (
                   <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
                 )}
-                <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline">編集</button>
-                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline">削除</button>
+                <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
+                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
               </div>
               {/* 請求内訳の一覧（金額・契約期間・停止中を一目で確認） */}
               {items.length > 0 && (
@@ -501,7 +510,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                           {it.billing_amount > 0 ? `¥${it.billing_amount.toLocaleString()}` : '—'}
                         </span>
                         {it.contract_start && (
-                          <span className="text-xs text-gray-400">
+                          <span className="text-xs text-gray-500">
                             {it.contract_start.slice(0, 7)}
                             {it.contract_months ? `〜${it.contract_months}ヶ月` : '〜'}
                           </span>
@@ -515,12 +524,12 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
-                  <button onClick={() => setAddAssignOpen(cl.id)} className="text-xs text-info hover:underline">
+                  <button onClick={() => setAddAssignOpen(cl.id)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">
                     + アサインを追加
                   </button>
                 </div>
                 {myAssignments.length === 0 ? (
-                  <p className="text-xs text-gray-400 py-1">なし</p>
+                  <p className="text-xs text-gray-600 py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
                     {myAssignments.map((a) => {
@@ -540,9 +549,9 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                               </span>
                             )}
                           </span>
-                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline">編集</button>
+                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
                           {a.active && (
-                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline">削除</button>
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
                           )}
                         </div>
                       )
@@ -736,7 +745,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           <div>
             <label className="text-sm font-medium block mb-1">単価（1本あたり）</label>
             <input type="number" inputMode="numeric" min="0" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-            <p className="mt-1 text-xs text-gray-400">クライアントの月本数と掛け合わせて、フル納品時の支払額を自動計算します。</p>
+            <p className="mt-1 text-xs text-gray-600">クライアントの月本数と掛け合わせて、フル納品時の支払額を自動計算します。</p>
           </div>
         )}
         <div>
@@ -784,12 +793,15 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
   const [removedIds, setRemovedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  // 新規作成が途中で失敗した後の再保存で、クライアント本体を二重登録しないための控え。
+  const [createdClientId, setCreatedClientId] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? '')
       setMonthlyVideoCount(initial?.monthly_video_count ? initial.monthly_video_count.toString() : '')
       setRemovedIds([])
+      setCreatedClientId(null)
       const existing = initial?.billing_items ?? []
       if (existing.length > 0) {
         setItems(existing.map((it) => ({
@@ -837,7 +849,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     try {
       // 1) クライアント本体（名前・月本数）を作成/更新して client_id を確定させる。
       const countNum = monthlyVideoCount ? Number(monthlyVideoCount) : 0
-      let clientId = initial?.id
+      let clientId = initial?.id ?? createdClientId ?? undefined
       if (initial) {
         // 変更のあった項目だけ送る（未送信の項目はサーバ側で触らない仕様）。
         const patch: Record<string, unknown> = {}
@@ -851,6 +863,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           })
           if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         }
+      } else if (clientId) {
+        // 前回の保存が途中で失敗している再保存。作成済みの本体には変更内容を上書き反映する。
+        const res = await fetch(`/api/master/clients/${clientId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, monthly_video_count: countNum }),
+        })
+        if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
       } else {
         const res = await fetch('/api/master/clients', {
           method: 'POST',
@@ -859,6 +879,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         clientId = (await res.json()).id
+        setCreatedClientId(clientId ?? null)
       }
 
       // 2) 削除された内訳を消す（月次記録があるとサーバ側で弾かれる＝過去データを守る）。
@@ -867,6 +888,8 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         if (!res.ok && res.status !== 404) {
           throw new Error(await readErrorMessage(res, '内訳の削除に失敗しました（過去の請求記録がある内訳は削除できません。停止に切り替えてください）。'))
         }
+        // 削除済みを控えから外し、再保存時に同じ削除を繰り返さない。
+        setRemovedIds((ids) => ids.filter((x) => x !== id))
       }
 
       // 3) 内訳を作成/更新する。表示順は並び順(index)で保存する。
@@ -887,6 +910,11 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
             body: JSON.stringify({ ...body, client_id: clientId }),
           })
           if (!res.ok) throw new Error(await readErrorMessage(res, '内訳の保存に失敗しました。'))
+          // 採番されたidを控え、再保存時に同じ内訳を二重登録しない（次回はPATCHになる）。
+          const createdId = (await res.json()).id as string | undefined
+          if (createdId) {
+            setItems((prev) => prev.map((p, idx) => (idx === i ? { ...p, id: createdId } : p)))
+          }
         }
       }
 
@@ -894,7 +922,8 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
       onSaved()
     } catch (err) {
       setSaving(false)
-      onError(err instanceof Error ? err.message : '通信に失敗しました。接続を確認して再度お試しください。')
+      const msg = err instanceof Error ? err.message : '通信に失敗しました。接続を確認して再度お試しください。'
+      onError(`${msg} 保存済みの項目はそのまま残り、再度「保存」すると失敗した箇所から保存し直します。`)
     }
   }
 
@@ -909,7 +938,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">月本数（動画）</label>
           <input type="number" inputMode="numeric" min="0" value={monthlyVideoCount} onChange={(e) => setMonthlyVideoCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-          <p className="mt-1 text-xs text-gray-400">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
+          <p className="mt-1 text-xs text-gray-600">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
         </div>
 
         <div>
@@ -919,7 +948,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
               <Plus size={12} /> 内訳を追加
             </button>
           </div>
-          <p className="mb-2 text-xs text-gray-400">
+          <p className="mb-2 text-xs text-gray-600">
             内訳ごとに金額と契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
           </p>
 
@@ -1132,7 +1161,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         <div>
           <label className="text-sm font-medium block mb-1">役割名 <span className="text-destructive">*</span></label>
           <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" placeholder="例: 紹介者" />
-          <p className="mt-1 text-xs text-gray-400">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
+          <p className="mt-1 text-xs text-gray-600">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
         </div>
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
@@ -1144,12 +1173,12 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
           <div>
             <label className="text-sm font-medium block mb-1">支払い開始月</label>
             <input type="month" value={paymentStartMonth} onChange={(e) => setPaymentStartMonth(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
-            <p className="mt-1 text-xs text-gray-400">未入力なら開始月を限定しません。</p>
+            <p className="mt-1 text-xs text-gray-600">未入力なら開始月を限定しません。</p>
           </div>
           <div>
             <label className="text-sm font-medium block mb-1">支払い回数</label>
             <input type="number" inputMode="numeric" min="1" value={paymentCount} onChange={(e) => setPaymentCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="継続" />
-            <p className="mt-1 text-xs text-gray-400">未入力なら継続扱いです。</p>
+            <p className="mt-1 text-xs text-gray-600">未入力なら継続扱いです。</p>
           </div>
         </div>
 

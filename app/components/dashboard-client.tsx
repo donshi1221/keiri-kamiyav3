@@ -154,7 +154,7 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
       >
         <Checkbox checked={checked} className="pointer-events-none" tabIndex={-1} />
       </button>
-      {checked && checkedAt && <span className="text-[10px] text-gray-400">{formatShortDate(checkedAt)}</span>}
+      {checked && checkedAt && <span className="text-[10px] text-gray-500">{formatShortDate(checkedAt)}</span>}
       {badge}
     </div>
   )
@@ -773,7 +773,11 @@ export default function DashboardClient({
           </div>
         )}
         {localRecords.length === 0 ? (
-          <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+          <p className="text-sm text-gray-500 p-4">
+            この月の支払記録はまだありません（毎月1日に自動で作成されます）。委託者やアサインが未登録の場合は{' '}
+            <Link href="/master" className="text-info underline">マスタ管理</Link>
+            {' '}から登録してください。
+          </p>
         ) : (
           <>
             {/* PC・タブレット表示（md以上）: 表形式 */}
@@ -783,9 +787,9 @@ export default function DashboardClient({
                   <tr>
                     <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
                     <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-400 font-normal">10日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-400 font-normal">末日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-500 font-normal">10日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-500 font-normal">末日</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -800,7 +804,7 @@ export default function DashboardClient({
                       <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
                         <td className="py-3 px-4">
                           <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
-                          <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                          <div className="text-xs text-gray-500">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                           {asgn && assignmentPaymentCounts[asgn.id] && (
                             <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
                           )}
@@ -895,7 +899,7 @@ export default function DashboardClient({
                     <div className="mb-2 flex items-start justify-between gap-2">
                       <div>
                         <div className="font-medium">{asgn?.contractors?.name ?? '?'}</div>
-                        <div className="text-xs text-gray-400">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                        <div className="text-xs text-gray-500">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                         {asgn && assignmentPaymentCounts[asgn.id] && (
                           <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
                         )}
@@ -934,7 +938,7 @@ export default function DashboardClient({
                     </div>
                     <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2">
                       <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500">受領<span className="ml-1 text-gray-400">10日</span></span>
+                        <span className="text-xs text-gray-500">受領<span className="ml-1 text-gray-500">10日</span></span>
                         <MoneyCheckControl
                           checked={!!r.invoice_received_at}
                           checkedAt={r.invoice_received_at}
@@ -947,7 +951,7 @@ export default function DashboardClient({
                         />
                       </div>
                       <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500">支払予約<span className="ml-1 text-gray-400">15日</span></span>
+                        <span className="text-xs text-gray-500">支払予約<span className="ml-1 text-gray-500">15日</span></span>
                         <MoneyCheckControl
                           checked={!!r.payment_reserved_at}
                           checkedAt={r.payment_reserved_at}
@@ -960,7 +964,7 @@ export default function DashboardClient({
                         />
                       </div>
                       <div className="flex flex-col items-center gap-1">
-                        <span className="text-xs text-gray-500">支払確認<span className="ml-1 text-gray-400">末日</span></span>
+                        <span className="text-xs text-gray-500">支払確認<span className="ml-1 text-gray-500">末日</span></span>
                         <MoneyCheckControl
                           checked={!!r.contractor_paid_at}
                           checkedAt={r.contractor_paid_at}
@@ -987,7 +991,11 @@ export default function DashboardClient({
           <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
         </div>
         {localClientRecords.length === 0 ? (
-          <p className="text-sm text-gray-400 p-4">レコード未生成</p>
+          <p className="text-sm text-gray-500 p-4">
+            この月の請求記録はまだありません（毎月1日に自動で作成されます）。クライアントが未登録の場合は{' '}
+            <Link href="/master" className="text-info underline">マスタ管理</Link>
+            {' '}から登録してください。
+          </p>
         ) : (
           <>
             {/* PC・タブレット表示（md以上）: 表形式 */}
@@ -997,8 +1005,8 @@ export default function DashboardClient({
                   <tr>
                     <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
                     <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-400 font-normal">15日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-400 font-normal">25日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-500 font-normal">25日</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1123,7 +1131,7 @@ export default function DashboardClient({
                             </div>
                             <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2">
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-400">15日</span></span>
+                                <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-500">15日</span></span>
                                 <MoneyCheckControl
                                   checked={!!cr.invoice_sent_at}
                                   checkedAt={cr.invoice_sent_at}
@@ -1136,7 +1144,7 @@ export default function DashboardClient({
                                 />
                               </div>
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-400">25日</span></span>
+                                <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-500">25日</span></span>
                                 <MoneyCheckControl
                                   checked={!!cr.payment_confirmed_at}
                                   checkedAt={cr.payment_confirmed_at}
@@ -1262,7 +1270,7 @@ export default function DashboardClient({
         )}
 
         {!localGlobal ? (
-          <p className="text-sm text-gray-400">今月のデータはまだ作成されていません。翌月1日に自動で生成されます。</p>
+          <p className="text-sm text-gray-600">今月のデータはまだ作成されていません。翌月1日に自動で生成されます。</p>
         ) : (
           <div className="space-y-2">
             {visibleGlobalTasks.map((t) => {
@@ -1292,7 +1300,7 @@ export default function DashboardClient({
                     </div>
                   ) : (
                     <>
-                      <span className="text-xs text-gray-400">{t.dueLabel}</span>
+                      <span className="text-xs text-gray-500">{t.dueLabel}</span>
                       {t.state === 'overdue' && (
                         <span className="text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
                       )}
@@ -1417,12 +1425,12 @@ export default function DashboardClient({
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">売上</p>
             <p className="text-xl font-medium text-gray-900">¥{revenue.toLocaleString()}</p>
-            <p className="text-xs text-gray-400 mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
+            <p className="text-xs text-gray-500 mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">外注費</p>
             <p className="text-xl font-medium text-gray-600">¥{contractorCost.toLocaleString()}</p>
-            <p className="text-xs text-gray-400 mt-0.5">委託者 {localRecords.length}件</p>
+            <p className="text-xs text-gray-500 mt-0.5">委託者 {localRecords.length}件</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
             <div className="flex items-center justify-between mb-1">
@@ -1432,7 +1440,7 @@ export default function DashboardClient({
             <p className="text-xl font-medium text-gray-600">
               {mfExpense ? `¥${mfExpense.amount.toLocaleString()}` : '—'}
             </p>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-500 mt-0.5">
               {mfExpense
                 ? `${new Date(mfExpense.syncedAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })} 同期済`
                 : '未同期'}
@@ -1444,7 +1452,7 @@ export default function DashboardClient({
               ¥{profit.toLocaleString()}
             </p>
             {revenue > 0 && (
-              <p className="text-xs text-gray-400 mt-0.5">
+              <p className="text-xs text-gray-500 mt-0.5">
                 利益率 {Math.round((profit / revenue) * 100)}%
               </p>
             )}
@@ -1488,7 +1496,7 @@ export default function DashboardClient({
 
         {/* スナップショット補完（欠損のみ）: 生成漏れ等でnullの金額を現マスタ値で埋める安全操作 */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-600">
             金額スナップショットの欠損を、現在のマスタ値で補完します（既存の値は変更しません）。
           </p>
           {snapshotConfirm ? (
@@ -1569,7 +1577,7 @@ function PayoutInput({ recordId, initialValue, onSaved, onError }: {
           onChange={(e) => setValue(e.target.value)}
           onBlur={save}
           onKeyDown={(e) => e.key === 'Enter' && save()}
-          className="w-[88px] rounded border border-gray-200 bg-gray-50 px-2 py-1 text-right text-sm [appearance:textfield] [-moz-appearance:textfield] focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="w-[88px] rounded border border-gray-200 bg-gray-50 pl-2 pr-6 py-1 text-right text-sm [appearance:textfield] [-moz-appearance:textfield] focus:outline-none focus:ring-1 focus:ring-gray-400"
         />
         <span className="absolute right-1.5 text-gray-400 pointer-events-none text-xs">✏️</span>
       </div>

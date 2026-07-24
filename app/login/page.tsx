@@ -47,8 +47,12 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            <label htmlFor="login-password" className="sr-only">パスワード</label>
             <input
+              id="login-password"
+              name="password"
               type="password"
+              autoComplete="current-password"
               autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}

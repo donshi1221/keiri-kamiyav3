@@ -5,8 +5,9 @@ import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { LayoutDashboard, History, PackageCheck, Users, BookText, LogOut, Download } from 'lucide-react'
 
-const links = [
-  { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
+// shortLabel: スマホ下部タブ用の短い表記（5タブの幅に収めるため）
+const links: { href: string; label: string; shortLabel?: string; icon: typeof LayoutDashboard }[] = [
+  { href: '/', label: 'ダッシュボード', shortLabel: 'ホーム', icon: LayoutDashboard },
   { href: '/history', label: '履歴', icon: History },
   { href: '/delivery', label: '納品チェック', icon: PackageCheck },
   { href: '/master', label: 'マスタ管理', icon: Users },
@@ -98,19 +99,19 @@ export default function Nav() {
         aria-label="メインナビゲーション"
       >
         <div className="flex">
-          {links.map(({ href, label, icon: Icon }) => {
+          {links.map(({ href, label, shortLabel, icon: Icon }) => {
             const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
             return (
               <Link
                 key={href}
                 href={href}
                 className={cn(
-                  'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px]',
+                  'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] whitespace-nowrap',
                   active ? 'text-gray-900' : 'text-gray-400'
                 )}
               >
                 <Icon size={20} />
-                {label}
+                {shortLabel ?? label}
               </Link>
             )
           })}

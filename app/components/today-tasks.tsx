@@ -79,7 +79,7 @@ export default function TodayTasks({ overdueItems, inWindowItems }: Props) {
     return (
       <section className="rounded-lg border bg-white p-4">
         <h2 className="text-sm font-semibold text-gray-700 mb-1">今日やること</h2>
-        <p className="text-sm text-gray-400">未対応のタスクはありません。</p>
+        <p className="text-sm text-gray-600">未対応のタスクはありません。</p>
       </section>
     )
   }

@@ -2,6 +2,16 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/schema'
 import ErrorToast from '@/app/components/error-toast'
 
@@ -32,7 +42,7 @@ function Dialog({ open, onClose, title, children }: {
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[85dvh] overflow-y-auto">
         <h2 className="text-base font-semibold mb-4">{title}</h2>
         {children}
       </div>
@@ -45,6 +55,7 @@ function Dialog({ open, onClose, title, children }: {
 // ─────────────────────────────────────────────
 export default function TaxPage() {
   const [entries, setEntries] = useState<TaxAdviceEntry[]>([])
+  const [deleteEntryTarget, setDeleteEntryTarget] = useState<TaxAdviceEntry | null>(null)
   const [sessions, setSessions] = useState<TaxChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<TaxChatMessage[]>([])
@@ -90,7 +101,6 @@ export default function TaxPage() {
   }, [activeSessionId])
 
   async function deleteEntry(id: string) {
-    if (!confirm('このエントリを削除しますか？')) return
     try {
       const res = await fetch(`/api/tax/advice/${id}`, { method: 'DELETE' })
       if (!res.ok) { setErrorMsg('エントリの削除に失敗しました。'); return }
@@ -119,11 +129,7 @@ export default function TaxPage() {
 
   return (
     <div>
-      {errorMsg && (
-        <div className="mb-4">
-          <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />
-        </div>
-      )}
+      {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
       <h1 className="text-xl font-bold mb-6">税務メモ</h1>
 
       {/* スマホ表示（md未満）: パネル切替タブ */}
@@ -181,16 +187,16 @@ export default function TaxPage() {
 
           <div className="flex-1 overflow-y-auto space-y-2">
             {entries.length === 0 ? (
-              <p className="text-sm text-gray-400">アドバイスが登録されていません</p>
+              <p className="text-sm text-gray-600">アドバイスが登録されていません</p>
             ) : (
               entries.map((e) => (
                 <div key={e.id} className="rounded-lg border bg-white p-3 text-sm">
                   <div className="flex items-start gap-1">
                     <span className="shrink-0">{e.source_type === 'file' ? '📎' : '📄'}</span>
                     <span className="flex-1 font-medium line-clamp-2 break-all">{e.title}</span>
-                    <button onClick={() => deleteEntry(e.id)} className="text-danger hover:text-danger shrink-0 ml-1">×</button>
+                    <button onClick={() => setDeleteEntryTarget(e)} aria-label="このアドバイスを削除" className="text-danger hover:text-danger shrink-0 ml-1 px-2 py-2 -my-2 md:p-0 md:my-0">×</button>
                   </div>
-                  <div className="text-xs text-gray-400 mt-1 ml-5">
+                  <div className="text-xs text-gray-500 mt-1 ml-5">
                     {new Date(e.created_at).toLocaleDateString('ja-JP')}
                   </div>
                 </div>
@@ -228,7 +234,7 @@ export default function TaxPage() {
               onFirstMessageSent={loadSessions}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-sm text-gray-400 border rounded-lg">
+            <div className="flex-1 flex items-center justify-center text-sm text-gray-600 border rounded-lg">
               「新しい会話」をクリックしてチャットを開始してください
             </div>
           )}
@@ -241,6 +247,29 @@ export default function TaxPage() {
         onSaved={() => { setAddTextOpen(false); loadEntries() }}
         onError={(msg) => setErrorMsg(msg)}
       />
+
+      <AlertDialog open={!!deleteEntryTarget} onOpenChange={(open) => { if (!open) setDeleteEntryTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>アドバイスを削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteEntryTarget?.title}」を削除します。この操作は取り消せません。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteEntryTarget) deleteEntry(deleteEntryTarget.id)
+                setDeleteEntryTarget(null)
+              }}
+            >
+              削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -354,14 +383,10 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
 
   return (
     <div className="flex-1 flex flex-col border rounded-lg overflow-hidden">
-      {errorMsg && (
-        <div className="p-2">
-          <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />
-        </div>
-      )}
+      {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !streaming && (
-          <p className="text-sm text-gray-400 text-center mt-8">メッセージを送信してください</p>
+          <p className="text-sm text-gray-600 text-center mt-8">メッセージを送信してください</p>
         )}
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
