@@ -31,8 +31,25 @@ export async function PATCH(
         }
         value = Math.round(n)
       }
+      // 本数チェックの「反映」からは videoCount も一緒に送られる（支払対象本数の控え）。
+      // 未指定なら本数列は触らない（金額だけの更新で既存の本数を消さないため）。
+      const patch: { actual_payout_amount: number | null; delivered_video_count?: number | null } = {
+        actual_payout_amount: value,
+      }
+      if (body.videoCount !== undefined) {
+        const vc = body.videoCount
+        if (vc === null || vc === '') {
+          patch.delivered_video_count = null
+        } else {
+          const c = Number(vc)
+          if (!Number.isInteger(c) || c < 0) {
+            return Response.json({ error: '本数には0以上の整数を指定してください' }, { status: 400 })
+          }
+          patch.delivered_video_count = c
+        }
+      }
       const [data] = await db.update(monthlyRecords)
-        .set({ actual_payout_amount: value })
+        .set(patch)
         .where(eq(monthlyRecords.id, id))
         .returning()
       if (!data) return Response.json({ error: 'Not found' }, { status: 404 })

@@ -45,7 +45,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
   row: DeliveryCheckRow
   unitPrice: number
   currentAmount: number | null
-  onApply: (amount: number) => void
+  onApply: (amount: number, videoCount: number) => void
 }) {
   // 金額の上書きは戻せないため、既存の金額と食い違うときだけ確認ステップを挟む。
   const [confirming, setConfirming] = useState(false)
@@ -79,7 +79,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
       {amount !== null && amount !== currentAmount && !confirming && (
         <button
           type="button"
-          onClick={() => currentAmount === null ? onApply(amount) : setConfirming(true)}
+          onClick={() => currentAmount === null ? onApply(amount, row.delivered ?? 0) : setConfirming(true)}
           className="flex h-11 items-center rounded border border-info/40 px-2 font-medium text-info hover:bg-info-subtle md:h-6"
         >
           ¥{amount.toLocaleString()} を反映
@@ -90,7 +90,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
           <span className="text-gray-500">¥{(currentAmount ?? 0).toLocaleString()} → ¥{amount.toLocaleString()} に上書き？</span>
           <button
             type="button"
-            onClick={() => { onApply(amount); setConfirming(false) }}
+            onClick={() => { onApply(amount, row.delivered ?? 0); setConfirming(false) }}
             className="flex h-11 items-center rounded px-2 font-medium text-destructive hover:bg-destructive/10 md:h-6"
           >
             上書き
@@ -259,18 +259,20 @@ export default function DashboardClient({
     return deliveryRows.find((row) => row.assignmentId === assignmentId) ?? null
   }
 
-  // 納品チェックの結果から実支払額を保存する。金額はDBに入る値のため、押されたときだけ実行する。
-  async function applyDeliveryPayout(recordId: string, amount: number) {
+  // 納品チェックの結果から実支払額と支払対象本数を保存する。DBに入る値のため、押されたときだけ実行する。
+  async function applyDeliveryPayout(recordId: string, amount: number, videoCount: number) {
     try {
       const res = await fetch(`/api/checklist/records/${recordId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ field: 'actual_payout_amount', value: String(amount) }),
+        body: JSON.stringify({ field: 'actual_payout_amount', value: String(amount), videoCount }),
       })
       if (!res.ok) throw new Error('save failed')
-      const data = (await res.json()) as { actual_payout_amount: number | null }
+      const data = (await res.json()) as { actual_payout_amount: number | null; delivered_video_count: number | null }
       setLocalRecords((prev) =>
-        prev.map((x) => x.id === recordId ? { ...x, actual_payout_amount: data.actual_payout_amount } : x)
+        prev.map((x) => x.id === recordId
+          ? { ...x, actual_payout_amount: data.actual_payout_amount, delivered_video_count: data.delivered_video_count }
+          : x)
       )
     } catch {
       showError('金額の保存に失敗しました。もう一度お試しください。')
@@ -867,7 +869,7 @@ export default function DashboardClient({
                                   row={result}
                                   unitPrice={asgn?.contractors?.unit_price ?? 0}
                                   currentAmount={r.actual_payout_amount}
-                                  onApply={(amount) => applyDeliveryPayout(r.id, amount)}
+                                  onApply={(amount, videoCount) => applyDeliveryPayout(r.id, amount, videoCount)}
                                 />
                               )
                             })()}
@@ -962,7 +964,7 @@ export default function DashboardClient({
                                       row={result}
                                       unitPrice={asgn?.contractors?.unit_price ?? 0}
                                       currentAmount={r.actual_payout_amount}
-                                      onApply={(amount) => applyDeliveryPayout(r.id, amount)}
+                                      onApply={(amount, videoCount) => applyDeliveryPayout(r.id, amount, videoCount)}
                                     />
                                   )
                                 })()}

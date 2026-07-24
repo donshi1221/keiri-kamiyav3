@@ -1,8 +1,8 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { assignments } from '@/lib/schema'
-import { asc } from 'drizzle-orm'
+import { assignments, monthlyRecords } from '@/lib/schema'
+import { asc, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
 import { parseBody, assignmentCreateSchema } from '@/lib/validation'
@@ -16,7 +16,25 @@ export async function GET() {
         clients: { columns: { id: true, name: true } },
       },
     })
-    return Response.json(data)
+
+    // アサインごとの支払い実績を集計する。支払確認(contractor_paid_at)済みの月だけを対象に、
+    // 回数（=支払った月数）と本数（=その月の支払対象本数の合計）をまとめる。編集者の累計表示に使う。
+    const paidRows = await db
+      .select({
+        assignment_id: monthlyRecords.assignment_id,
+        paid_count: sql<number>`count(*) filter (where ${monthlyRecords.contractor_paid_at} is not null)`,
+        paid_video_count: sql<number>`coalesce(sum(${monthlyRecords.delivered_video_count}) filter (where ${monthlyRecords.contractor_paid_at} is not null), 0)`,
+      })
+      .from(monthlyRecords)
+      .groupBy(monthlyRecords.assignment_id)
+    const paidById = new Map(paidRows.map((r) => [r.assignment_id, r]))
+
+    const withPaid = data.map((a) => ({
+      ...a,
+      paid_count: Number(paidById.get(a.id)?.paid_count ?? 0),
+      paid_video_count: Number(paidById.get(a.id)?.paid_video_count ?? 0),
+    }))
+    return Response.json(withPaid)
   } catch (err) {
     return serverError(err)
   }

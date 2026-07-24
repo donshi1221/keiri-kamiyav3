@@ -19,6 +19,9 @@ import type { Contractor, Client, Assignment, ClientBillingItem } from '@/lib/sc
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
   clients: Pick<Client, 'id' | 'name'> | null
+  // 支払い実績の累計（GET /api/master/assignments が集計して返す）。編集者の「回数・本数」表示に使う。
+  paid_count?: number
+  paid_video_count?: number
 }
 
 // GET /api/master/clients はクライアントに請求内訳(billing_items)をぶら下げて返す。
@@ -271,10 +274,17 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                                 {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{c.unit_price.toLocaleString()}×{videoCount}本）
                               </span>
                             )}
-                            {(a.payment_start_month || a.payment_count) && (
+                            {c.contractor_type === 'video_editor' ? (
+                              // 編集者は「支払い期間」ではなく、支払確認済みの実績（回数・本数）を積み上げ表示する。
                               <span className="block text-xs text-gray-500">
-                                支払期間: {a.payment_start_month ? a.payment_start_month.slice(0, 7) : '設定なし'}から {a.payment_count ? `${a.payment_count}回` : '継続'}
+                                支払い回数: {a.paid_count ?? 0}回 / 支払った本数: {a.paid_video_count ?? 0}本
                               </span>
+                            ) : (
+                              (a.payment_start_month || a.payment_count) && (
+                                <span className="block text-xs text-gray-500">
+                                  支払期間: {a.payment_start_month ? a.payment_start_month.slice(0, 7) : '設定なし'}から {a.payment_count ? `${a.payment_count}回` : '継続'}
+                                </span>
+                              )
                             )}
                           </span>
                           <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
@@ -1080,8 +1090,9 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       // 役割名は種別からの自動入力値 or ユーザーの手入力値をそのまま保存する。
       role_name: roleName.trim(),
       contractor_payout_amount: isVideoEditor ? 0 : (payoutAmount ? Number(payoutAmount) : 0),
-      payment_start_month: paymentStartMonth || null,
-      payment_count: paymentCount ? Number(paymentCount) : null,
+      // 編集者は支払い期間（開始月・回数）の概念を持たない。実績（回数・本数）で管理するため常に null を送る。
+      payment_start_month: isVideoEditor ? null : (paymentStartMonth || null),
+      payment_count: isVideoEditor ? null : (paymentCount ? Number(paymentCount) : null),
       spreadsheet_url: isVideoEditor ? (spreadsheetUrl || null) : null,
     }
     // 委託者・クライアントは新規作成時は必須。編集時は「変更したときだけ」送る。
@@ -1169,18 +1180,21 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
           <input type="number" inputMode="numeric" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-sm font-medium block mb-1">支払い開始月</label>
-            <input type="month" value={paymentStartMonth} onChange={(e) => setPaymentStartMonth(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
-            <p className="mt-1 text-xs text-gray-600">未入力なら開始月を限定しません。</p>
+        {/* 支払い期間は代行者の契約管理用。編集者は実績（回数・本数）で管理するため入力欄を出さない。 */}
+        {!isVideoEditor && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-sm font-medium block mb-1">支払い開始月</label>
+              <input type="month" value={paymentStartMonth} onChange={(e) => setPaymentStartMonth(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+              <p className="mt-1 text-xs text-gray-600">未入力なら開始月を限定しません。</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">支払い回数</label>
+              <input type="number" inputMode="numeric" min="1" value={paymentCount} onChange={(e) => setPaymentCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="継続" />
+              <p className="mt-1 text-xs text-gray-600">未入力なら継続扱いです。</p>
+            </div>
           </div>
-          <div>
-            <label className="text-sm font-medium block mb-1">支払い回数</label>
-            <input type="number" inputMode="numeric" min="1" value={paymentCount} onChange={(e) => setPaymentCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="継続" />
-            <p className="mt-1 text-xs text-gray-600">未入力なら継続扱いです。</p>
-          </div>
-        </div>
+        )}
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
           <label className="text-sm font-medium block mb-1">スプレッドシートURL</label>

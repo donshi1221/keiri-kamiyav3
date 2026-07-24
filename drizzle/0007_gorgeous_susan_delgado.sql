@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_records" ADD COLUMN "delivered_video_count" integer;

@@ -73,6 +73,9 @@ export const monthlyRecords = pgTable('monthly_records', {
   assignment_id: uuid('assignment_id').notNull().references(() => assignments.id),
   actual_payout_amount: integer('actual_payout_amount'),
   payout_amount_snapshot: integer('payout_amount_snapshot'),
+  // 編集者への支払対象となった本数。本数チェックの「反映」時に控える。
+  // 「支払った本数」の累計は、支払確認済み(contractor_paid_at)の月のこの値を合算して出す。
+  delivered_video_count: integer('delivered_video_count'),
   invoice_received_at: timestamp('invoice_received_at', { withTimezone: true, mode: 'string' }),
   payment_reserved_at: timestamp('payment_reserved_at', { withTimezone: true, mode: 'string' }),
   contractor_paid_at: timestamp('contractor_paid_at', { withTimezone: true, mode: 'string' }),
