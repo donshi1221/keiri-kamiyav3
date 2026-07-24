@@ -175,6 +175,21 @@ export const cronRuns = pgTable('cron_runs', {
   last_success_at: timestamp('last_success_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+// 立替経費（交通費など）。代行者に紐づけて登録し、同額をクライアントへ請求する（パススルー）。
+// assignment_id が「どの委託者×どのクライアントか」を兼ねるため、委託者側で登録すればクライアントが定まる。
+// year/month は「どの月の支払い・請求に乗せるか」。expense_date は記録用で月の判定には使わない
+// （表示中の月と違う日付を入れても、その月の集計から外れないようにするため）。
+export const expenses = pgTable('expenses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  assignment_id: uuid('assignment_id').notNull().references(() => assignments.id),
+  year: integer('year').notNull(),
+  month: integer('month').notNull(),
+  expense_date: date('expense_date', { mode: 'string' }),
+  amount: integer('amount').notNull().default(0),
+  note: text('note'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const contractorsRelations = relations(contractors, ({ many }) => ({
@@ -205,6 +220,14 @@ export const assignmentsRelations = relations(assignments, ({ one, many }) => ({
     references: [clients.id],
   }),
   monthly_records: many(monthlyRecords),
+  expenses: many(expenses),
+}))
+
+export const expensesRelations = relations(expenses, ({ one }) => ({
+  assignments: one(assignments, {
+    fields: [expenses.assignment_id],
+    references: [assignments.id],
+  }),
 }))
 
 export const monthlyRecordsRelations = relations(monthlyRecords, ({ one }) => ({
@@ -251,3 +274,4 @@ export type TaxAdviceEntry = typeof taxAdviceEntries.$inferSelect
 export type TaxChatSession = typeof taxChatSessions.$inferSelect
 export type TaxChatMessage = typeof taxChatMessages.$inferSelect
 export type CronRun = typeof cronRuns.$inferSelect
+export type Expense = typeof expenses.$inferSelect

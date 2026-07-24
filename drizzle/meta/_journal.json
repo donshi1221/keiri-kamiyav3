@@ -57,6 +57,13 @@
       "when": 1784871842332,
       "tag": "0007_gorgeous_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784898178162,
+      "tag": "0008_military_paladin",
+      "breakpoints": true
     }
   ]
 }

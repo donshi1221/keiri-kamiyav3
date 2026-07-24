@@ -9,7 +9,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
-import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask } from '@/lib/schema'
+import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import TodayTasks from './today-tasks'
@@ -36,6 +36,107 @@ function DueBadge({ state }: { state: DueState }) {
 function formatShortDate(iso: string): string {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+// アサイン1件分の立替経費（一覧＋追加フォーム）。代行者にのみ表示する。
+// 登録した額はこの委託者への支払いと、担当クライアントへの請求の両方に同額が乗る。
+function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelete }: {
+  items: Expense[]
+  formOpen: boolean
+  onOpenForm: () => void
+  onCloseForm: () => void
+  onAdd: (input: { expense_date: string; amount: string; note: string }) => void
+  onDelete: (id: string) => void
+}) {
+  const [date, setDate] = useState('')
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+
+  function submit() {
+    if (!amount.trim()) return
+    onAdd({ expense_date: date, amount, note })
+    setDate(''); setAmount(''); setNote('')
+  }
+
+  const total = items.reduce((s, e) => s + e.amount, 0)
+
+  return (
+    <div className="mt-1 text-xs">
+      {items.length > 0 && (
+        <div className="space-y-0.5">
+          {items.map((e) => (
+            <div key={e.id} className="flex flex-wrap items-center gap-x-1.5 text-gray-600">
+              <span className="text-gray-500">{e.expense_date ? formatShortDate(e.expense_date) : '日付なし'}</span>
+              <span className="font-medium">¥{e.amount.toLocaleString()}</span>
+              {e.note && <span className="text-gray-500">{e.note}</span>}
+              <button
+                type="button"
+                onClick={() => onDelete(e.id)}
+                aria-label="この経費を削除"
+                className="flex h-11 items-center px-1 text-gray-400 hover:text-destructive md:h-5"
+              >
+                削除
+              </button>
+            </div>
+          ))}
+          <div className="text-gray-500">経費 計 ¥{total.toLocaleString()}（請求にも同額を加算）</div>
+        </div>
+      )}
+      {formOpen ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            aria-label="経費の日付"
+            className="rounded border border-gray-200 px-1 py-1 text-xs"
+          />
+          <input
+            type="number"
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            placeholder="金額"
+            aria-label="経費の金額"
+            className="w-20 rounded border border-gray-200 px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
+          />
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            placeholder="内容（例: 打合せ往復）"
+            aria-label="経費の内容"
+            className="min-w-[8rem] flex-1 rounded border border-gray-200 px-1 py-1 text-xs"
+          />
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!amount.trim()}
+            className="flex h-11 items-center rounded border border-info/40 px-2 font-medium text-info hover:bg-info-subtle disabled:opacity-40 md:h-6"
+          >
+            追加
+          </button>
+          <button
+            type="button"
+            onClick={() => { setDate(''); setAmount(''); setNote(''); onCloseForm() }}
+            className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+          >
+            やめる
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpenForm}
+          className="flex h-11 items-center text-info hover:underline md:h-5"
+        >
+          ＋経費
+        </button>
+      )}
+    </div>
+  )
 }
 
 // 編集者1人分の本数チェック結果。「要確認」とだけ出すと原因が分からず調べようがないため、
@@ -192,6 +293,7 @@ interface Props {
   billedCounts: Record<string, number>
   paidCounts: Record<string, number>
   assignmentPaymentCounts: Record<string, { scheduled: number; paid: number }>
+  expenses: Expense[]
   mfExpense: { amount: number; syncedAt: string } | null
   mfConnected: boolean
   mfExpired: boolean
@@ -201,7 +303,7 @@ interface Props {
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -213,6 +315,9 @@ export default function DashboardClient({
 
   const [localRecords, setLocalRecords] = useState(records)
   const [localClientRecords, setLocalClientRecords] = useState(clientRecords)
+  const [localExpenses, setLocalExpenses] = useState(initialExpenses)
+  // 経費の入力フォームを開いているアサインID（1つずつ開く）。
+  const [expenseFormFor, setExpenseFormFor] = useState<string | null>(null)
   const [localGlobal, setLocalGlobal] = useState(globalTask)
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
   const [oneTimeTasks, setOneTimeTasks] = useState(initialOneTimeTasks)
@@ -425,14 +530,17 @@ export default function DashboardClient({
   const yearMonth = year * 100 + month
 
   // 売上・外注費・利益の計算（マスタ改定後も過去月表示が変わらないよう、スナップショットを優先）
-  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
+  // 立替経費は「委託者に払い、同額をクライアントに請求する」パススルーのため、
+  // 売上・外注費の両方に同額を足す（結果として利益は増減しない）。
+  const expenseTotalAll = localExpenses.reduce((sum, e) => sum + e.amount, 0)
+  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotalAll
   const contractorCost = localRecords.reduce((sum, r) => {
     const asgn = r.assignments
     if (asgn?.contractors?.contractor_type === 'video_editor') {
       return sum + (r.actual_payout_amount ?? 0)
     }
     return sum + (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount ?? 0)
-  }, 0)
+  }, 0) + expenseTotalAll
   const otherExpenses = mfExpense?.amount ?? 0
   const profit = revenue - contractorCost - otherExpenses
 
@@ -678,6 +786,61 @@ export default function DashboardClient({
       : (r.payout_amount_snapshot ?? r.assignments?.contractor_payout_amount ?? null)
   }
 
+  // ─── 立替経費（代行者のみ）─────────────────────────────
+  // アサインに紐づくため、委託者への支払いとクライアントへの請求の両方に同額が乗る（パススルー）。
+  const expensesByAssignment = new Map<string, Expense[]>()
+  for (const e of localExpenses) {
+    expensesByAssignment.set(e.assignment_id, [...(expensesByAssignment.get(e.assignment_id) ?? []), e])
+  }
+  const expenseTotalOf = (assignmentId: string | undefined): number =>
+    (assignmentId ? expensesByAssignment.get(assignmentId) ?? [] : []).reduce((s, e) => s + e.amount, 0)
+
+  // クライアント側の集計用に、アサインID → クライアントID の対応を作る。
+  const clientIdByAssignment = new Map<string, string>()
+  for (const r of localRecords) {
+    if (r.assignments) clientIdByAssignment.set(r.assignments.id, r.assignments.client_id)
+  }
+  const expensesOfClient = (clientId: string): Expense[] =>
+    localExpenses.filter((e) => clientIdByAssignment.get(e.assignment_id) === clientId)
+
+  // 経費は代行者にのみ紐づける運用のため、編集者のアサインには入力欄を出さない。
+  const canAddExpense = (r: RecordWithRelations): boolean =>
+    r.assignments?.contractors?.contractor_type !== 'video_editor'
+
+  async function addExpense(assignmentId: string, input: { expense_date: string; amount: string; note: string }) {
+    try {
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignment_id: assignmentId,
+          year, month,
+          expense_date: input.expense_date || null,
+          amount: input.amount,
+          note: input.note,
+        }),
+      })
+      const data = (await res.json().catch(() => null)) as (Expense & { error?: string }) | null
+      if (!res.ok) throw new Error(data?.error ?? '経費の追加に失敗しました。')
+      if (data) setLocalExpenses((prev) => [...prev, data])
+      setExpenseFormFor(null)
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '経費の追加に失敗しました。')
+    }
+  }
+
+  async function deleteExpense(id: string) {
+    const prev = localExpenses
+    setLocalExpenses((list) => list.filter((e) => e.id !== id))
+    try {
+      const res = await fetch(`/api/expenses/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+    } catch {
+      setLocalExpenses(prev)
+      showError('経費の削除に失敗しました。もう一度お試しください。')
+    }
+  }
+
   // 委託者請求記録を「委託者単位」でグループ化する（1委託者が複数クライアントを担当しうる）。
   // クライアント側と同じく、created_at 順で飛び飛びに並んでも同じ委託者の行が隣り合うようまとめ直す。
   const contractorGroups: { contractorId: string; contractorName: string; items: RecordWithRelations[] }[] = []
@@ -840,8 +1003,11 @@ export default function DashboardClient({
                 <tbody>
                   {contractorGroups.flatMap((g) => {
                     const multi = g.items.length > 1
-                    // 委託者単位の合計報酬（各アサインの報酬の合算）。
-                    const total = g.items.reduce((sum, r) => sum + (recordPayout(r) ?? 0), 0)
+                    // 委託者単位の合計報酬（各アサインの報酬＋立替経費の合算）。
+                    const total = g.items.reduce(
+                      (sum, r) => sum + (recordPayout(r) ?? 0) + expenseTotalOf(r.assignments?.id),
+                      0
+                    )
                     // 複数クライアントを担当する委託者は「ヘッダー行（名前＋合計）＋明細行（インデント）」で表示する。
                     // 1クライアントだけの委託者は従来どおり1行にまとめ、冗長な行を増やさない。
                     const headerRow = multi
@@ -892,9 +1058,22 @@ export default function DashboardClient({
                                 />
                               )
                             })()}
+                            {asgn && canAddExpense(r) && (
+                              <ExpenseBlock
+                                items={expensesByAssignment.get(asgn.id) ?? []}
+                                formOpen={expenseFormFor === asgn.id}
+                                onOpenForm={() => setExpenseFormFor(asgn.id)}
+                                onCloseForm={() => setExpenseFormFor(null)}
+                                onAdd={(input) => addExpense(asgn.id, input)}
+                                onDelete={deleteExpense}
+                              />
+                            )}
                           </td>
                           <td className="py-3 px-3 text-right">
                             <span className="text-gray-600">{payout ? `¥${payout.toLocaleString()}` : '—'}</span>
+                            {expenseTotalOf(asgn?.id) > 0 && (
+                              <div className="text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</div>
+                            )}
                           </td>
                           <td className="text-center py-3 px-3">
                             <MoneyCheckControl
@@ -945,7 +1124,10 @@ export default function DashboardClient({
             <div className="divide-y md:hidden">
               {contractorGroups.map((g) => {
                 const multi = g.items.length > 1
-                const total = g.items.reduce((sum, r) => sum + (recordPayout(r) ?? 0), 0)
+                const total = g.items.reduce(
+                  (sum, r) => sum + (recordPayout(r) ?? 0) + expenseTotalOf(r.assignments?.id),
+                  0
+                )
                 return (
                   <div key={g.contractorId} className="px-4 py-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -987,9 +1169,22 @@ export default function DashboardClient({
                                     />
                                   )
                                 })()}
+                                {asgn && canAddExpense(r) && (
+                                  <ExpenseBlock
+                                    items={expensesByAssignment.get(asgn.id) ?? []}
+                                    formOpen={expenseFormFor === asgn.id}
+                                    onOpenForm={() => setExpenseFormFor(asgn.id)}
+                                    onCloseForm={() => setExpenseFormFor(null)}
+                                    onAdd={(input) => addExpense(asgn.id, input)}
+                                    onDelete={deleteExpense}
+                                  />
+                                )}
                               </div>
-                              <span className="shrink-0 text-sm text-gray-600">
+                              <span className="shrink-0 text-right text-sm text-gray-600">
                                 {payout ? `¥${payout.toLocaleString()}` : '—'}
+                                {expenseTotalOf(asgn?.id) > 0 && (
+                                  <span className="block text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</span>
+                                )}
                               </span>
                             </div>
                             <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2">
@@ -1071,9 +1266,13 @@ export default function DashboardClient({
                 </thead>
                 <tbody>
                   {clientGroups.flatMap((g) => {
-                    const multi = g.items.length > 1
-                    // クライアント単位の合計請求額（その月の内訳スナップショットの合算）
-                    const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
+                    // このクライアントに紐づく立替経費（代行者側で登録された分がここに自動で乗る）。
+                    const clientExpenses = expensesOfClient(g.clientId)
+                    const expenseTotal = clientExpenses.reduce((s, e) => s + e.amount, 0)
+                    // 内訳が1つでも経費があれば、内訳行と経費行が並ぶためグループ表示にする。
+                    const multi = g.items.length > 1 || expenseTotal > 0
+                    // クライアント単位の合計請求額（その月の内訳スナップショット＋立替経費の合算）
+                    const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal
                     // 複数内訳のクライアントは「ヘッダー行（名前＋合計）＋内訳行（インデント）」でグループ表示する。
                     // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
                     const headerRow = multi
@@ -1142,7 +1341,23 @@ export default function DashboardClient({
                         </tr>
                       )
                     })
-                    return [...headerRow, ...itemRows]
+                    // 立替経費の行。委託者側で登録された経費がそのまま請求に乗ることを見せる
+                    // （チェック欄は内訳側にあるため、ここは金額の内訳表示のみ）。
+                    const expenseRow = expenseTotal > 0
+                      ? [(
+                          <tr key={`cexp-${g.clientId}`} className="border-b last:border-0">
+                            <td className="py-3 pl-10 pr-4 text-gray-700">
+                              立替経費
+                              <span className="ml-1 text-xs text-gray-500">
+                                （{clientExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right text-gray-600">¥{expenseTotal.toLocaleString()}</td>
+                            <td colSpan={2} />
+                          </tr>
+                        )]
+                      : []
+                    return [...headerRow, ...itemRows, ...expenseRow]
                   })}
                 </tbody>
               </table>
@@ -1151,8 +1366,10 @@ export default function DashboardClient({
             {/* スマホ表示（md未満）: カード形式（1カード=1クライアント。内訳が複数あれば内側に並べる） */}
             <div className="divide-y md:hidden">
               {clientGroups.map((g) => {
-                const multi = g.items.length > 1
-                const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0)
+                const clientExpenses = expensesOfClient(g.clientId)
+                const expenseTotal = clientExpenses.reduce((s, e) => s + e.amount, 0)
+                const multi = g.items.length > 1 || expenseTotal > 0
+                const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal
                 return (
                   <div key={g.clientId} className="px-4 py-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -1220,6 +1437,17 @@ export default function DashboardClient({
                           </div>
                         )
                       })}
+                      {expenseTotal > 0 && (
+                        <div className="flex items-start justify-between gap-2 text-sm">
+                          <span className="min-w-0 text-gray-600">
+                            立替経費
+                            <span className="ml-1 text-xs text-gray-500">
+                              （{clientExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-gray-600">¥{expenseTotal.toLocaleString()}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )

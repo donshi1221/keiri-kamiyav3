@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
@@ -29,6 +29,7 @@ export default async function DashboardPage({
     assignmentPaymentCountRows,
     allRecordsForCarryOver,
     allClientRecordsForCarryOver,
+    monthExpenses,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -83,6 +84,11 @@ export default async function DashboardPage({
       invoice_sent_at: monthlyClientRecords.invoice_sent_at,
       payment_confirmed_at: monthlyClientRecords.payment_confirmed_at,
     }).from(monthlyClientRecords),
+    // 立替経費（代行者に紐づく）。委託者への支払いとクライアントへの請求の両方に反映する。
+    db.query.expenses.findMany({
+      where: and(eq(expenses.year, year), eq(expenses.month, month)),
+      orderBy: [asc(expenses.created_at)],
+    }),
   ])
 
   const carryOver = computeCarryOver(
@@ -139,6 +145,7 @@ export default async function DashboardPage({
       billedCounts={billedCounts}
       paidCounts={paidCounts}
       assignmentPaymentCounts={assignmentPaymentCounts}
+      expenses={monthExpenses}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
       mfConnected={mfConnected}
       mfExpired={mfExpired}

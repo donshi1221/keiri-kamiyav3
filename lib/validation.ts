@@ -79,6 +79,20 @@ export const assignmentCreateSchema = z.object({
   active: z.boolean().optional(),
 })
 
+// 立替経費（交通費など）。代行者のアサインに紐づけ、同額をクライアントへ請求する。
+// year/month は「どの月の支払い・請求に乗せるか」で、expense_date（記録用の日付）とは別に持つ。
+export const expenseCreateSchema = z.object({
+  assignment_id: z.uuid({ message: 'アサインの指定が不正です' }),
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+  expense_date: z.preprocess(
+    (v) => (v === '' || v === undefined ? null : v),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: '日付はYYYY-MM-DD形式で入力してください' }).nullable()
+  ),
+  amount: moneyInt,
+  note: z.string().trim().nullish(),
+})
+
 export const snapshotBackfillSchema = z.object({
   year: z.coerce.number().int().min(2000).max(3000),
   month: z.coerce.number().int().min(1).max(12),
