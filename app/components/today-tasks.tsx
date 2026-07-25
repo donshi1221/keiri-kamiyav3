@@ -78,7 +78,7 @@ export default function TodayTasks({ overdueItems, inWindowItems }: Props) {
   if (overdueItems.length === 0 && inWindowItems.length === 0) {
     return (
       <section className="rounded-lg border bg-white p-4">
-        <h2 className="text-sm font-semibold text-gray-700 mb-1">今日やること</h2>
+        <h2 className="text-sm font-semibold text-gray-900 mb-1">今日やること</h2>
         <p className="text-sm text-gray-600">未対応のタスクはありません。</p>
       </section>
     )
@@ -86,7 +86,7 @@ export default function TodayTasks({ overdueItems, inWindowItems }: Props) {
 
   return (
     <section className="rounded-lg border bg-white p-4 space-y-3">
-      <h2 className="text-sm font-semibold text-gray-700">今日やること</h2>
+      <h2 className="text-sm font-semibold text-gray-900">今日やること</h2>
       {overdueItems.length > 0 && (
         <TaskSection heading="期限超過" items={overdueItems} tone="danger" />
       )}

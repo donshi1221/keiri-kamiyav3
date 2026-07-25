@@ -64,7 +64,7 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
 
       {/* グローバルタスク */}
       <section className="rounded-lg border bg-white p-4">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">グローバルタスク</h2>
+        <h2 className="text-sm font-semibold text-gray-900 mb-3">グローバルタスク</h2>
         {!globalTask ? (
           <p className="text-sm text-gray-600">レコードなし</p>
         ) : (
@@ -83,7 +83,7 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
       {/* クライアント — 請求・入金管理 */}
       <section className="rounded-lg border bg-white">
         <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
+          <h2 className="text-sm font-semibold text-gray-900">クライアント — 請求・入金管理</h2>
         </div>
         {clientRecords.length === 0 ? (
           <p className="text-sm text-gray-600 p-4">レコードなし</p>
@@ -155,7 +155,7 @@ export default function HistoryClient({ year, month, records, clientRecords, glo
       {/* 委託者 — 請求書受領・支払管理 */}
       <section className="rounded-lg border bg-white">
         <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
+          <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
         </div>
         {records.length === 0 ? (
           <p className="text-sm text-gray-600 p-4">レコードなし</p>

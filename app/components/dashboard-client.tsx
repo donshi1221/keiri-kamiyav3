@@ -964,7 +964,7 @@ export default function DashboardClient({
       {/* 委託者 — 請求書受領・支払管理 */}
       <section className="rounded-lg border bg-white">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">委託者 — 請求書受領・支払管理</h2>
+          <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
           {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
             <Button size="sm" variant="outline" onClick={runDeliveryCheck} disabled={deliveryLoading}>
               {deliveryLoading ? '本数チェック中…' : `編集者の本数をチェック（${deliveryTarget.month}月分）`}
@@ -1012,13 +1012,13 @@ export default function DashboardClient({
                     // 1クライアントだけの委託者は従来どおり1行にまとめ、冗長な行を増やさない。
                     const headerRow = multi
                       ? [(
-                          <tr key={`chead-${g.contractorId}`} className="border-b bg-gray-100/80">
+                          <tr key={`chead-${g.contractorId}`} className="border-y-2 border-gray-200 bg-gray-100">
                             <td className="py-2 px-4">
-                              <span className="font-semibold text-gray-800">{g.contractorName}</span>
+                              <span className="font-semibold text-gray-900">{g.contractorName}</span>
                             </td>
                             <td className="py-2 px-3 text-right">
                               <span className="text-xs text-gray-500 mr-1">合計</span>
-                              <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                              <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
                             </td>
                             <td colSpan={3} />
                           </tr>
@@ -1136,7 +1136,7 @@ export default function DashboardClient({
                       {multi && (
                         <span className="shrink-0 text-sm">
                           <span className="text-xs text-gray-500 mr-1">合計</span>
-                          <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                          <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
                         </span>
                       )}
                     </div>
@@ -1243,7 +1243,7 @@ export default function DashboardClient({
       {/* クライアント — 請求・入金管理 */}
       <section className="rounded-lg border bg-white">
         <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">クライアント — 請求・入金管理</h2>
+          <h2 className="text-sm font-semibold text-gray-900">クライアント — 請求・入金管理</h2>
         </div>
         {localClientRecords.length === 0 ? (
           <p className="text-sm text-gray-500 p-4">
@@ -1277,13 +1277,13 @@ export default function DashboardClient({
                     // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
                     const headerRow = multi
                       ? [(
-                          <tr key={`header-${g.clientId}`} className="border-b bg-gray-100/80">
+                          <tr key={`header-${g.clientId}`} className="border-y-2 border-gray-200 bg-gray-100">
                             <td className="py-2 px-4">
-                              <span className="font-semibold text-gray-800">{g.clientName}</span>
+                              <span className="font-semibold text-gray-900">{g.clientName}</span>
                             </td>
                             <td className="py-2 px-3 text-right">
                               <span className="text-xs text-gray-500 mr-1">合計</span>
-                              <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                              <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
                             </td>
                             <td colSpan={2} />
                           </tr>
@@ -1378,7 +1378,7 @@ export default function DashboardClient({
                       {multi && (
                         <span className="shrink-0 text-sm">
                           <span className="text-xs text-gray-500 mr-1">合計</span>
-                          <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span>
+                          <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
                         </span>
                       )}
                     </div>
@@ -1460,7 +1460,7 @@ export default function DashboardClient({
       {/* グローバルタスク（常時表示） */}
       <section className="rounded-lg border bg-white p-4">
         <div className="flex items-center gap-2 mb-3">
-          <h2 className="text-sm font-semibold text-gray-700">グローバルタスク</h2>
+          <h2 className="text-sm font-semibold text-gray-900">グローバルタスク</h2>
           <button
             type="button"
             onClick={() => setShowAddForm((v) => !v)}
