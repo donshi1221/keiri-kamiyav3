@@ -464,6 +464,11 @@ export default function DashboardClient({
     startTransition(() => router.push(`/?year=${y}&month=${m}`))
   }
 
+  // 過去月から当月へ一気に戻る。何ヶ月離れていても1回で戻れるよう、delta 指定の navigate は使わない。
+  function goToCurrentMonth() {
+    startTransition(() => router.push('/'))
+  }
+
   async function toggleRecord(id: string, field: 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at') {
     // 失敗時に「この1件だけ」を直前の値へ戻せるよう、変更前の値を控える。
     const prevValue = localRecords.find((r) => r.id === id)?.[field] ?? null
@@ -1102,26 +1107,47 @@ export default function DashboardClient({
       <div className="flex items-center gap-3">
         <Button variant="outline" size="sm" onClick={() => navigate(-1)}>← 前月</Button>
         <h1 className="text-xl font-bold">{year}年{month}月</h1>
+        {/* ジャンプバーが画面外にあるときでも過去月と分かるよう、見出しにも印を出す。 */}
+        {isPastMonth && (
+          <span className="rounded bg-warning-subtle px-2 py-0.5 text-xs text-warning">過去月</span>
+        )}
         <Button variant="outline" size="sm" onClick={() => navigate(1)} disabled={isCurrentMonth} title={isCurrentMonth ? '当月が上限です' : undefined}>
           次月 →
         </Button>
       </div>
 
       {/* セクションジャンプ（1ヶ月分が縦に長く、下部のタスク欄まで数画面スクロールが必要なため） */}
-      <nav className="sticky top-12 z-10 -mx-4 border-b bg-white px-4 md:top-14">
-        <ul className="flex items-center gap-1 overflow-x-auto md:gap-2">
-          {jumpTargets.map((t) => (
-            <li key={t.label}>
-              <button
-                type="button"
-                onClick={() => t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className="flex h-11 shrink-0 items-center whitespace-nowrap rounded px-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 md:h-8 md:px-3"
-              >
-                {t.label}
-              </button>
-            </li>
-          ))}
-        </ul>
+      {/* 過去月は編集できてしまうため、常に見えているこのバーごと警告色にして当月と取り違えないようにする。 */}
+      <nav
+        className={`sticky top-12 z-10 -mx-4 px-4 md:top-14 ${
+          isPastMonth ? 'border-b border-warning/40 bg-warning-subtle' : 'border-b bg-white'
+        }`}
+      >
+        <div className="flex items-center gap-1">
+          {isPastMonth && <span className="shrink-0 text-xs text-warning">過去月</span>}
+          <ul className="flex flex-1 items-center gap-1 overflow-x-auto md:gap-2">
+            {jumpTargets.map((t) => (
+              <li key={t.label}>
+                <button
+                  type="button"
+                  onClick={() => t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="flex h-11 shrink-0 items-center whitespace-nowrap rounded px-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 md:h-8 md:px-3"
+                >
+                  {t.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {isPastMonth && (
+            <button
+              type="button"
+              onClick={goToCurrentMonth}
+              className="flex h-11 shrink-0 items-center whitespace-nowrap px-2 text-sm text-warning underline underline-offset-2 md:h-8"
+            >
+              当月へ
+            </button>
+          )}
+        </div>
       </nav>
 
       {/* 繰越未完了バナー */}
