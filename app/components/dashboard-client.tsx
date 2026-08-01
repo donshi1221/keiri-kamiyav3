@@ -349,6 +349,18 @@ export default function DashboardClient({
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const contractorSectionRef = useRef<HTMLElement | null>(null)
+  const clientSectionRef = useRef<HTMLElement | null>(null)
+  const globalTaskSectionRef = useRef<HTMLElement | null>(null)
+  const summarySectionRef = useRef<HTMLElement | null>(null)
+
+  const jumpTargets: { label: string; ref: React.RefObject<HTMLElement | null> }[] = [
+    { label: '委託者', ref: contractorSectionRef },
+    { label: 'クライアント', ref: clientSectionRef },
+    { label: 'タスク', ref: globalTaskSectionRef },
+    { label: 'サマリー', ref: summarySectionRef },
+  ]
+
   function showError(msg: string) {
     setErrorMsg(msg)
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
@@ -1095,6 +1107,23 @@ export default function DashboardClient({
         </Button>
       </div>
 
+      {/* セクションジャンプ（1ヶ月分が縦に長く、下部のタスク欄まで数画面スクロールが必要なため） */}
+      <nav className="sticky top-12 z-10 -mx-4 border-b bg-white px-4 md:top-14">
+        <ul className="flex items-center gap-1 overflow-x-auto md:gap-2">
+          {jumpTargets.map((t) => (
+            <li key={t.label}>
+              <button
+                type="button"
+                onClick={() => t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="flex h-11 shrink-0 items-center whitespace-nowrap rounded px-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 md:h-8 md:px-3"
+              >
+                {t.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
       {/* 繰越未完了バナー */}
       {otherMonthCarryOver.length > 0 && (
         <div className="space-y-2">
@@ -1141,7 +1170,7 @@ export default function DashboardClient({
       {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} />}
 
       {/* 委託者 — 請求書受領・支払管理 */}
-      <section className="rounded-lg border bg-white">
+      <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
           {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
@@ -1465,7 +1494,7 @@ export default function DashboardClient({
       </section>
 
       {/* クライアント — 請求・入金管理 */}
-      <section className="rounded-lg border bg-white">
+      <section ref={clientSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
         <div className="px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-900">クライアント — 請求・入金管理</h2>
         </div>
@@ -1726,7 +1755,7 @@ export default function DashboardClient({
       </section>
 
       {/* グローバルタスク（常時表示） */}
-      <section data-pending-row="global-tasks" className={`rounded-lg border p-4 ${rowBg('global-tasks', 'bg-white')}`}>
+      <section ref={globalTaskSectionRef} data-pending-row="global-tasks" className={`scroll-mt-24 rounded-lg border p-4 ${rowBg('global-tasks', 'bg-white')}`}>
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-semibold text-gray-900">グローバルタスク</h2>
           <button
@@ -1983,7 +2012,7 @@ export default function DashboardClient({
       </section>
 
       {/* 売上・経費・利益サマリー */}
-      <section className="rounded-lg border bg-white p-4">
+      <section ref={summarySectionRef} className="scroll-mt-24 rounded-lg border bg-white p-4">
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-500 mb-1">売上</p>
