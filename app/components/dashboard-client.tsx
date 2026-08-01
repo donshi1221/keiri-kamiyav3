@@ -843,6 +843,19 @@ export default function DashboardClient({
       }))
     : []
 
+  // カスタムタスクの期日状態。日にち未設定は判定材料がないため null（バッジも「今日やること」も出さない）。
+  // 過去月はグローバルタスクと同じく未完了＝期限超過。ただし作成前の月まで遡って期限超過にはしない。
+  const customTaskState = (t: CustomGlobalTask): DueState | null => {
+    if (t.completed_months.includes(yearMonth)) return 'done'
+    if (t.day == null) return null
+    // 31日など月末を超える指定は、その月の末日に丸めて判定する。
+    if (isCurrentMonth) return getDueState(day, Math.min(t.day, lastDay), null, oneTimeWindowDays)
+    if (!isPastMonth) return null
+    const createdDate = new Date(t.created_at)
+    const createdYearMonth = createdDate.getFullYear() * 100 + (createdDate.getMonth() + 1)
+    return createdYearMonth > yearMonth ? null : 'overdue'
+  }
+
   const clientDueState = (r: ClientRecordWithClient, field: 'invoice_sent_at' | 'payment_confirmed_at', dueDay: number): DueState =>
     isCurrentMonth ? getDueState(day, dueDay, r[field]) : (r[field] ? 'done' : 'upcoming')
 
@@ -1001,6 +1014,13 @@ export default function DashboardClient({
       if (t.completed_at) continue
       const st = oneTimeDueState(t.due_date)
       const label = `${t.title}（${formatDueMd(t.due_date)}）`
+      if (st === 'overdue') overdueItems.push({ label })
+      else if (st === 'inWindow') inWindowItems.push({ label })
+    }
+    // カスタムタスク（毎月／特定月）: 日にち指定があるものだけ、単発タスクと同じ基準で載せる。
+    for (const t of customTasks) {
+      const st = customTaskState(t)
+      const label = `${t.title}（${t.day}日）`
       if (st === 'overdue') overdueItems.push({ label })
       else if (st === 'inWindow') inWindowItems.push({ label })
     }
@@ -1854,6 +1874,7 @@ export default function DashboardClient({
                 {customTasks.map((t) => {
                   const done = t.completed_months.includes(yearMonth)
                   const isPendingDelete = pendingDeleteId === t.id
+                  const state = customTaskState(t)
                   return (
                     <div key={t.id} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} />
@@ -1870,6 +1891,12 @@ export default function DashboardClient({
                             : <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{t.months.length}か月限定</span>
                           }
                         </div>
+                      )}
+                      {state === 'overdue' && (
+                        <span className="shrink-0 text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
+                      )}
+                      {state === 'inWindow' && (
+                        <span className="shrink-0 text-xs bg-warning-subtle text-warning px-2 py-0.5 rounded">対応期間中</span>
                       )}
                       {isPendingDelete ? (
                         <div className="flex items-center gap-1 shrink-0">
