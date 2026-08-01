@@ -82,7 +82,7 @@ DB 変更不要。`app/components/dashboard-client.tsx` が中心。
 1. Migration（`npx drizzle-kit generate` または SQL）: `ALTER TABLE monthly_records ADD COLUMN payment_reserved_at TIMESTAMPTZ;`
 2. `lib/schema.ts` の `monthlyRecords`（43-52行付近）に `payment_reserved_at` を追加。
 3. `app/api/checklist/records/[id]/route.ts` の許可フィールド（ALLOWED）に `payment_reserved_at` を追加。
-4. ダッシュボード委託者表を「受領(10日) / 支払予約(15日) / 支払確認(末日)」の3チェック列に（dashboard-client.tsx:513-572）。`app/history/history-client.tsx` の表にも同列を追加。
+4. ダッシュボード委託者表を「受領(10日) / 支払予約(15日) / 支払確認(末日)」の3チェック列に（dashboard-client.tsx:513-572）。※履歴ページ（`app/history/`）はダッシュボードの過去月表示に一本化したため廃止済み。
 5. `app/api/cron/remind/route.ts`: 15日窓（10〜15日）で `payment_reserved_at` 未設定分の「支払い予約」リマインド、月末窓で `contractor_paid_at` 未設定分の「支払い確認」リマインドに分割。文言も「報酬支払」→「支払い確認」に。
 
 **検証:** `npx drizzle-kit push` 後、既存レコードの表示が壊れないこと（新列は null でチェック未の扱い）。

@@ -3,20 +3,33 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, History, PackageCheck, Users, BookText, LogOut, Download } from 'lucide-react'
+import { nowJST } from '@/lib/dates'
+import { LayoutDashboard, CalendarClock, PackageCheck, Users, BookText, LogOut, Download } from 'lucide-react'
 
+// 「先月」の遷移先は表示時点の年月に依存するため、リンク一覧は描画のたびに組み立てる。
+// 基準時刻を JST 固定の nowJST にしているのは、サーバー描画（UTC）とクライアント描画で
+// 月がズレて hydration 不一致になるのを防ぐため。
 // shortLabel: スマホ下部タブ用の短い表記（5タブの幅に収めるため）
-const links: { href: string; label: string; shortLabel?: string; icon: typeof LayoutDashboard }[] = [
-  { href: '/', label: 'ダッシュボード', shortLabel: 'ホーム', icon: LayoutDashboard },
-  { href: '/history', label: '履歴', icon: History },
-  { href: '/delivery', label: '納品チェック', icon: PackageCheck },
-  { href: '/master', label: 'マスタ管理', icon: Users },
-  { href: '/tax', label: '税務メモ', icon: BookText },
-]
+function buildLinks(): { href: string; label: string; shortLabel?: string; icon: typeof LayoutDashboard }[] {
+  const today = nowJST()
+  const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+  return [
+    { href: '/', label: 'ダッシュボード', shortLabel: 'ホーム', icon: LayoutDashboard },
+    {
+      href: `/?year=${lastMonth.getFullYear()}&month=${lastMonth.getMonth() + 1}`,
+      label: '先月',
+      icon: CalendarClock,
+    },
+    { href: '/delivery', label: '納品チェック', icon: PackageCheck },
+    { href: '/master', label: 'マスタ管理', icon: Users },
+    { href: '/tax', label: '税務メモ', icon: BookText },
+  ]
+}
 
 export default function Nav() {
   const pathname = usePathname()
   const router = useRouter()
+  const links = buildLinks()
 
   async function handleLogout() {
     try {

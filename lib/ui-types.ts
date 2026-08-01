@@ -7,12 +7,11 @@ import type {
   ClientBillingItem,
 } from './schema'
 
-// ダッシュボード（app/page.tsx）と履歴（app/history/page.tsx）で共通に使う
-// 「月次レコード + リレーション」の型。以前は両コンポーネントに別々にコピペされ、
-// 実クエリと形が食い違ったまま `as any` で握りつぶされていた。
+// ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
+// 以前はコンポーネント側にコピペされ、実クエリと形が食い違ったまま `as any` で握りつぶされていた。
 // 実際のクエリが columns 指定で取得する形にここで正確に一致させ、as any を不要にする。
 
-// monthlyRecords（両画面のクエリは同一）
+// monthlyRecords
 export type RecordWithRelations = MonthlyRecord & {
   assignments: (Assignment & {
     // unit_price は納品チェックの結果から実支払額（本数×単価）を出すために取得する。
@@ -33,8 +32,7 @@ export interface TaskItem {
 
 // monthlyClientRecords（クライアント請求記録）。
 // billing_item_id / label_snapshot は MonthlyClientRecord 本体に含まれる。
-// billing_items（内訳マスタ）はダッシュボードのみ取得（回数超過の判定に contract_months を使う）。
-// 履歴側は内訳マスタまでは取らないため任意。
+// billing_items（内訳マスタ）は回数超過の判定に contract_months を使うために取得する。
 export type ClientRecordWithClient = MonthlyClientRecord & {
   clients: Pick<Client, 'id' | 'name'> | null
   billing_items?: Pick<ClientBillingItem, 'id' | 'label' | 'contract_months'> | null
