@@ -312,6 +312,8 @@ export default function DashboardClient({
   const lastDay = getLastDayOfMonth(year, month)
   const isCurrentMonth =
     year === todayDate.getFullYear() && month === todayDate.getMonth() + 1
+  const isPastMonth =
+    year * 12 + month < todayDate.getFullYear() * 12 + (todayDate.getMonth() + 1)
 
   const [localRecords, setLocalRecords] = useState(records)
   const [localClientRecords, setLocalClientRecords] = useState(clientRecords)
@@ -341,14 +343,33 @@ export default function DashboardClient({
   const [snapshotBusy, setSnapshotBusy] = useState(false)
   const [deliveryRows, setDeliveryRows] = useState<DeliveryCheckRow[] | null>(null)
   const [deliveryLoading, setDeliveryLoading] = useState(false)
+  // 「この月の未完了」から飛んだ行を一時的に目立たせるためのキー（data-pending-row の値）。
+  const [highlightKey, setHighlightKey] = useState<string | null>(null)
 
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   function showError(msg: string) {
     setErrorMsg(msg)
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
     errorTimerRef.current = setTimeout(() => setErrorMsg(null), 4000)
   }
+
+  // 該当行へスクロールして一時的にハイライトする。
+  // PC表とスマホカードは両方をDOMに出してCSSで出し分けているため、
+  // 同じ data-pending-row が2つ存在する。実際に表示されている方（offsetParent あり）を選ぶ。
+  function focusPendingRow(target: string) {
+    const found = Array.from(document.querySelectorAll<HTMLElement>(`[data-pending-row="${target}"]`))
+    const visible = found.find((el) => el.offsetParent !== null) ?? found[0]
+    visible?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHighlightKey(target)
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
+    highlightTimerRef.current = setTimeout(() => setHighlightKey(null), 1800)
+  }
+
+  // ハイライトは既存の行背景（期限色・グループ見出しのグレー）と衝突するため、背景クラスごと差し替える。
+  const rowBg = (target: string, base: string) =>
+    highlightKey === target ? 'bg-warning-subtle' : base
 
   // 支払いは前月納品分に対して行うため、チェック対象は表示中の月ではなく前月。
   const deliveryTarget = deliveryTargetMonth(year, month)
@@ -405,7 +426,10 @@ export default function DashboardClient({
     }
   }
 
-  useEffect(() => () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current) }, [])
+  useEffect(() => () => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
+  }, [])
 
   // MF連携コールバックの結果（?mf_error / ?mf_connected）を受け取り、失敗時は理由を通知する。
   // 表示後はクエリを消し、再読み込みで通知が再表示されないようにする。
@@ -978,6 +1002,41 @@ export default function DashboardClient({
     }
   }
 
+  // 過去月では「今日やること」が出ないため、未完了の行をここから直接たどれるようにする。
+  // 判定はローカル状態から行い、チェックを付けた瞬間に項目が消えるようにする。
+  const monthPending: { key: string; target: string; label: string }[] = []
+  if (isPastMonth) {
+    for (const g of contractorGroups) {
+      const multi = g.items.length > 1
+      for (const r of g.items) {
+        const who = `${g.contractorName}（${r.assignments?.clients?.name ?? '?'}）`
+        if (!r.invoice_received_at) monthPending.push({ key: `received-${r.id}`, target: `rec-${r.id}`, label: `請求書受領：${who}` })
+        if (!r.payment_reserved_at) monthPending.push({ key: `reserved-${r.id}`, target: `rec-${r.id}`, label: `支払い予約：${who}` })
+        // 支払い確認は複数アサインの委託者だとグループ見出しのチェックに集約されているため、行単位では出さない。
+        if (!multi && !r.contractor_paid_at) monthPending.push({ key: `paid-${r.id}`, target: `rec-${r.id}`, label: `支払い確認：${who}` })
+      }
+      if (multi && g.items.some((r) => !r.contractor_paid_at)) {
+        monthPending.push({ key: `paid-group-${g.contractorId}`, target: `cgroup-${g.contractorId}`, label: `支払い確認：${g.contractorName}` })
+      }
+    }
+    for (const g of clientGroups) {
+      // 表示側と同じ条件（内訳が複数、または立替経費あり）でグループ見出しの有無を判定する。
+      const multi = g.items.length > 1 || expensesOfClient(g.clientId).reduce((s, e) => s + e.amount, 0) > 0
+      for (const cr of g.items) {
+        const label = itemLabel(cr)
+        const who = multi && label ? `${g.clientName} / ${label}` : g.clientName
+        if (!cr.invoice_sent_at) monthPending.push({ key: `sent-${cr.id}`, target: `cli-${cr.id}`, label: `請求書送付：${who}` })
+        if (!multi && !cr.payment_confirmed_at) monthPending.push({ key: `confirmed-${cr.id}`, target: `cli-${cr.id}`, label: `入金確認：${g.clientName}` })
+      }
+      if (multi && g.items.some((cr) => !cr.payment_confirmed_at)) {
+        monthPending.push({ key: `confirmed-group-${g.clientId}`, target: `cligroup-${g.clientId}`, label: `入金確認：${g.clientName}` })
+      }
+    }
+  }
+
+  // 表示中の月の未完了は「この月の未完了」パネルが担当するため、繰越バナーからは除く。
+  const otherMonthCarryOver = carryOver.filter((g) => !(g.year === year && g.month === month))
+
   const canAdd = newTitle.trim().length > 0 && (
     monthMode === 'all' ||
     (monthMode === 'specific' && selectedMonths.length > 0) ||
@@ -998,9 +1057,9 @@ export default function DashboardClient({
       </div>
 
       {/* 繰越未完了バナー */}
-      {carryOver.length > 0 && (
+      {otherMonthCarryOver.length > 0 && (
         <div className="space-y-2">
-          {carryOver.map((g) => (
+          {otherMonthCarryOver.map((g) => (
             <div
               key={`${g.year}-${g.month}`}
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-4 py-2.5 text-sm text-warning"
@@ -1017,6 +1076,26 @@ export default function DashboardClient({
             </div>
           ))}
         </div>
+      )}
+
+      {/* この月の未完了（過去月のみ。当月は「今日やること」が担当する） */}
+      {monthPending.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning-subtle p-4">
+          <h2 className="mb-2 text-sm font-semibold text-warning">この月の未完了 {monthPending.length}件</h2>
+          <ul className="flex flex-wrap gap-2">
+            {monthPending.map((item) => (
+              <li key={item.key}>
+                <button
+                  type="button"
+                  onClick={() => focusPendingRow(item.target)}
+                  className="flex h-11 items-center rounded border border-warning/40 bg-white px-3 text-sm text-warning hover:bg-warning-subtle md:h-8"
+                >
+                  {item.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {/* 今日やること */}
@@ -1076,7 +1155,11 @@ export default function DashboardClient({
                     const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                     const headerRow = multi
                       ? [(
-                          <tr key={`chead-${g.contractorId}`} className="border-y-2 border-gray-200 bg-gray-100">
+                          <tr
+                            key={`chead-${g.contractorId}`}
+                            data-pending-row={`cgroup-${g.contractorId}`}
+                            className={`border-y-2 border-gray-200 ${rowBg(`cgroup-${g.contractorId}`, 'bg-gray-100')}`}
+                          >
                             <td className="py-2 px-4">
                               <span className="font-semibold text-gray-900">{g.contractorName}</span>
                             </td>
@@ -1107,7 +1190,7 @@ export default function DashboardClient({
                       const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50'
                       const payout = recordPayout(r)
                       return (
-                        <tr key={r.id} className={`border-b last:border-0 ${rowClass}`}>
+                        <tr key={r.id} data-pending-row={`rec-${r.id}`} className={`border-b last:border-0 ${rowBg(`rec-${r.id}`, rowClass)}`}>
                           <td className={multi ? 'py-3 pl-10 pr-4' : 'py-3 px-4'}>
                             {multi ? (
                               <div className="text-gray-700">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
@@ -1209,7 +1292,11 @@ export default function DashboardClient({
                 const paidIds = g.items.map((r) => r.id)
                 const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                 return (
-                  <div key={g.contractorId} className="px-4 py-3">
+                  <div
+                    key={g.contractorId}
+                    data-pending-row={multi ? `cgroup-${g.contractorId}` : undefined}
+                    className={`px-4 py-3 ${multi ? rowBg(`cgroup-${g.contractorId}`, '') : ''}`}
+                  >
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="font-medium">{g.contractorName}</span>
                       {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払確認（まとめて）」を置く */}
@@ -1243,7 +1330,7 @@ export default function DashboardClient({
                         const cardClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : ''
                         const payout = recordPayout(r)
                         return (
-                          <div key={r.id} className={`rounded-lg ${cardClass}`}>
+                          <div key={r.id} data-pending-row={`rec-${r.id}`} className={`rounded-lg ${rowBg(`rec-${r.id}`, cardClass)}`}>
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <div className="text-sm text-gray-600">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
@@ -1378,7 +1465,11 @@ export default function DashboardClient({
                     // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
                     const headerRow = multi
                       ? [(
-                          <tr key={`header-${g.clientId}`} className="border-y-2 border-gray-200 bg-gray-100">
+                          <tr
+                            key={`header-${g.clientId}`}
+                            data-pending-row={`cligroup-${g.clientId}`}
+                            className={`border-y-2 border-gray-200 ${rowBg(`cligroup-${g.clientId}`, 'bg-gray-100')}`}
+                          >
                             <td className="py-2 px-4">
                               <span className="font-semibold text-gray-900">{g.clientName}</span>
                             </td>
@@ -1410,7 +1501,7 @@ export default function DashboardClient({
                       const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
                       const labelPart = multi && label ? `（${label}）` : ''
                       return (
-                        <tr key={cr.id} className={`border-b last:border-0 ${rowClass}`}>
+                        <tr key={cr.id} data-pending-row={`cli-${cr.id}`} className={`border-b last:border-0 ${rowBg(`cli-${cr.id}`, rowClass)}`}>
                           <td className={multi ? 'py-3 pl-10 pr-4' : 'py-3 px-4'}>
                             {multi ? (
                               <span className="text-gray-700">{label || '（内訳名なし）'}</span>
@@ -1487,7 +1578,11 @@ export default function DashboardClient({
                 const confirmIds = g.items.map((cr) => cr.id)
                 const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
                 return (
-                  <div key={g.clientId} className="px-4 py-3">
+                  <div
+                    key={g.clientId}
+                    data-pending-row={multi ? `cligroup-${g.clientId}` : undefined}
+                    className={`px-4 py-3 ${multi ? rowBg(`cligroup-${g.clientId}`, '') : ''}`}
+                  >
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="font-medium">{g.clientName}</span>
                       {/* 複数内訳のクライアントは、ヘッダーに合計請求額と「入金確認（まとめて）」を置く */}
@@ -1523,7 +1618,7 @@ export default function DashboardClient({
                         const cardClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
                         const billing = cr.billing_amount_snapshot
                         return (
-                          <div key={cr.id} className={`rounded-lg ${cardClass}`}>
+                          <div key={cr.id} data-pending-row={`cli-${cr.id}`} className={`rounded-lg ${rowBg(`cli-${cr.id}`, cardClass)}`}>
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 {multi && (
