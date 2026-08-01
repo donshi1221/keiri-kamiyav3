@@ -27,6 +27,8 @@ export type TaskGroup = 'clientInvoice' | 'clientPayment'
 export interface TaskItem {
   label: string
   group?: TaskGroup
+  // 対応する行の data-pending-row の値。項目タップでその行へ飛ばすために持たせる。
+  target?: string
 }
 
 // monthlyClientRecords（クライアント請求記録）。

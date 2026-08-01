@@ -928,6 +928,12 @@ export default function DashboardClient({
   const expensesOfClient = (clientId: string): Expense[] =>
     localExpenses.filter((e) => clientIdByAssignment.get(e.assignment_id) === clientId)
 
+  // 内訳が複数、または立替経費があるクライアントだけグループ見出し行を出している。
+  // 入金確認のチェックは見出し側に集約されるため、未完了項目の飛び先もこの判定に合わせる。
+  const clientHasGroupHeader = (clientId: string): boolean =>
+    (clientGroups.find((g) => g.clientId === clientId)?.items.length ?? 0) > 1 ||
+    expensesOfClient(clientId).reduce((s, e) => s + e.amount, 0) > 0
+
   // 経費は代行者にのみ紐づける運用のため、編集者のアサインには入力欄を出さない。
   const canAddExpense = (r: RecordWithRelations): boolean =>
     r.assignments?.contractors?.contractor_type !== 'video_editor'
@@ -981,6 +987,13 @@ export default function DashboardClient({
     contractorGroups[idx].items.push(r)
   }
 
+  // 支払い確認のチェックは、アサインが複数ある委託者ではグループ見出しに集約されている。
+  // 未完了項目の飛び先も、行ではなくその見出しにする。
+  const contractorPaidTarget = (r: RecordWithRelations): string => {
+    const g = contractorGroups.find((x) => x.items.some((i) => i.id === r.id))
+    return g && g.items.length > 1 ? `cgroup-${g.contractorId}` : `rec-${r.id}`
+  }
+
   // 単発タスクの期日判定（日付のみで比較）。'YYYY-MM-DD' 文字列は辞書順＝日付順なので直接比較できる。
   const pad2 = (n: number) => String(n).padStart(2, '0')
   const todayYmd = `${todayDate.getFullYear()}-${pad2(todayDate.getMonth() + 1)}-${pad2(todayDate.getDate())}`
@@ -1002,8 +1015,8 @@ export default function DashboardClient({
   const inWindowItems: TaskItem[] = []
   if (isCurrentMonth) {
     for (const t of visibleGlobalTasks) {
-      if (t.state === 'overdue') overdueItems.push({ label: `${t.label}` })
-      else if (t.state === 'inWindow') inWindowItems.push({ label: `${t.label}` })
+      if (t.state === 'overdue') overdueItems.push({ label: `${t.label}`, target: 'global-tasks' })
+      else if (t.state === 'inWindow') inWindowItems.push({ label: `${t.label}`, target: 'global-tasks' })
     }
     for (const cr of localClientRecords) {
       const baseName = cr.clients?.name ?? '?'
@@ -1013,39 +1026,43 @@ export default function DashboardClient({
       const name = isMulti && label ? `${baseName} / ${label}` : baseName
       // クライアント系は件数が多くなるため group を付け、「今日やること」側でグループ折りたたみ表示にする。
       // グループ見出しに作業名（請求書送付/入金確認）が出るので、項目ラベルは名前だけにする。
+      const sentTarget = `cli-${cr.id}`
+      const confirmedTarget = clientHasGroupHeader(cr.client_id) ? `cligroup-${cr.client_id}` : `cli-${cr.id}`
       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
-      if (sentState === 'overdue') overdueItems.push({ label: name, group: 'clientInvoice' })
-      else if (sentState === 'inWindow') inWindowItems.push({ label: name, group: 'clientInvoice' })
+      if (sentState === 'overdue') overdueItems.push({ label: name, group: 'clientInvoice', target: sentTarget })
+      else if (sentState === 'inWindow') inWindowItems.push({ label: name, group: 'clientInvoice', target: sentTarget })
       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-      if (confirmedState === 'overdue') overdueItems.push({ label: name, group: 'clientPayment' })
-      else if (confirmedState === 'inWindow') inWindowItems.push({ label: name, group: 'clientPayment' })
+      if (confirmedState === 'overdue') overdueItems.push({ label: name, group: 'clientPayment', target: confirmedTarget })
+      else if (confirmedState === 'inWindow') inWindowItems.push({ label: name, group: 'clientPayment', target: confirmedTarget })
     }
     for (const r of localRecords) {
       const name = r.assignments?.contractors?.name ?? '?'
+      const rowTarget = `rec-${r.id}`
+      const paidTarget = contractorPaidTarget(r)
       const receivedState = recordDueState(r, 'invoice_received_at', 10)
-      if (receivedState === 'overdue') overdueItems.push({ label: `${name} — 請求書受領` })
-      else if (receivedState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書受領` })
+      if (receivedState === 'overdue') overdueItems.push({ label: `${name} — 請求書受領`, target: rowTarget })
+      else if (receivedState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書受領`, target: rowTarget })
       const reservedState = recordDueState(r, 'payment_reserved_at', 15)
-      if (reservedState === 'overdue') overdueItems.push({ label: `${name} — 支払い予約` })
-      else if (reservedState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い予約` })
+      if (reservedState === 'overdue') overdueItems.push({ label: `${name} — 支払い予約`, target: rowTarget })
+      else if (reservedState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い予約`, target: rowTarget })
       const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 支払い確認` })
-      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い確認` })
+      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 支払い確認`, target: paidTarget })
+      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い確認`, target: paidTarget })
     }
     // 単発タスク: 期日超過なら「期限超過」、期日が近い（既定3日以内）なら「対応期間中」に載せる。
     for (const t of oneTimeTasks) {
       if (t.completed_at) continue
       const st = oneTimeDueState(t.due_date)
       const label = `${t.title}（${formatDueMd(t.due_date)}）`
-      if (st === 'overdue') overdueItems.push({ label })
-      else if (st === 'inWindow') inWindowItems.push({ label })
+      if (st === 'overdue') overdueItems.push({ label, target: 'global-tasks' })
+      else if (st === 'inWindow') inWindowItems.push({ label, target: 'global-tasks' })
     }
     // カスタムタスク（毎月／特定月）: 日にち指定があるものだけ、単発タスクと同じ基準で載せる。
     for (const t of customTasks) {
       const st = customTaskState(t)
       const label = `${t.title}（${t.day}日）`
-      if (st === 'overdue') overdueItems.push({ label })
-      else if (st === 'inWindow') inWindowItems.push({ label })
+      if (st === 'overdue') overdueItems.push({ label, target: 'global-tasks' })
+      else if (st === 'inWindow') inWindowItems.push({ label, target: 'global-tasks' })
     }
   }
 
@@ -1067,8 +1084,7 @@ export default function DashboardClient({
       }
     }
     for (const g of clientGroups) {
-      // 表示側と同じ条件（内訳が複数、または立替経費あり）でグループ見出しの有無を判定する。
-      const multi = g.items.length > 1 || expensesOfClient(g.clientId).reduce((s, e) => s + e.amount, 0) > 0
+      const multi = clientHasGroupHeader(g.clientId)
       for (const cr of g.items) {
         const label = itemLabel(cr)
         const who = multi && label ? `${g.clientName} / ${label}` : g.clientName
@@ -1199,7 +1215,7 @@ export default function DashboardClient({
       )}
 
       {/* 今日やること */}
-      {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} />}
+      {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} onJump={focusPendingRow} />}
 
       {/* 委託者 — 請求書受領・支払管理 */}
       <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
