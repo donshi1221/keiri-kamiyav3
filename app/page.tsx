@@ -133,6 +133,9 @@ export default async function DashboardPage({
 
   return (
     <DashboardClient
+      // 月ごとに別インスタンスとして作り直す。これが無いと「← 前月」などのクライアント遷移で
+      // useState(records) 等のローカル状態が前の月のまま残り、見出しと表の中身がズレる。
+      key={`${year}-${month}`}
       year={year}
       month={month}
       records={records}
