@@ -15,6 +15,12 @@ import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCache
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 
+// Checkbox は見た目 16px のままだとスマホで押しづらいため、当たり判定用の after 疑似要素だけを
+// 44×44px に広げる（16 + 14×2）。md 以上は shadcn 既定のコンパクトな判定に戻す。
+const TAP_CHECKBOX = 'after:-inset-x-3.5 after:-inset-y-3.5 md:after:-inset-x-3 md:after:-inset-y-2'
+// アイコンボタン（14px）用。同じく当たり判定だけを 46×46px に広げる。
+const TAP_ICON_BUTTON = 'relative after:absolute after:-inset-4 md:after:hidden'
+
 function rowDueState(states: DueState[]): DueState {
   if (states.includes('overdue')) return 'overdue'
   if (states.includes('inWindow')) return 'inWindow'
@@ -1888,8 +1894,8 @@ export default function DashboardClient({
               const done = !!localGlobal[t.field]
               const isPendingUncheck = pendingGlobalUncheck === t.field
               return (
-                <div key={t.field} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
-                  <Checkbox checked={done} onCheckedChange={() => requestToggleGlobal(t.field, done)} />
+                <div key={t.field} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
+                  <Checkbox checked={done} onCheckedChange={() => requestToggleGlobal(t.field, done)} className={TAP_CHECKBOX} />
                   <span className={`flex-1 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.label}</span>
                   {isPendingUncheck ? (
                     <div className="flex items-center gap-1 shrink-0">
@@ -1897,14 +1903,14 @@ export default function DashboardClient({
                       <button
                         type="button"
                         onClick={() => { setPendingGlobalUncheck(null); toggleGlobal(t.field) }}
-                        className="rounded px-1.5 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/10"
+                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 md:h-auto md:min-w-0 md:py-0.5"
                       >
                         外す
                       </button>
                       <button
                         type="button"
                         onClick={() => setPendingGlobalUncheck(null)}
-                        className="rounded px-1.5 py-0.5 text-xs text-gray-400 hover:bg-gray-100"
+                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 md:h-auto md:min-w-0 md:py-0.5"
                       >
                         戻る
                       </button>
@@ -1931,8 +1937,8 @@ export default function DashboardClient({
                   const isPendingDelete = pendingDeleteId === t.id
                   const state = customTaskState(t)
                   return (
-                    <div key={t.id} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
-                      <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} />
+                    <div key={t.id} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
+                      <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} className={TAP_CHECKBOX} />
                       <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
                       {t.day != null && (
                         <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{t.day}日</span>
@@ -1958,14 +1964,14 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => deleteCustomTask(t.id)}
-                            className="text-xs text-danger hover:text-danger font-medium px-1.5 py-0.5 rounded hover:bg-danger-subtle"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs font-medium text-danger hover:bg-danger-subtle hover:text-danger md:h-auto md:min-w-0 md:py-0.5"
                           >
                             削除
                           </button>
                           <button
                             type="button"
                             onClick={() => setPendingDeleteId(null)}
-                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-0.5 rounded hover:bg-gray-100"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 md:h-auto md:min-w-0 md:py-0.5"
                           >
                             戻る
                           </button>
@@ -1975,7 +1981,7 @@ export default function DashboardClient({
                           type="button"
                           onClick={() => setPendingDeleteId(t.id)}
                           aria-label={`${t.title}を削除`}
-                          className="text-gray-300 hover:text-danger shrink-0"
+                          className={`text-gray-300 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -1994,8 +2000,8 @@ export default function DashboardClient({
                   const isPendingDelete = pendingDeleteId === t.id
                   const overdue = !done && oneTimeDueState(t.due_date) === 'overdue'
                   return (
-                    <div key={t.id} className={`flex items-center gap-3 ${done ? 'opacity-50' : ''}`}>
-                      <Checkbox checked={done} onCheckedChange={() => toggleOneTimeTask(t.id)} />
+                    <div key={t.id} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
+                      <Checkbox checked={done} onCheckedChange={() => toggleOneTimeTask(t.id)} className={TAP_CHECKBOX} />
                       <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
                       <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{formatDueMd(t.due_date)}</span>
                       {overdue && (
@@ -2006,14 +2012,14 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => deleteOneTimeTask(t.id)}
-                            className="text-xs text-danger hover:text-danger font-medium px-1.5 py-0.5 rounded hover:bg-danger-subtle"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs font-medium text-danger hover:bg-danger-subtle hover:text-danger md:h-auto md:min-w-0 md:py-0.5"
                           >
                             削除
                           </button>
                           <button
                             type="button"
                             onClick={() => setPendingDeleteId(null)}
-                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-0.5 rounded hover:bg-gray-100"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 md:h-auto md:min-w-0 md:py-0.5"
                           >
                             戻る
                           </button>
@@ -2023,7 +2029,7 @@ export default function DashboardClient({
                           type="button"
                           onClick={() => setPendingDeleteId(t.id)}
                           aria-label={`${t.title}を削除`}
-                          className="text-gray-300 hover:text-danger shrink-0"
+                          className={`text-gray-300 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
                         >
                           <Trash2 size={14} />
                         </button>
