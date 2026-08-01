@@ -29,6 +29,7 @@ export default async function DashboardPage({
     assignmentPaymentCountRows,
     allRecordsForCarryOver,
     allClientRecordsForCarryOver,
+    allGlobalTasksForCarryOver,
     monthExpenses,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
@@ -84,6 +85,13 @@ export default async function DashboardPage({
       invoice_sent_at: monthlyClientRecords.invoice_sent_at,
       payment_confirmed_at: monthlyClientRecords.payment_confirmed_at,
     }).from(monthlyClientRecords),
+    db.select({
+      year: monthlyGlobalTasks.year,
+      month: monthlyGlobalTasks.month,
+      expense_confirmed_at: monthlyGlobalTasks.expense_confirmed_at,
+      payment_report_confirmed_at: monthlyGlobalTasks.payment_report_confirmed_at,
+      withholding_confirmed_at: monthlyGlobalTasks.withholding_confirmed_at,
+    }).from(monthlyGlobalTasks),
     // 立替経費（代行者に紐づく）。委託者への支払いとクライアントへの請求の両方に反映する。
     db.query.expenses.findMany({
       where: and(eq(expenses.year, year), eq(expenses.month, month)),
@@ -95,7 +103,9 @@ export default async function DashboardPage({
     allRecordsForCarryOver,
     allClientRecordsForCarryOver,
     today.getFullYear(),
-    today.getMonth() + 1
+    today.getMonth() + 1,
+    allGlobalTasksForCarryOver,
+    allCustomTasks
   )
 
   const customTasks = allCustomTasks.filter(

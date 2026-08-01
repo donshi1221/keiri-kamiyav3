@@ -832,10 +832,14 @@ export default function DashboardClient({
     { field: 'payment_report_confirmed_at' as const, label: '支払・報酬 請求書チェック出し', dueLabel: '20日まで', dueDay: 20, windowDays: 3 },
     { field: 'withholding_confirmed_at' as const, label: '源泉所得税確認', dueLabel: '月末まで', dueDay: lastDay, windowDays: 4 },
   ]
+  // 期日判定は「今日」基準なので、過去月にそのまま使うと未完了が「対応期間前」に見えてしまう。
+  // ダッシュボードは当月までしか進めないため当月以外＝過去月とみなし、未完了は期限超過として出す。
   const visibleGlobalTasks = localGlobal
     ? globalTaskDefs.map((t) => ({
         ...t,
-        state: getDueState(day, t.dueDay, localGlobal[t.field], t.windowDays),
+        state: isCurrentMonth
+          ? getDueState(day, t.dueDay, localGlobal[t.field], t.windowDays)
+          : ((localGlobal[t.field] ? 'done' : 'overdue') as DueState),
       }))
     : []
 
@@ -1031,6 +1035,21 @@ export default function DashboardClient({
       if (multi && g.items.some((cr) => !cr.payment_confirmed_at)) {
         monthPending.push({ key: `confirmed-group-${g.clientId}`, target: `cligroup-${g.clientId}`, label: `入金確認：${g.clientName}` })
       }
+    }
+    if (localGlobal) {
+      for (const t of globalTaskDefs) {
+        if (!localGlobal[t.field]) {
+          monthPending.push({ key: `global-${t.field}`, target: 'global-tasks', label: t.label })
+        }
+      }
+    }
+    for (const t of customTasks) {
+      // 作成前の月まで遡って未完了扱いにしない（months による絞り込みは props 側で済んでいる）。
+      const createdDate = new Date(t.created_at)
+      const createdYearMonth = createdDate.getFullYear() * 100 + (createdDate.getMonth() + 1)
+      if (createdYearMonth > yearMonth) continue
+      if (t.completed_months.includes(yearMonth)) continue
+      monthPending.push({ key: `custom-${t.id}`, target: 'global-tasks', label: t.title })
     }
   }
 
@@ -1687,7 +1706,7 @@ export default function DashboardClient({
       </section>
 
       {/* グローバルタスク（常時表示） */}
-      <section className="rounded-lg border bg-white p-4">
+      <section data-pending-row="global-tasks" className={`rounded-lg border p-4 ${rowBg('global-tasks', 'bg-white')}`}>
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-semibold text-gray-900">グローバルタスク</h2>
           <button
