@@ -39,6 +39,22 @@ function DueBadge({ state }: { state: DueState }) {
   return null
 }
 
+// 回数契約（payment_count あり）のアサインだけ、契約更新の伺いが要るタイミングで出すバッジ。
+// 継続契約（payment_count が null）は上限が無いので何も出さない。
+function PaymentCountBadge({ paymentCount, paid }: { paymentCount: number | null; paid: number }) {
+  if (paymentCount == null) return null
+  if (paid > paymentCount) {
+    return <span className="inline-block rounded bg-danger-subtle px-1.5 py-0.5 text-xs text-danger">契約回数 {paymentCount}回を超過</span>
+  }
+  if (paid === paymentCount) {
+    return <span className="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">契約回数 {paymentCount}回に到達</span>
+  }
+  if (paid === paymentCount - 1) {
+    return <span className="inline-block rounded bg-warning-subtle px-1.5 py-0.5 text-xs text-warning">あと1回で契約回数 {paymentCount}回</span>
+  }
+  return null
+}
+
 function formatShortDate(iso: string): string {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
@@ -1316,8 +1332,11 @@ export default function DashboardClient({
                                 <div className="text-xs text-gray-500">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                               </>
                             )}
-                            {asgn && assignmentPaymentCounts[asgn.id] && (
-                              <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
+                            {asgn && (
+                              <PaymentCountBadge
+                                paymentCount={asgn.payment_count}
+                                paid={assignmentPaymentCounts[asgn.id]?.paid ?? 0}
+                              />
                             )}
                             {isVideoEditor && (() => {
                               const result = deliveryResult(asgn?.id)
@@ -1450,8 +1469,11 @@ export default function DashboardClient({
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <div className="text-sm text-gray-600">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
-                                {asgn && assignmentPaymentCounts[asgn.id] && (
-                                  <div className="text-xs text-gray-500">累計支払確認: {assignmentPaymentCounts[asgn.id].paid}回 / 予定 {assignmentPaymentCounts[asgn.id].scheduled}回</div>
+                                {asgn && (
+                                  <PaymentCountBadge
+                                    paymentCount={asgn.payment_count}
+                                    paid={assignmentPaymentCounts[asgn.id]?.paid ?? 0}
+                                  />
                                 )}
                                 {isVideoEditor && (() => {
                                   const result = deliveryResult(asgn?.id)
