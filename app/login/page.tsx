@@ -59,7 +59,7 @@ export default function LoginPage() {
               placeholder="パスワード"
               className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             />
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
             <Button type="submit" disabled={loading || !password} className="h-10 w-full">
               {loading ? 'ログイン中...' : 'ログイン'}
             </Button>

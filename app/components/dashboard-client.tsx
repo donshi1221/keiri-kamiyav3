@@ -95,7 +95,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
                 type="button"
                 onClick={() => onDelete(e.id)}
                 aria-label="この経費を削除"
-                className="flex h-11 items-center px-1 text-gray-400 hover:text-destructive md:h-5"
+                className="flex h-11 items-center px-1 text-gray-400 hover:text-danger md:h-5"
               >
                 削除
               </button>
@@ -161,7 +161,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
   )
 }
 
-// 編集者1人分の本数チェック結果。「要確認」とだけ出すと原因が分からず調べようがないため、
+// 編集者1人分の納品チェック結果。「要確認」とだけ出すと原因が分からず調べようがないため、
 // 理由のラベルと具体的な説明文（どのタブが無い・何の権限が足りない等）を必ず添える。
 // 本数が揃っている場合だけ、実支払額（本数×単価）を反映するボタンを出す。
 function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
@@ -192,12 +192,12 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
     const label = DELIVERY_STATUS_LABEL[row.status]
     // 対象月のタブが未作成なだけのケースは、設定不備と混ざらないよう控えめに出す。
     if (tone === 'none') {
-      return <div className="text-xs text-muted-foreground">本数チェック: 対象なし（{label}）</div>
+      return <div className="text-xs text-muted-foreground">納品チェック: 対象なし（{label}）</div>
     }
     return (
       <div className="text-xs text-danger">
         <div className="flex flex-wrap items-center gap-x-2">
-          <span>本数チェック: 要確認（{label}）</span>
+          <span>納品チェック: 要確認（{label}）</span>
           {sheetLink}
         </div>
         {row.message && <div className="text-muted-foreground">{row.message}</div>}
@@ -205,14 +205,14 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
     )
   }
   if (tone === 'none') {
-    return <div className="text-xs text-muted-foreground">本数チェック: 対象なし</div>
+    return <div className="text-xs text-muted-foreground">納品チェック: 対象なし</div>
   }
 
   const amount = suggestedPayout(row, unitPrice)
   return (
     <div className="flex flex-wrap items-center gap-x-2 text-xs">
       <span className={tone === 'done' ? 'text-success' : 'text-warning'}>
-        本数チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
+        納品チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
       </span>
       {/* 揃っていない月だけ、未記入の行を確かめられるようシートへの導線を出す。 */}
       {tone === 'short' && sheetLink}
@@ -233,7 +233,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
           <button
             type="button"
             onClick={() => { onApply(amount, row.delivered ?? 0); setConfirming(false) }}
-            className="flex h-11 items-center rounded px-2 font-medium text-destructive hover:bg-destructive/10 md:h-6"
+            className="flex h-11 items-center rounded px-2 font-medium text-danger hover:bg-danger-subtle md:h-6"
           >
             上書き
           </button>
@@ -270,7 +270,7 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
           <button
             type="button"
             onClick={onConfirm}
-            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs font-medium text-destructive hover:bg-destructive/10 md:h-6 md:min-w-0"
+            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs font-medium text-danger hover:bg-danger-subtle md:h-6 md:min-w-0"
           >
             外す
           </button>
@@ -355,7 +355,7 @@ export default function DashboardClient({
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
-  // グループ一括（委託者の支払確認／クライアントの入金確認）を外すときの確認待ち。
+  // グループ一括（委託者の支払い確認／クライアントの入金確認）を外すときの確認待ち。
   const [pendingGroupUncheck, setPendingGroupUncheck] = useState<{ kind: 'contractor' | 'client'; ids: string[] } | null>(null)
   const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -423,13 +423,13 @@ export default function DashboardClient({
         { cache: 'no-store' }
       )
       const data = (await res.json().catch(() => null)) as { rows?: DeliveryCheckRow[]; error?: string } | null
-      if (!res.ok) throw new Error(data?.error ?? '編集者の本数チェックに失敗しました。')
+      if (!res.ok) throw new Error(data?.error ?? '編集者の納品チェックに失敗しました。')
       const rows = data?.rows ?? []
       setDeliveryRows(rows)
       sessionStorage.setItem(deliveryCacheKey(deliveryTarget.year, deliveryTarget.month), JSON.stringify(rows))
     } catch (err) {
       setDeliveryRows(null)
-      showError(err instanceof Error ? err.message : '編集者の本数チェックに失敗しました。')
+      showError(err instanceof Error ? err.message : '編集者の納品チェックに失敗しました。')
     } finally {
       setDeliveryLoading(false)
     }
@@ -563,7 +563,7 @@ export default function DashboardClient({
     setPendingUncheck(null)
   }
 
-  // 委託者の「支払確認」を、その委託者の全アサインに一括で反映する。
+  // 委託者の「支払い確認」を、その委託者の全アサインに一括で反映する。
   // 支払いは委託者へまとめて行うため、行ごとでなく1操作で全行を揃える。
   async function bulkToggleContractorPaid(ids: string[], nextChecked: boolean) {
     const prev = new Map(ids.map((id) => [id, localRecords.find((r) => r.id === id)?.contractor_paid_at ?? null]))
@@ -918,7 +918,7 @@ export default function DashboardClient({
   const itemLabel = (cr: ClientRecordWithClient): string =>
     (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
 
-  // 1レコード（アサイン）の報酬額。編集者は本数チェックで反映された実支払額、
+  // 1レコード（アサイン）の報酬額。編集者は納品チェックで反映された実支払額、
   // 代行者はマスタの契約額（当月の控えを優先）。未確定は null。
   const recordPayout = (r: RecordWithRelations): number | null => {
     const isVE = r.assignments?.contractors?.contractor_type === 'video_editor'
@@ -1239,7 +1239,7 @@ export default function DashboardClient({
           <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
           {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
             <Button size="sm" variant="outline" onClick={runDeliveryCheck} disabled={deliveryLoading}>
-              {deliveryLoading ? '本数チェック中…' : `編集者の本数をチェック（${deliveryTarget.month}月分）`}
+              {deliveryLoading ? '納品チェック中…' : `編集者の納品チェック（${deliveryTarget.month}月分）`}
             </Button>
           )}
         </div>
@@ -1268,8 +1268,8 @@ export default function DashboardClient({
                     <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
                     <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
                     <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-500 font-normal">10日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払予約<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払確認<br /><span className="text-xs text-gray-500 font-normal">末日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払い予約<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払い確認<br /><span className="text-xs text-gray-500 font-normal">末日</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1282,7 +1282,7 @@ export default function DashboardClient({
                     )
                     // 複数クライアントを担当する委託者は「ヘッダー行（名前＋合計）＋明細行（インデント）」で表示する。
                     // 1クライアントだけの委託者は従来どおり1行にまとめ、冗長な行を増やさない。
-                    // 支払確認はこの委託者の全アサインに一括で付ける（支払いはまとめて行うため）。
+                    // 支払い確認はこの委託者の全アサインに一括で付ける（支払いはまとめて行うため）。
                     const paidIds = g.items.map((r) => r.id)
                     const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                     const headerRow = multi
@@ -1304,7 +1304,7 @@ export default function DashboardClient({
                               <MoneyCheckControl
                                 checked={allPaid}
                                 pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
-                                label={`${g.contractorName}の支払確認（まとめて）`}
+                                label={`${g.contractorName}の支払い確認（まとめて）`}
                                 onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
@@ -1384,14 +1384,14 @@ export default function DashboardClient({
                               checked={!!r.payment_reserved_at}
                               checkedAt={r.payment_reserved_at}
                               pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
-                              label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
+                              label={`${asgn?.contractors?.name ?? '?'}の支払い予約`}
                               onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
                               onConfirm={confirmUncheck}
                               onCancel={cancelUncheck}
                               badge={isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
                             />
                           </td>
-                          {/* 支払確認は複数アサインの委託者ではヘッダー行に集約する（1操作で全行に付ける）。
+                          {/* 支払い確認は複数アサインの委託者ではヘッダー行に集約する（1操作で全行に付ける）。
                               1アサインだけの委託者は従来どおり行内のチェックで操作する。 */}
                           <td className="text-center py-3 px-3">
                             {!multi && (
@@ -1399,7 +1399,7 @@ export default function DashboardClient({
                                 checked={!!r.contractor_paid_at}
                                 checkedAt={r.contractor_paid_at}
                                 pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
-                                label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
+                                label={`${asgn?.contractors?.name ?? '?'}の支払い確認`}
                                 onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
                                 onConfirm={confirmUncheck}
                                 onCancel={cancelUncheck}
@@ -1434,7 +1434,7 @@ export default function DashboardClient({
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="font-medium">{g.contractorName}</span>
-                      {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払確認（まとめて）」を置く */}
+                      {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払い確認（まとめて）」を置く */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
                           <span>
@@ -1442,11 +1442,11 @@ export default function DashboardClient({
                             <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
                           </span>
                           <span className="flex flex-col items-center gap-0.5">
-                            <span className="text-xs text-gray-500">支払確認</span>
+                            <span className="text-xs text-gray-500">支払い確認</span>
                             <MoneyCheckControl
                               checked={allPaid}
                               pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
-                              label={`${g.contractorName}の支払確認（まとめて）`}
+                              label={`${g.contractorName}の支払い確認（まとめて）`}
                               onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
                               onConfirm={confirmGroupUncheck}
                               onCancel={() => setPendingGroupUncheck(null)}
@@ -1520,21 +1520,21 @@ export default function DashboardClient({
                                 />
                               </div>
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">支払予約<span className="ml-1 text-gray-500">15日</span></span>
+                                <span className="text-xs text-gray-500">支払い予約<span className="ml-1 text-gray-500">15日</span></span>
                                 <MoneyCheckControl
                                   checked={!!r.payment_reserved_at}
                                   checkedAt={r.payment_reserved_at}
                                   pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'payment_reserved_at'}
-                                  label={`${asgn?.contractors?.name ?? '?'}の支払予約`}
+                                  label={`${asgn?.contractors?.name ?? '?'}の支払い予約`}
                                   onRequest={() => requestToggleRecord(r.id, 'payment_reserved_at', !!r.payment_reserved_at)}
                                   onConfirm={confirmUncheck}
                                   onCancel={cancelUncheck}
                                   badge={isCurrentMonth && !r.payment_reserved_at && <DueBadge state={reservedState} />}
                                 />
                               </div>
-                              {/* 複数アサインの委託者はカード上部の「支払確認（まとめて）」に集約するため行内は出さない。 */}
+                              {/* 複数アサインの委託者はカード上部の「支払い確認（まとめて）」に集約するため行内は出さない。 */}
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">支払確認<span className="ml-1 text-gray-500">末日</span></span>
+                                <span className="text-xs text-gray-500">支払い確認<span className="ml-1 text-gray-500">末日</span></span>
                                 {multi ? (
                                   <span className="text-xs text-gray-400">上でまとめて</span>
                                 ) : (
@@ -1542,7 +1542,7 @@ export default function DashboardClient({
                                     checked={!!r.contractor_paid_at}
                                     checkedAt={r.contractor_paid_at}
                                     pending={pendingUncheck?.kind === 'record' && pendingUncheck.id === r.id && pendingUncheck.field === 'contractor_paid_at'}
-                                    label={`${asgn?.contractors?.name ?? '?'}の支払確認`}
+                                    label={`${asgn?.contractors?.name ?? '?'}の支払い確認`}
                                     onRequest={() => requestToggleRecord(r.id, 'contractor_paid_at', !!r.contractor_paid_at)}
                                     onConfirm={confirmUncheck}
                                     onCancel={cancelUncheck}
@@ -1941,7 +1941,7 @@ export default function DashboardClient({
                       <button
                         type="button"
                         onClick={() => { setPendingGlobalUncheck(null); toggleGlobal(t.field) }}
-                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 md:h-auto md:min-w-0 md:py-0.5"
+                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs font-medium text-danger hover:bg-danger-subtle md:h-auto md:min-w-0 md:py-0.5"
                       >
                         外す
                       </button>

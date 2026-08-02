@@ -17,7 +17,7 @@ export async function GET() {
       },
     })
 
-    // アサインごとの支払い実績を集計する。支払確認(contractor_paid_at)済みの月だけを対象に、
+    // アサインごとの支払い実績を集計する。支払い確認(contractor_paid_at)済みの月だけを対象に、
     // 回数（=支払った月数）と本数（=その月の支払対象本数の合計）をまとめる。編集者の累計表示に使う。
     const paidRows = await db
       .select({

@@ -31,7 +31,7 @@ export async function PATCH(
         }
         value = Math.round(n)
       }
-      // 本数チェックの「反映」からは videoCount も一緒に送られる（支払対象本数の控え）。
+      // 納品チェックの「反映」からは videoCount も一緒に送られる（支払対象本数の控え）。
       // 未指定なら本数列は触らない（金額だけの更新で既存の本数を消さないため）。
       const patch: { actual_payout_amount: number | null; delivered_video_count?: number | null } = {
         actual_payout_amount: value,

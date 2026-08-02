@@ -239,7 +239,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                 )}
                 {c.email && <span className="text-xs text-gray-500">{c.email}</span>}
                 <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
-                <button onClick={() => setDeleteTarget(c)} className="text-xs text-destructive hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                <button onClick={() => setDeleteTarget(c)} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
@@ -275,7 +275,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                               </span>
                             )}
                             {c.contractor_type === 'video_editor' ? (
-                              // 編集者は「支払い期間」ではなく、支払確認済みの実績（回数・本数）を積み上げ表示する。
+                              // 編集者は「支払い期間」ではなく、支払い確認済みの実績（回数・本数）を積み上げ表示する。
                               <span className="block text-xs text-gray-500">
                                 支払い回数: {a.paid_count ?? 0}回 / 支払った本数: {a.paid_video_count ?? 0}本
                               </span>
@@ -504,7 +504,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                   <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
                 )}
                 <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
-                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-destructive hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
               </div>
               {/* 請求内訳の一覧（金額・契約期間・停止中を一目で確認） */}
               {items.length > 0 && (
@@ -741,7 +741,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
     <Dialog open={open} onClose={onClose} title={initial ? '委託者を編集' : '委託者を追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
+          <label className="text-sm font-medium block mb-1">名前 <span className="text-danger">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
         <div>
@@ -941,7 +941,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     <Dialog open={open} onClose={onClose} title={initial ? 'クライアントを編集' : 'クライアントを追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="text-sm font-medium block mb-1">名前 <span className="text-destructive">*</span></label>
+          <label className="text-sm font-medium block mb-1">名前 <span className="text-danger">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
 
@@ -977,7 +977,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                       type="button"
                       onClick={() => removeItem(index)}
                       aria-label="この内訳を削除"
-                      className="shrink-0 text-gray-300 hover:text-destructive"
+                      className="shrink-0 text-gray-300 hover:text-danger"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -1131,7 +1131,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
       <form onSubmit={submit} className="space-y-4">
         {showTypeSelector && (
           <div>
-            <label className="text-sm font-medium block mb-1">種別 <span className="text-destructive">*</span></label>
+            <label className="text-sm font-medium block mb-1">種別 <span className="text-danger">*</span></label>
             <select
               value={selectedType}
               onChange={(e) => {
@@ -1151,7 +1151,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
 
         {!fixedContractorId && (
           <div>
-            <label className="text-sm font-medium block mb-1">委託者 <span className="text-destructive">*</span></label>
+            <label className="text-sm font-medium block mb-1">委託者 <span className="text-danger">*</span></label>
             <select required value={contractorId} onChange={(e) => setContractorId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               <option value="">選択してください</option>
               {availableContractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1161,7 +1161,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
 
         {!fixedClientId && (
           <div>
-            <label className="text-sm font-medium block mb-1">クライアント <span className="text-destructive">*</span></label>
+            <label className="text-sm font-medium block mb-1">クライアント <span className="text-danger">*</span></label>
             <select required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
               <option value="">選択してください</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1170,7 +1170,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         )}
 
         <div>
-          <label className="text-sm font-medium block mb-1">役割名 <span className="text-destructive">*</span></label>
+          <label className="text-sm font-medium block mb-1">役割名 <span className="text-danger">*</span></label>
           <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" placeholder="例: 紹介者" />
           <p className="mt-1 text-xs text-gray-600">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
         </div>
