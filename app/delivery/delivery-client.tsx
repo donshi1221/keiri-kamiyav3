@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { nowJST } from '@/lib/dates'
 import type { DeliveryCheckRow } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryCacheKey, type DeliveryTone } from '@/lib/delivery-status'
 
@@ -53,6 +55,16 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
     setMonth(m)
   }
 
+  // 未来月を延々とチェックできても意味がないため、当月分までを上限にする（ダッシュボードと同じ基準）。
+  const now = nowJST()
+  const isAtCurrentMonthOrLater = year * 12 + month >= now.getFullYear() * 12 + (now.getMonth() + 1)
+
+  // 支払いは「N月分の納品」を N+1月のダッシュボードで行う運用のため、反映先は対象月の翌月。
+  // 年をまたぐ場合（12月分→翌年1月）も Date に委ねて自動で繰り上げる。
+  const dashboardDate = new Date(year, month, 1)
+  const dashboardYear = dashboardDate.getFullYear()
+  const dashboardMonth = dashboardDate.getMonth() + 1
+
   async function runCheck() {
     setLoading(true)
     setError(null)
@@ -82,7 +94,15 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => shiftMonth(-1)} disabled={loading}>← 前月</Button>
             <span className="min-w-[7rem] text-center font-semibold">{year}年{month}月分</span>
-            <Button variant="outline" size="sm" onClick={() => shiftMonth(1)} disabled={loading}>次月 →</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => shiftMonth(1)}
+              disabled={loading || isAtCurrentMonthOrLater}
+              title={isAtCurrentMonthOrLater ? '当月が上限です' : undefined}
+            >
+              次月 →
+            </Button>
           </div>
           <Button onClick={runCheck} disabled={loading}>
             {loading ? '集計中…' : 'この月をチェック'}
@@ -110,6 +130,17 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
           <span className="text-muted-foreground">対象なし <span className="font-semibold">{countTone(rows, 'none')}</span></span>
           <span className="text-danger">要確認 <span className="font-semibold">{countTone(rows, 'attention')}</span></span>
         </div>
+      )}
+
+      {/* このチェック結果は sessionStorage 経由でダッシュボード側の「反映」ボタンから支払額に使える。
+          その導線がここになければ、チェックしただけで終わってしまうため案内を出す。 */}
+      {rows && rows.length > 0 && (
+        <p className="text-sm text-gray-600">
+          チェック結果は、{dashboardYear}年{dashboardMonth}月のダッシュボードで各編集者の支払額に反映できます。{' '}
+          <Link href={`/?year=${dashboardYear}&month=${dashboardMonth}`} className="underline">
+            {dashboardYear}年{dashboardMonth}月のダッシュボードを開く
+          </Link>
+        </p>
       )}
 
       {/* 未実行 */}
