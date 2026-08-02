@@ -154,6 +154,9 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* 金額を縦に並べたときに桁位置が揃うよう、数字を等幅にする。
+       日本語UIでは数字以外の見た目に影響しないため全体へ適用する。 */
+    font-variant-numeric: tabular-nums;
   }
   html {
     @apply font-sans;

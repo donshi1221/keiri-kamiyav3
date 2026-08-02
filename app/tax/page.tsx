@@ -130,10 +130,10 @@ export default function TaxPage() {
         {/* 左パネル: アドバイス管理 */}
         <div className={`w-full shrink-0 flex-col gap-3 md:flex md:w-72 ${mobilePanel === 'advice' ? 'flex' : 'hidden'}`}>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="flex-1" onClick={() => setAddTextOpen(true)}>
+            <Button size="sm" variant="outline" className="flex-1 h-11 md:h-7" onClick={() => setAddTextOpen(true)}>
               + テキスト追加
             </Button>
-            <label className="flex-1 inline-flex items-center justify-center rounded-md border border-input bg-background text-sm font-medium h-8 px-3 py-1 cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors">
+            <label className="flex-1 inline-flex items-center justify-center rounded-md border border-input bg-background text-sm font-medium h-11 md:h-8 px-3 py-1 cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors">
               ↑ ファイル
               <input
                 type="file"
@@ -170,7 +170,8 @@ export default function TaxPage() {
                   <div className="flex items-start gap-1">
                     <span className="shrink-0">{e.source_type === 'file' ? '📎' : '📄'}</span>
                     <span className="flex-1 font-medium line-clamp-2 break-all">{e.title}</span>
-                    <button onClick={() => setDeleteEntryTarget(e)} aria-label="このアドバイスを削除" className="text-danger hover:text-danger shrink-0 ml-1 px-2 py-2 -my-2 md:p-0 md:my-0">×</button>
+                    {/* -my-3 は、当たり判定を44pxに広げてもカードの高さが増えないよう見た目上の高さを元に戻すため。 */}
+                    <button onClick={() => setDeleteEntryTarget(e)} aria-label="このアドバイスを削除" className="text-danger hover:text-danger shrink-0 ml-1 inline-flex h-11 w-11 items-center justify-center -my-3 md:h-auto md:w-auto md:my-0">×</button>
                   </div>
                   <div className="text-xs text-gray-500 mt-1 ml-5">
                     {new Date(e.created_at).toLocaleDateString('ja-JP')}
@@ -184,7 +185,7 @@ export default function TaxPage() {
         {/* 右パネル: AIチャット */}
         <div className={`flex-1 flex-col min-w-0 md:flex ${mobilePanel === 'chat' ? 'flex' : 'hidden'}`}>
           <div className="flex items-center gap-2 mb-3">
-            <Button size="sm" onClick={newSession}>新しい会話</Button>
+            <Button size="sm" className="h-11 md:h-7" onClick={newSession}>新しい会話</Button>
             {sessions.length > 0 && (
               <select
                 value={activeSessionId ?? ''}
@@ -391,7 +392,7 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
           className="flex-1 resize-none border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
           disabled={streaming}
         />
-        <Button size="sm" onClick={send} disabled={streaming || !input.trim()}>
+        <Button size="sm" className="h-11 md:h-7" onClick={send} disabled={streaming || !input.trim()}>
           {streaming ? '…' : '送信'}
         </Button>
       </div>
@@ -442,8 +443,8 @@ function AddTextDialog({ open, onClose, onSaved, onError }: { open: boolean; onC
           <textarea required rows={6} value={body} onChange={(e) => setBody(e.target.value)} className="w-full border rounded px-3 py-2 text-sm resize-none" />
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" type="button" onClick={onClose}>キャンセル</Button>
-          <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
     </FormDialog>

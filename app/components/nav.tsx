@@ -41,6 +41,9 @@ export default function Nav() {
     router.refresh()
   }
 
+  // 未ログイン時はどのリンクを押してもログイン画面へ戻されるだけなので、ナビ自体を出さない。
+  if (pathname === '/login') return null
+
   return (
     <>
       {/* PC・タブレット表示（md以上）: 上部の横並びナビ */}

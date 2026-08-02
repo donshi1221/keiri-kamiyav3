@@ -57,6 +57,20 @@ function PaymentCountBadge({ paymentCount, paid }: { paymentCount: number | null
   return null
 }
 
+// タスクのタイトルに直接書かれた URL（ChatWorkのリンク等）をタップできるようにする。
+// split の捕捉グループ付き正規表現は「区切り文字＝奇数番目」で返るため、奇数だけリンクにする。
+function renderTaskTitle(title: string): React.ReactNode[] {
+  return title.split(/(https?:\/\/\S+)/g).map((part, i) =>
+    i % 2 === 1 ? (
+      <a key={i} href={part} target="_blank" rel="noreferrer" className="underline text-info break-all">
+        {part}
+      </a>
+    ) : (
+      part
+    )
+  )
+}
+
 function formatShortDate(iso: string): string {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
@@ -1977,9 +1991,9 @@ export default function DashboardClient({
                   const isPendingDelete = pendingDeleteId === t.id
                   const state = customTaskState(t)
                   return (
-                    <div key={t.id} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
+                    <div key={t.id} className={`flex min-h-11 flex-wrap items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} className={TAP_CHECKBOX} />
-                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
+                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{renderTaskTitle(t.title)}</span>
                       {t.day != null && (
                         <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{t.day}日</span>
                       )}
@@ -2040,9 +2054,9 @@ export default function DashboardClient({
                   const isPendingDelete = pendingDeleteId === t.id
                   const overdue = !done && oneTimeDueState(t.due_date) === 'overdue'
                   return (
-                    <div key={t.id} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
+                    <div key={t.id} className={`flex min-h-11 flex-wrap items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleOneTimeTask(t.id)} className={TAP_CHECKBOX} />
-                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
+                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{renderTaskTitle(t.title)}</span>
                       <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{formatDueMd(t.due_date)}</span>
                       {overdue && (
                         <span className="shrink-0 text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
