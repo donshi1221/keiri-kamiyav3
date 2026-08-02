@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import ErrorToast from '@/app/components/error-toast'
+import { FormDialog } from '@/app/components/form-dialog'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Contractor, Client, Assignment, ClientBillingItem } from '@/lib/schema'
 
@@ -44,31 +45,6 @@ async function readErrorMessage(res: Response, fallback: string) {
   } catch {
     return fallback
   }
-}
-
-// ─────────────────────────────────────────────
-// Dialog
-// ─────────────────────────────────────────────
-function Dialog({ open, onClose, title, children }: {
-  open: boolean
-  onClose: () => void
-  title: string
-  children: React.ReactNode
-}) {
-  useEffect(() => {
-    function handler(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    if (open) document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [open, onClose])
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6 max-h-[85dvh] overflow-y-auto">
-        <h2 className="text-base font-semibold mb-4">{title}</h2>
-        {children}
-      </div>
-    </div>
-  )
 }
 
 // ─────────────────────────────────────────────
@@ -738,7 +714,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title={initial ? '委託者を編集' : '委託者を追加'}>
+    <FormDialog open={open} onClose={onClose} title={initial ? '委託者を編集' : '委託者を追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label className="text-sm font-medium block mb-1">名前 <span className="text-danger">*</span></label>
@@ -767,7 +743,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
-    </Dialog>
+    </FormDialog>
   )
 }
 
@@ -938,7 +914,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title={initial ? 'クライアントを編集' : 'クライアントを追加'}>
+    <FormDialog open={open} onClose={onClose} title={initial ? 'クライアントを編集' : 'クライアントを追加'}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label className="text-sm font-medium block mb-1">名前 <span className="text-danger">*</span></label>
@@ -1011,7 +987,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
-    </Dialog>
+    </FormDialog>
   )
 }
 
@@ -1127,7 +1103,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
     : contractors
 
   return (
-    <Dialog open={open} onClose={onClose} title={dialogTitle}>
+    <FormDialog open={open} onClose={onClose} title={dialogTitle}>
       <form onSubmit={submit} className="space-y-4">
         {showTypeSelector && (
           <div>
@@ -1208,6 +1184,6 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
           </Button>
         </div>
       </form>
-    </Dialog>
+    </FormDialog>
   )
 }

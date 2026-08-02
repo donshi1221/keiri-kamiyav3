@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import type { TaxAdviceEntry, TaxChatSession, TaxChatMessage } from '@/lib/schema'
 import ErrorToast from '@/app/components/error-toast'
+import { FormDialog } from '@/app/components/form-dialog'
 
 // APIエラー応答から表示用メッセージを取り出す。JSONでない/errorが無い場合は fallback を返す。
 async function readError(res: Response, fallback: string): Promise<string> {
@@ -23,31 +24,6 @@ async function readError(res: Response, fallback: string): Promise<string> {
   } catch {
     return fallback
   }
-}
-
-// ─────────────────────────────────────────────
-// Dialog
-// ─────────────────────────────────────────────
-function Dialog({ open, onClose, title, children }: {
-  open: boolean
-  onClose: () => void
-  title: string
-  children: React.ReactNode
-}) {
-  useEffect(() => {
-    function handler(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    if (open) document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [open, onClose])
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[85dvh] overflow-y-auto">
-        <h2 className="text-base font-semibold mb-4">{title}</h2>
-        {children}
-      </div>
-    </div>
-  )
 }
 
 // ─────────────────────────────────────────────
@@ -455,7 +431,7 @@ function AddTextDialog({ open, onClose, onSaved, onError }: { open: boolean; onC
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title="アドバイスをテキストで追加">
+    <FormDialog open={open} onClose={onClose} title="アドバイスをテキストで追加" maxWidth="max-w-lg">
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label className="text-sm font-medium block mb-1">タイトル <span className="text-danger">*</span></label>
@@ -470,6 +446,6 @@ function AddTextDialog({ open, onClose, onSaved, onError }: { open: boolean; onC
           <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
-    </Dialog>
+    </FormDialog>
   )
 }
