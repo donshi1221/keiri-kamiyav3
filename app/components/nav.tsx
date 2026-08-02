@@ -91,7 +91,7 @@ export default function Nav() {
             href="/api/backup/export"
             download
             aria-label="バックアップをダウンロード"
-            className="ml-auto flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+            className="ml-auto flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
           >
             <Download size={18} />
           </a>
@@ -99,7 +99,7 @@ export default function Nav() {
             type="button"
             onClick={handleLogout}
             aria-label="ログアウト"
-            className="flex h-9 w-9 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+            className="flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
           >
             <LogOut size={18} />
           </button>

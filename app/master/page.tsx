@@ -28,6 +28,10 @@ type AssignmentWithRelations = Assignment & {
 // GET /api/master/clients はクライアントに請求内訳(billing_items)をぶら下げて返す。
 type ClientWithItems = Client & { billing_items: ClientBillingItem[] }
 
+// 「編集」「削除」などのテキストリンク用。スマホでは実効タップ領域を 44px 高にし、
+// 広げた分は負マージンで打ち消して行の高さ（＝文字の高さ）を変えない。md 以上は元の詰めた表示に戻す。
+const TAP_TEXT_LINK = 'inline-flex min-h-11 items-center px-2 -my-3.5 md:min-h-0 md:p-0 md:my-0'
+
 // フォーム内で編集中の内訳1行。既存はid付き、新規追加はid未設定（保存時にPOSTで採番）。
 type ItemDraft = {
   id?: string
@@ -96,7 +100,7 @@ export default function MasterPage() {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`pb-2 px-1 text-sm border-b-2 transition-colors ${tab === t ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            className={`inline-flex min-h-11 items-end justify-center pb-2 px-3 text-sm border-b-2 transition-colors md:min-h-0 md:px-1 ${tab === t ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             {t === 'contractor' ? '委託者' : 'クライアント'}
           </button>
@@ -195,7 +199,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <Button size="sm" onClick={() => setAddOpen(true)}>+ 委託者を追加</Button>
+        <Button size="sm" className="h-11 md:h-7" onClick={() => setAddOpen(true)}>+ 委託者を追加</Button>
       </div>
 
       {contractors.length === 0 ? (
@@ -214,15 +218,15 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                   <span className="text-xs text-gray-500">単価 ¥{c.unit_price.toLocaleString()}/本</span>
                 )}
                 {c.email && <span className="text-xs text-gray-500">{c.email}</span>}
-                <button onClick={() => setEditContractor(c)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
-                <button onClick={() => setDeleteTarget(c)} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                <button onClick={() => setEditContractor(c)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
+                <button onClick={() => setDeleteTarget(c)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
                   <button
                     onClick={() => setAddAssignOpen(c.id)}
-                    className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0"
+                    className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}
                   >
                     + アサインを追加
                   </button>
@@ -263,9 +267,9 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                               )
                             )}
                           </span>
-                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
+                          <button onClick={() => setEditAssign(a)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
                           {a.active && (
-                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
                           )}
                         </div>
                       )
@@ -458,7 +462,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <Button size="sm" onClick={() => setAddClientOpen(true)}>+ クライアントを追加</Button>
+        <Button size="sm" className="h-11 md:h-7" onClick={() => setAddClientOpen(true)}>+ クライアントを追加</Button>
       </div>
 
       {clients.length === 0 ? (
@@ -479,8 +483,8 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                 {totalBilling > 0 && (
                   <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
                 )}
-                <button onClick={() => setEditClient(cl)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
-                <button onClick={() => setDeleteTarget(cl)} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                <button onClick={() => setEditClient(cl)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
+                <button onClick={() => setDeleteTarget(cl)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
               </div>
               {/* 請求内訳の一覧（金額・契約期間・停止中を一目で確認） */}
               {items.length > 0 && (
@@ -510,7 +514,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500 font-medium">アサイン</span>
-                  <button onClick={() => setAddAssignOpen(cl.id)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">
+                  <button onClick={() => setAddAssignOpen(cl.id)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>
                     + アサインを追加
                   </button>
                 </div>
@@ -535,9 +539,9 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                               </span>
                             )}
                           </span>
-                          <button onClick={() => setEditAssign(a)} className="text-xs text-info hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">編集</button>
+                          <button onClick={() => setEditAssign(a)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
                           {a.active && (
-                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className="text-xs text-danger hover:underline px-2 py-2 -my-2 md:p-0 md:my-0">削除</button>
+                            <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
                           )}
                         </div>
                       )
@@ -739,8 +743,8 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" type="button" onClick={onClose}>キャンセル</Button>
-          <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
     </FormDialog>
@@ -930,7 +934,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <div className="mb-2 flex items-center justify-between">
             <label className="text-sm font-medium">請求内訳</label>
-            <button type="button" onClick={addItem} className="flex items-center gap-1 text-xs text-info hover:underline">
+            <button type="button" onClick={addItem} className={`gap-1 text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>
               <Plus size={12} /> 内訳を追加
             </button>
           </div>
@@ -953,7 +957,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                       type="button"
                       onClick={() => removeItem(index)}
                       aria-label="この内訳を削除"
-                      className="shrink-0 text-gray-300 hover:text-danger"
+                      className="relative shrink-0 text-gray-300 after:absolute after:-inset-3.5 hover:text-danger md:after:hidden"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -983,8 +987,8 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" type="button" onClick={onClose}>キャンセル</Button>
-          <Button size="sm" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
       </form>
     </FormDialog>
@@ -1178,8 +1182,8 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" type="button" onClick={onClose}>キャンセル</Button>
-          <Button size="sm" type="submit" disabled={saving || !contractorId || !clientId}>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || !contractorId || !clientId}>
             {saving ? '保存中…' : '保存'}
           </Button>
         </div>

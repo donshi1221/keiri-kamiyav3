@@ -92,11 +92,12 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
         <h1 className="text-xl font-bold">納品チェック</h1>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => shiftMonth(-1)} disabled={loading}>← 前月</Button>
+            <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={() => shiftMonth(-1)} disabled={loading}>← 前月</Button>
             <span className="min-w-[7rem] text-center font-semibold">{year}年{month}月分</span>
             <Button
               variant="outline"
               size="sm"
+              className="h-11 md:h-7"
               onClick={() => shiftMonth(1)}
               disabled={loading || isAtCurrentMonthOrLater}
               title={isAtCurrentMonthOrLater ? '当月が上限です' : undefined}
@@ -104,7 +105,7 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
               次月 →
             </Button>
           </div>
-          <Button onClick={runCheck} disabled={loading}>
+          <Button className="h-11 md:h-8" onClick={runCheck} disabled={loading}>
             {loading ? '集計中…' : 'この月をチェック'}
           </Button>
         </div>
@@ -220,7 +221,13 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
                 </div>
                 {r.message && <div className="mt-1 text-xs text-gray-500">{r.message}</div>}
                 {r.spreadsheetUrl && (
-                  <a href={r.spreadsheetUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-xs text-info hover:underline">
+                  // カードの高さを変えずにタップ判定だけ 44px 高へ広げるため、after 疑似要素で拡張する。
+                  <a
+                    href={r.spreadsheetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="relative mt-1 inline-block text-xs text-info after:absolute after:inset-x-0 after:-inset-y-3.5 hover:underline"
+                  >
                     スプレッドシートを開く
                   </a>
                 )}

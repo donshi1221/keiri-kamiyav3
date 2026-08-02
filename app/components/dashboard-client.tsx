@@ -20,6 +20,8 @@ import ErrorToast from './error-toast'
 const TAP_CHECKBOX = 'after:-inset-x-3.5 after:-inset-y-3.5 md:after:-inset-x-3 md:after:-inset-y-2'
 // アイコンボタン（14px）用。同じく当たり判定だけを 46×46px に広げる。
 const TAP_ICON_BUTTON = 'relative after:absolute after:-inset-4 md:after:hidden'
+// 32px の丸ボタン用。丸の見た目を保ったまま判定だけ 44×44px にする（32 + 6×2）。
+const TAP_ROUND_BUTTON = 'relative after:absolute after:-inset-1.5 md:after:hidden'
 
 function rowDueState(states: DueState[]): DueState {
   if (states.includes('overdue')) return 'overdue'
@@ -1143,13 +1145,13 @@ export default function DashboardClient({
       {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
 
       <div className="flex items-center gap-3">
-        <Button variant="outline" size="sm" onClick={() => navigate(-1)}>← 前月</Button>
+        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={() => navigate(-1)}>← 前月</Button>
         <h1 className="text-xl font-bold">{year}年{month}月</h1>
         {/* ジャンプバーが画面外にあるときでも過去月と分かるよう、見出しにも印を出す。 */}
         {isPastMonth && (
           <span className="rounded bg-warning-subtle px-2 py-0.5 text-xs text-warning">過去月</span>
         )}
-        <Button variant="outline" size="sm" onClick={() => navigate(1)} disabled={isCurrentMonth} title={isCurrentMonth ? '当月が上限です' : undefined}>
+        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={() => navigate(1)} disabled={isCurrentMonth} title={isCurrentMonth ? '当月が上限です' : undefined}>
           次月 →
         </Button>
       </div>
@@ -1238,7 +1240,7 @@ export default function DashboardClient({
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2 border-b">
           <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
           {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
-            <Button size="sm" variant="outline" onClick={runDeliveryCheck} disabled={deliveryLoading}>
+            <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={runDeliveryCheck} disabled={deliveryLoading}>
               {deliveryLoading ? '納品チェック中…' : `編集者の納品チェック（${deliveryTarget.month}月分）`}
             </Button>
           )}
@@ -1833,7 +1835,7 @@ export default function DashboardClient({
             onClick={() => setShowAddForm((v) => !v)}
             aria-label="タスクを追加"
             aria-expanded={showAddForm}
-            className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-700 hover:bg-gray-800 text-white"
+            className={`flex items-center justify-center w-8 h-8 rounded-full bg-gray-700 hover:bg-gray-800 text-white ${TAP_ROUND_BUTTON}`}
           >
             <Plus size={14} />
           </button>
@@ -1904,7 +1906,7 @@ export default function DashboardClient({
                       type="button"
                       key={m}
                       onClick={() => setSelectedMonths((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m])}
-                      className={`px-3 py-1.5 text-xs rounded border ${selectedMonths.includes(m) ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                      className={`inline-flex min-h-11 items-center justify-center px-3 py-1.5 text-xs rounded border md:min-h-0 ${selectedMonths.includes(m) ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
                     >
                       {m}月
                     </button>
@@ -1916,10 +1918,10 @@ export default function DashboardClient({
               </div>
             )}
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={addCustomTask} disabled={!canAdd || isAdding}>
+              <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={addCustomTask} disabled={!canAdd || isAdding}>
                 {isAdding ? '追加中…' : '追加'}
               </Button>
-              <Button size="sm" variant="outline" onClick={resetAddForm}>キャンセル</Button>
+              <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={resetAddForm}>キャンセル</Button>
             </div>
           </div>
         )}
@@ -2138,7 +2140,7 @@ export default function DashboardClient({
             {!mfConnected && (
               <a
                 href="/api/moneyforward/auth"
-                className="text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle px-3 py-1.5 rounded"
+                className="inline-flex min-h-11 items-center text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle px-3 py-1.5 rounded md:min-h-0"
               >
                 {mfExpired ? 'MF再連携する' : 'MF連携する'}
               </a>
@@ -2148,7 +2150,7 @@ export default function DashboardClient({
                 type="button"
                 onClick={syncMFExpenses}
                 disabled={isSyncing}
-                className="text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle disabled:opacity-50 px-3 py-1.5 rounded"
+                className="inline-flex min-h-11 items-center text-xs border border-info-subtle text-info bg-info-subtle hover:bg-info-subtle disabled:opacity-50 px-3 py-1.5 rounded md:min-h-0"
               >
                 {isSyncing ? '同期中…' : '今すぐ同期'}
               </button>
@@ -2168,14 +2170,14 @@ export default function DashboardClient({
                 type="button"
                 onClick={backfillSnapshots}
                 disabled={snapshotBusy}
-                className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                className="inline-flex min-h-11 items-center rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50 md:min-h-0"
               >
                 {snapshotBusy ? '実行中…' : '実行する'}
               </button>
               <button
                 type="button"
                 onClick={() => setSnapshotConfirm(false)}
-                className="rounded px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-100"
+                className="inline-flex min-h-11 items-center rounded px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-100 md:min-h-0"
               >
                 戻る
               </button>
@@ -2184,7 +2186,7 @@ export default function DashboardClient({
             <button
               type="button"
               onClick={() => setSnapshotConfirm(true)}
-              className="shrink-0 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+              className="inline-flex min-h-11 shrink-0 items-center rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 md:min-h-0"
             >
               スナップショット補完
             </button>
