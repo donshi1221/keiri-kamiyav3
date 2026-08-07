@@ -119,6 +119,113 @@ export default function MasterPage() {
           )}
         </>
       )}
+
+      {/* 受付URLは委託者・クライアントのどちらにも属さない全体設定なので、タブの外に置く。 */}
+      <InvoiceUploadUrlSection onError={showError} />
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
+// 請求書受付URL
+// ─────────────────────────────────────────────
+function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }) {
+  const [token, setToken] = useState<string | null>(null)
+  // オリジン（https://ドメイン）はブラウザ側でしか分からない。サーバー描画時は空にしておき、
+  // マウント後に入れることで hydration の不一致も避ける。
+  const [origin, setOrigin] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [reissueOpen, setReissueOpen] = useState(false)
+  const [reissuing, setReissuing] = useState(false)
+
+  useEffect(() => { setOrigin(window.location.origin) }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/master/invoice-token')
+        if (!res.ok) throw new Error(await readErrorMessage(res, '受付URLの取得に失敗しました。'))
+        const data = await res.json()
+        if (!cancelled) setToken(data.token ?? null)
+      } catch (err) {
+        onError(err instanceof Error ? err.message : '受付URLの取得に失敗しました。')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [onError])
+
+  const url = token && origin ? `${origin}/invoice/${token}` : ''
+
+  async function copy() {
+    if (!url) return
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // 非HTTPS等ではクリップボードAPIが使えない。手動コピーへ誘導する。
+      onError('コピーできませんでした。URLを長押し（PCでは選択）してコピーしてください。')
+    }
+  }
+
+  async function reissue() {
+    setReissuing(true)
+    try {
+      const res = await fetch('/api/master/invoice-token', { method: 'POST' })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '受付URLの再発行に失敗しました。'))
+        return
+      }
+      const data = await res.json()
+      setToken(data.token ?? null)
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setReissuing(false)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-white">
+      <div className="border-b px-4 py-3">
+        <h2 className="font-medium">請求書受付URL</h2>
+        <p className="mt-1 text-xs text-gray-600">
+          編集者・代行者にこのURLを渡すと、ログインなしで請求書PDFを送ってもらえます。
+        </p>
+      </div>
+      <div className="space-y-3 px-4 py-3">
+        {url ? (
+          <p className="rounded border bg-gray-50 px-3 py-2 text-xs break-all">{url}</p>
+        ) : (
+          <p className="text-sm text-gray-500">読み込み中…</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" className="h-11 md:h-7" onClick={copy} disabled={!url}>
+            {copied ? 'コピーしました' : 'コピー'}
+          </Button>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={() => setReissueOpen(true)} disabled={!url || reissuing}>
+            {reissuing ? '再発行中…' : '再発行'}
+          </Button>
+        </div>
+      </div>
+
+      <AlertDialog open={reissueOpen} onOpenChange={(open) => { if (!open) setReissueOpen(false) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>受付URLを再発行しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              再発行すると、今までに配ったURLは使えなくなります。新しいURLを関係者に配り直してください。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => { setReissueOpen(false); reissue() }}>
+              再発行する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

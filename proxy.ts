@@ -23,7 +23,10 @@ export async function proxy(request: NextRequest) {
 export const config = {
   // login は「セグメント丸ごと」だけ除外する（login(?:$|/) で /login と /login/... のみ）。
   // 単に login と書くと /loginXXX のような前方一致まで認証対象外になってしまうため。
+  // invoice / api/invoice-inbox は外部の編集者・代行者が請求書を送る公開窓口なので同じ書き方で除外する。
+  // 受付トークンの発行・再発行は公開してはいけないため、除外パターンの配下に置かず
+  // /api/master/invoice-token（＝保護対象のまま）に分けている。
   matcher: [
-    '/((?!login(?:$|/)|api/auth/login|api/cron|_next/static|_next/image|favicon.ico).*)',
+    '/((?!login(?:$|/)|invoice(?:$|/)|api/invoice-inbox(?:$|/)|api/auth/login|api/cron|_next/static|_next/image|favicon.ico).*)',
   ],
 }

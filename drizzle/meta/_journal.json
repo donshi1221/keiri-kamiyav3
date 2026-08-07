@@ -64,6 +64,13 @@
       "when": 1784898178162,
       "tag": "0008_military_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785979862396,
+      "tag": "0009_mixed_cable",
+      "breakpoints": true
     }
   ]
 }

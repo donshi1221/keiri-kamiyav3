@@ -6,6 +6,9 @@ import { relations, sql } from 'drizzle-orm'
 export const contractorTypeEnum = pgEnum('contractor_type_enum', ['daiko', 'video_editor'])
 export const sourceTypeEnum = pgEnum('source_type_enum', ['manual', 'file'])
 export const chatRoleEnum = pgEnum('chat_role_enum', ['user', 'assistant'])
+// 受け付けた請求書の確認状態。今は受付(pending)しか使わないが、
+// 後続フェーズの突き合わせ結果（ok / ng / 保留）まで含めて先に定義しておく。
+export const invoiceCheckStatusEnum = pgEnum('invoice_check_status_enum', ['pending', 'ok', 'ng', 'hold'])
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
 
@@ -190,6 +193,26 @@ export const expenses = pgTable('expenses', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// アプリ全体で1つだけ持つ設定値のkey-valueストア。現在の用途は請求書受付URLのトークン。
+// 環境変数ではなくDBに置くのは、画面から再発行（値の書き換え）ができる必要があるため。
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// 外部（編集者・代行者）から公開URL経由で届いた請求書PDFの受け皿。
+// contractor_id は後続フェーズでAIが差出人を推定して埋めるため、受付時点では未確定（null）。
+// file_data はPDFのbase64。後続フェーズのAI読み取りで原本が必要になるため、抽出テキストではなく原本を残す。
+export const invoiceUploads = pgTable('invoice_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  contractor_id: uuid('contractor_id').references(() => contractors.id),
+  file_name: text('file_name').notNull(),
+  file_data: text('file_data').notNull(),
+  status: invoiceCheckStatusEnum('status').notNull().default('pending'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const contractorsRelations = relations(contractors, ({ many }) => ({
@@ -275,3 +298,5 @@ export type TaxChatSession = typeof taxChatSessions.$inferSelect
 export type TaxChatMessage = typeof taxChatMessages.$inferSelect
 export type CronRun = typeof cronRuns.$inferSelect
 export type Expense = typeof expenses.$inferSelect
+export type AppSetting = typeof appSettings.$inferSelect
+export type InvoiceUpload = typeof invoiceUploads.$inferSelect

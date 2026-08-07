@@ -42,7 +42,8 @@ export default function Nav() {
   }
 
   // 未ログイン時はどのリンクを押してもログイン画面へ戻されるだけなので、ナビ自体を出さない。
-  if (pathname === '/login') return null
+  // 請求書アップロードは社外の人が開く画面なので、社内向けの導線を見せない。
+  if (pathname === '/login' || pathname === '/invoice' || pathname.startsWith('/invoice/')) return null
 
   return (
     <>
