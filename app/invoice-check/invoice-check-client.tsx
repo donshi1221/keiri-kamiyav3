@@ -18,9 +18,9 @@ import { TZ } from '@/lib/dates'
 import type { InvoiceCheckRow } from '@/lib/ui-types'
 
 const STATUS_LABEL: Record<InvoiceCheckRow['status'], string> = {
-  pending: '未確認',
+  pending: '未チェック',
   ok: 'OK',
-  ng: '要確認',
+  ng: 'NG',
   hold: '保留',
 }
 
@@ -39,6 +39,12 @@ function StatusBadge({ status }: { status: InvoiceCheckRow['status'] }) {
   )
 }
 
+// 判定理由は改行区切りの1本の文字列。観点ごとに1行なので、改行をそのまま活かして出す。
+function CheckNotes({ notes }: { notes: string | null }) {
+  if (!notes) return null
+  return <p className="text-xs leading-relaxed whitespace-pre-line text-gray-500">{notes}</p>
+}
+
 // 受付日時はサーバー保存の UTC 文字列。閲覧端末のタイムゾーンに左右されないよう JST 固定で表示する。
 function formatReceivedAt(iso: string): string {
   return formatInTimeZone(iso, TZ, 'M/d HH:mm')
@@ -48,9 +54,12 @@ function formatAmount(amount: number | null): string {
   return amount === null ? '—' : `¥${amount.toLocaleString()}`
 }
 
-function formatTargetMonth(year: number | null, month: number | null): string {
+// 照合が済んでいれば「システムがどの月として扱ったか」(resolved)を出す。
+// 年の記載が無い請求書では読み取り値に年が入らないため、読み取り値のままだと判定の根拠が見えない。
+function formatTargetMonth(r: InvoiceCheckRow): string {
+  const year = r.resolved_year ?? r.extracted_year
+  const month = r.resolved_month ?? r.extracted_month
   if (month === null) return '—'
-  // 年が読み取れない請求書（「6月分」だけの記載）でも月は表示に値するため、月だけで出す。
   return year === null ? `${month}月分` : `${year}年${month}月分`
 }
 
@@ -63,6 +72,7 @@ export default function InvoiceCheckClient() {
   const [rows, setRows] = useState<InvoiceCheckRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [extractingId, setExtractingId] = useState<string | null>(null)
+  const [recheckingId, setRecheckingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<InvoiceCheckRow | null>(null)
 
   const load = useCallback(async () => {
@@ -97,6 +107,26 @@ export default function InvoiceCheckClient() {
     }
   }
 
+  async function recheck(id: string) {
+    setRecheckingId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoice-check/${id}/recheck`, { method: 'POST' })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '再チェックに失敗しました。'))
+        return
+      }
+      // 照合を行わなかった場合（読み取り失敗行）は一覧に何も出ないため、理由をここで伝える。
+      const data = (await res.json().catch(() => null)) as { skipped?: string } | null
+      if (typeof data?.skipped === 'string') setError(data.skipped)
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setRecheckingId(null)
+    }
+  }
+
   async function confirmDelete() {
     const target = deleteTarget
     setDeleteTarget(null)
@@ -114,13 +144,15 @@ export default function InvoiceCheckClient() {
     }
   }
 
+  const busy = (id: string) => extractingId === id || recheckingId === id
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <h1 className="text-xl font-bold">請求書チェック</h1>
         <p className="text-xs leading-relaxed text-gray-500">
-          受付URLから届いた請求書PDFと、AIが読み取った内容の一覧です。
-          読み取りは受付時に自動で行われます。失敗した行は「再読み取り」でやり直せます。
+          受付URLから届いた請求書PDFと、AIの読み取り・自動照合の結果一覧です。
+          読み取りと照合は受付時に自動で行われます。マスタや納品チェックを直したあとは「再チェック」で判定だけやり直せます。
         </p>
       </div>
 
@@ -150,11 +182,12 @@ export default function InvoiceCheckClient() {
               <thead className="border-b bg-gray-50">
                 <tr>
                   <th className="px-4 py-2 text-left font-medium text-gray-600">受付</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">金額</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">差出人</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">請求額</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-600">支払予定</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">差出人 / 委託者</th>
                   <th className="px-3 py-2 text-left font-medium text-gray-600">宛名</th>
                   <th className="px-3 py-2 text-left font-medium text-gray-600">対象月</th>
-                  <th className="px-3 py-2 text-center font-medium text-gray-600">状態</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">判定</th>
                   <th className="px-3 py-2 text-right font-medium text-gray-600">操作</th>
                 </tr>
               </thead>
@@ -167,10 +200,17 @@ export default function InvoiceCheckClient() {
                       {r.extract_error && <div className="mt-1 text-xs text-danger">{r.extract_error}</div>}
                     </td>
                     <td className="px-3 py-3 text-right font-medium">{formatAmount(r.extracted_amount)}</td>
-                    <td className="px-3 py-3 text-gray-600">{r.extracted_issuer ?? '—'}</td>
+                    <td className="px-3 py-3 text-right text-gray-600">{formatAmount(r.expected_amount)}</td>
+                    <td className="px-3 py-3">
+                      <div className="text-gray-600">{r.extracted_issuer ?? '—'}</div>
+                      <div className="text-xs text-gray-500">{r.contractor_name ?? '委託者 未特定'}</div>
+                    </td>
                     <td className="px-3 py-3 text-gray-600">{r.extracted_addressee ?? '—'}</td>
-                    <td className="px-3 py-3 text-gray-600">{formatTargetMonth(r.extracted_year, r.extracted_month)}</td>
-                    <td className="px-3 py-3 text-center"><StatusBadge status={r.status} /></td>
+                    <td className="px-3 py-3 whitespace-nowrap text-gray-600">{formatTargetMonth(r)}</td>
+                    <td className="min-w-64 px-3 py-3">
+                      <StatusBadge status={r.status} />
+                      <div className="mt-1"><CheckNotes notes={r.check_notes} /></div>
+                    </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center justify-end gap-3 whitespace-nowrap">
                         <a
@@ -183,11 +223,19 @@ export default function InvoiceCheckClient() {
                         </a>
                         <button
                           type="button"
-                          onClick={() => reExtract(r.id)}
-                          disabled={extractingId === r.id}
+                          onClick={() => recheck(r.id)}
+                          disabled={busy(r.id)}
                           className="text-info hover:underline disabled:text-gray-400"
                         >
-                          {extractingId === r.id ? '読み取り中…' : '再読み取り'}
+                          {recheckingId === r.id ? 'チェック中…' : '再チェック'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => reExtract(r.id)}
+                          disabled={busy(r.id)}
+                          className="text-info hover:underline disabled:text-gray-400"
+                        >
+                          {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                         </button>
                         <button
                           type="button"
@@ -218,12 +266,20 @@ export default function InvoiceCheckClient() {
 
                 <div className="space-y-1 rounded-lg bg-gray-50 px-3 py-2 text-sm">
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500">金額</span>
+                    <span className="text-gray-500">請求額</span>
                     <span className="font-medium text-gray-900">{formatAmount(r.extracted_amount)}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-gray-500">支払予定</span>
+                    <span className="text-gray-700">{formatAmount(r.expected_amount)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="shrink-0 text-gray-500">差出人</span>
                     <span className="text-right text-gray-700">{r.extracted_issuer ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="shrink-0 text-gray-500">委託者</span>
+                    <span className="text-right text-gray-700">{r.contractor_name ?? '未特定'}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="shrink-0 text-gray-500">宛名</span>
@@ -231,10 +287,11 @@ export default function InvoiceCheckClient() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-gray-500">対象月</span>
-                    <span className="text-gray-700">{formatTargetMonth(r.extracted_year, r.extracted_month)}</span>
+                    <span className="text-gray-700">{formatTargetMonth(r)}</span>
                   </div>
                 </div>
 
+                {r.check_notes && <div className="mt-2"><CheckNotes notes={r.check_notes} /></div>}
                 {r.extract_error && <div className="mt-2 text-xs text-danger">{r.extract_error}</div>}
 
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -253,10 +310,19 @@ export default function InvoiceCheckClient() {
                     variant="outline"
                     size="sm"
                     className="h-11"
-                    onClick={() => reExtract(r.id)}
-                    disabled={extractingId === r.id}
+                    onClick={() => recheck(r.id)}
+                    disabled={busy(r.id)}
                   >
-                    {extractingId === r.id ? '読み取り中…' : '再読み取り'}
+                    {recheckingId === r.id ? 'チェック中…' : '再チェック'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-11"
+                    onClick={() => reExtract(r.id)}
+                    disabled={busy(r.id)}
+                  >
+                    {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                   </Button>
                   <Button variant="outline" size="sm" className="h-11 text-danger" onClick={() => setDeleteTarget(r)}>
                     削除

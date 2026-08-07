@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { invoiceUploads } from '@/lib/schema'
 import { extractInvoiceAndSave } from '@/lib/invoice-extract'
+import { checkInvoiceAndSave } from '@/lib/invoice-check'
 import { eq } from 'drizzle-orm'
 
 // 関数のタイムアウト上限（秒）。外部AI（Gemini）にPDFを渡して読み取るため既定では足りない。
@@ -23,9 +24,12 @@ export async function POST(
     if (!row) return Response.json({ error: 'Not found' }, { status: 404 })
 
     const outcome = await extractInvoiceAndSave(id, row.file_data, row.file_name)
+    // 読み取り直した内容で判定もやり直す。読み取り失敗のまま照合しても
+    // 「材料が無い」保留が並ぶだけなので、成功したときだけ続けて実行する。
+    const check = !('error' in outcome) ? await checkInvoiceAndSave(id) : null
     // 読み取れなかった理由は画面に出す必要があるため、失敗も200で内容として返す
     // （HTTPエラーにすると「通信に失敗しました」に丸められ、理由が伝わらない）。
-    return Response.json(outcome)
+    return Response.json({ ...outcome, check })
   } catch (err) {
     return serverError(err)
   }

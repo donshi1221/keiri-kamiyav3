@@ -220,6 +220,17 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
   extract_error: text('extract_error'),
   extracted_at: timestamp('extracted_at', { withTimezone: true, mode: 'string' }),
+  // 自動照合の結果。extracted_* が「請求書に何と書いてあったか」なのに対し、
+  // resolved_* は「システムがどの月として扱ったか」＝判定の根拠。年の記載が無い請求書でも
+  // 年を補ってから照合するため、両方を残さないと後から判定を検証できない。
+  resolved_year: integer('resolved_year'),
+  resolved_month: integer('resolved_month'),
+  // 照合時点の支払予定額。マスタや月次レコードは後から変わるため、
+  // 「いつの時点の予定額と比べたのか」を残しておかないと判定を再現できない。
+  expected_amount: integer('expected_amount'),
+  // 判定理由（人間向け・改行区切りで全観点分）。OK/NGの結論だけでは根拠が追えないため必ず残す。
+  check_notes: text('check_notes'),
+  checked_at: timestamp('checked_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

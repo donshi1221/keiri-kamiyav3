@@ -83,4 +83,25 @@ export type InvoiceExtractOutcome = InvoiceExtracted | { error: string }
 
 // 一覧APIが返す1行。PDF本体（file_data）は重いので一覧には載せず、
 // 表示が必要なときだけ /api/invoice-check/[id]/pdf から取り出す。
-export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'>
+// contractor_name は照合で特定した委託者名。IDだけでは画面で誰か分からないため結合して持たせる。
+export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'> & {
+  contractor_name: string | null
+}
+
+// 自動照合（lib/invoice-check）の判定結果。DBの列と1対1に対応させ、
+// 保存する値と画面へ返す値がズレないようにする。
+export type InvoiceCheckStatus = InvoiceUpload['status']
+
+export interface InvoiceCheckResult {
+  status: InvoiceCheckStatus
+  contractorId: string | null
+  resolvedYear: number | null
+  resolvedMonth: number | null
+  expectedAmount: number | null
+  // 判定理由（観点ごとに1行）。保存時に改行で連結して check_notes に入れる。
+  notes: string[]
+}
+
+// 読み取りに失敗している行は照合できない（判定材料が無い）ため、status を pending のまま据え置く。
+// 「照合したが保留」と区別できるよう、実行しなかったことを理由付きで返す。
+export type InvoiceCheckOutcome = InvoiceCheckResult | { skipped: string }

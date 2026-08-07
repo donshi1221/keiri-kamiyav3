@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { invoiceUploads } from '@/lib/schema'
 import { verifyInvoiceUploadToken } from '@/lib/invoice-token'
 import { extractInvoiceAndSave } from '@/lib/invoice-extract'
+import { checkInvoiceAndSave } from '@/lib/invoice-check'
 import { UPLOAD_MAX_BYTES } from '@/lib/config'
 
 // 関数のタイムアウト上限（秒）。受付のたびに外部AI（Gemini）へPDFを渡して読み取るため、
@@ -45,8 +46,10 @@ export async function POST(req: NextRequest) {
     // 保存後にAI読み取りを行うが、失敗しても受付は成功（201）として扱う。
     // 本業は「請求書を確実に預かること」で、読み取りは社内側の画面から再実行できる。
     // ここで失敗を送信者に返すと、送った本人が原因も対処もできないまま再送を繰り返すことになる。
+    // 照合も同じ理由で受付の成否には影響させない（読み取り成功時のみ実行）。
     try {
-      await extractInvoiceAndSave(data.id, fileData, file.name)
+      const outcome = await extractInvoiceAndSave(data.id, fileData, file.name)
+      if (!('error' in outcome)) await checkInvoiceAndSave(data.id)
     } catch (err) {
       // 読み取り結果の書き戻しに失敗しても、預かったPDFは既に保存済み。
       console.error('[invoice-inbox:extract]', err)

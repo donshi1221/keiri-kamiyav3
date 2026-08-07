@@ -22,6 +22,10 @@ export const CRON_STALE_ALERT_DAYS = intFromEnv('CRON_STALE_ALERT_DAYS', 35)
 // 単発タスクを「今日やること（対応期間中）」に載せ始める日数。期日のこの日数前から表示する。既定3日。
 export const ONE_TIME_TASK_WINDOW_DAYS = intFromEnv('ONE_TIME_TASK_WINDOW_DAYS', 3)
 
+// 自社名。請求書の宛名が自社宛かを判定する際の「正解」として使う。
+// 社名変更や検証環境での差し替えに備えて環境変数で上書きできるようにする。
+export const COMPANY_NAME = process.env.COMPANY_NAME ?? 'KaMiYa株式会社'
+
 // 「その他経費」に含めるMF勘定科目（コードまたは名前）。外注費は含めない。
 export const MF_EXPENSE_ACCOUNTS = (process.env.MF_EXPENSE_ACCOUNTS ?? '')
   .split(',')
