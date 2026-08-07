@@ -9,8 +9,9 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
-// 税務AIチャットで使う Gemini のモデル名。
-export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash'
+// 税務AIチャットと請求書読み取りで使う Gemini のモデル名。
+// 固定バージョン名は提供終了で 429/404 になった実績があるため、常に最新を指す別名を既定にする。
+export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest'
 
 // 税務アドバイスのファイルアップロード上限（バイト）。既定 5MB。
 export const UPLOAD_MAX_BYTES = intFromEnv('UPLOAD_MAX_BYTES', 5 * 1024 * 1024)

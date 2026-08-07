@@ -210,6 +210,16 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   file_name: text('file_name').notNull(),
   file_data: text('file_data').notNull(),
   status: invoiceCheckStatusEnum('status').notNull().default('pending'),
+  // AI読み取りの結果。読めなかった項目は個別に null になる（1項目でも読めれば残りは活かす）。
+  extracted_amount: integer('extracted_amount'), //     請求合計額（税込・控除後の最終請求額、円）
+  extracted_issuer: text('extracted_issuer'), //        差出人（請求書の発行者名）
+  extracted_addressee: text('extracted_addressee'), //  宛名
+  // 「◯年◯月分」の対象月。年の記載がない請求書では月だけ埋まり、年は null のままになる。
+  extracted_year: integer('extracted_year'),
+  extracted_month: integer('extracted_month'),
+  // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
+  extract_error: text('extract_error'),
+  extracted_at: timestamp('extracted_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

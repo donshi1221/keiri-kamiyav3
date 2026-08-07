@@ -5,6 +5,7 @@ import type {
   Contractor,
   Client,
   ClientBillingItem,
+  InvoiceUpload,
 } from './schema'
 
 // ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
@@ -65,3 +66,21 @@ export interface DeliveryCheckRow {
   delivered: number | null // 納品済み本数（うちD列にURLがある行数）
   message: string | null //   補足・エラー内容（人間向け）
 }
+
+// ─── 請求書チェック（app/invoice-check）─────────────────────────────
+// AI読み取り（lib/invoice-extract）の成功結果。列名（extracted_*）ではなく短い名前にして、
+// AIに返させるJSONのキーと1対1に対応させる。
+export interface InvoiceExtracted {
+  amount: number | null
+  issuer: string | null
+  addressee: string | null
+  year: number | null
+  month: number | null
+}
+
+// 読み取りは失敗しても例外にせず、理由を持ち回って extract_error に保存する。
+export type InvoiceExtractOutcome = InvoiceExtracted | { error: string }
+
+// 一覧APIが返す1行。PDF本体（file_data）は重いので一覧には載せず、
+// 表示が必要なときだけ /api/invoice-check/[id]/pdf から取り出す。
+export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'>
