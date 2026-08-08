@@ -44,6 +44,25 @@ function resolveYear(month: number, extractedYear: number | null): number {
   return month <= today.getMonth() + 1 ? today.getFullYear() : today.getFullYear() - 1
 }
 
+// 請求書の「M月分」が指す支払月を求める。ここが委託者の種別で分かれる唯一の場所。
+// - 代行者: 契約額を月ぎめで払うため「M月分」＝M月の支払い（記載月＝支払月）。
+// - 編集者: M月に納品した分をまとめて請求し、その支払いは翌月にまわるという業務ルールのため、
+//   「M月分」＝M月の納品実績に対する M+1 月の支払いになる。
+// 月次レコード・立替経費・受領チェック・ドライブの保存先フォルダはいずれも「支払月」の行・場所に
+// 紐づくので、参照先はこの月に揃える。
+// 一方 resolved_year / resolved_month（画面の対象月表示）は請求書の記載どおり M のままにする
+// （人が請求書を見て探す手がかりは記載月のため）。
+// 12月分→翌年1月支払いの繰り上がりは Date に任せる（自前の +1 では年をまたげない）。
+function payoutMonthOf(
+  contractorType: ContractorRow['contractor_type'],
+  year: number,
+  month: number
+): { year: number; month: number } {
+  if (contractorType !== 'video_editor') return { year, month }
+  const d = new Date(year, month, 1)
+  return { year: d.getFullYear(), month: d.getMonth() + 1 }
+}
+
 // 納品シートから支払額を割り出せなかった理由。「確定できません」だけでは何を直せばよいか分からないため、
 // シート側の具体的な状況（URL未登録・権限不足・本数不足など）をそのまま伝える。
 // 納品予定0件（tone === 'none'）は呼び出し側で0円として処理するため、ここには来ない。
@@ -66,14 +85,18 @@ type ExpectedOutcome = { amount: number; notes: string[]; breakdown: InvoicePayo
 // 実在のクライアント名と混ざらないよう固定の1行にまとめる。
 const EXPENSE_BREAKDOWN_LABEL = '立替経費'
 
-// 対象月に「その委託者へいくら払う予定か」を算出する。
+// 支払月に「その委託者へいくら払う予定か」を算出する。year / month は請求書の記載月ではなく
+// 支払月（編集者は記載月の翌月。payoutMonthOf 参照）。月次レコードも立替経費も支払月で並んでいるため。
 // 代行者は契約額（当月の控えを優先）、編集者は納品チェックで反映済みの実支払額を正とし、
 // 未反映なら納品シートをその場で読んで補う。立替経費は同額を支払いに乗せるため合算する。
 // ダッシュボードの支払予定額（recordPayout）と同じ定義に揃えてある（食い違うと照合が信用できなくなる）。
 async function computeExpectedPayout(
   contractor: ContractorRow,
   year: number,
-  month: number
+  month: number,
+  // 支払月が請求書の記載月とずれる（編集者）ときだけ、保留文言に「（支払月）」と添える。
+  // 記載月と一致する代行者にも付けると、かえってどの月を指しているのか紛らわしくなる。
+  payoutMonthShifted: boolean
 ): Promise<ExpectedOutcome> {
   const assignmentRows = await db.query.assignments.findMany({
     where: (a, { and: andOp, eq: eqOp }) => andOp(eqOp(a.contractor_id, contractor.id), eqOp(a.active, true)),
@@ -95,11 +118,12 @@ async function computeExpectedPayout(
       )
     )
   if (records.length === 0) {
-    return { hold: `${year}年${month}月分の月次レコードがありません` }
+    return { hold: `${year}年${month}月分${payoutMonthShifted ? '（支払月）' : ''}の月次レコードがありません` }
   }
 
   const isVideoEditor = contractor.contractor_type === 'video_editor'
-  // 編集者の支払いは前月の納品に対して行うため、読むべき納品シートの月は1つ手前になる。
+  // 編集者の支払いは前月の納品に対して行うため、支払月から見た納品シートの月は1つ手前になる
+  // （編集者の「M月分」は支払月 M+1 で渡ってくるので、ここで読むのは記載どおりの M 月タブ）。
   const deliveryMonth = deliveryTargetMonth(year, month).month
   let total = 0
   const notes: string[] = []
@@ -153,6 +177,7 @@ async function computeExpectedPayout(
     breakdown.push({ clientName, count: delivery.delivered, amount: suggested })
   }
 
+  // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
   const expenseRows = await db
     .select({ amount: expenses.amount })
     .from(expenses)
@@ -445,18 +470,26 @@ export async function checkInvoiceAndSave(
   // ─── B. 対象月の解決 ───────────────────────────────────────
   let resolvedYear: number | null = null
   let resolvedMonth: number | null = null
+  // 照合に使う支払月。編集者だけ記載月の翌月になる（理由は payoutMonthOf のコメント）。
+  // 委託者が特定できていなければ種別が分からず導出できないので null のままにする（下のCごと見送られる）。
+  let payout: { year: number; month: number } | null = null
   if (row.extracted_month === null) {
     record('hold', '対象月が読み取れません')
   } else {
     resolvedMonth = row.extracted_month
     resolvedYear = resolveYear(row.extracted_month, row.extracted_year)
-    record('ok', `対象月は ${resolvedYear}年${resolvedMonth}月分 として照合しました`)
+    payout = contractor ? payoutMonthOf(contractor.contractor_type, resolvedYear, resolvedMonth) : null
+    // 記載月と支払月がずれる編集者は、どちらの月で何を見たのかを書かないと判定理由が読み解けない。
+    // 補足が付くときは括弧が区切りになるので、代行者のときだけ従来どおり空白を挟む。
+    const monthNote =
+      payout && payout.month !== resolvedMonth ? `（${resolvedMonth}月納品・${payout.month}月支払い）` : ' '
+    record('ok', `対象月は ${resolvedYear}年${resolvedMonth}月分${monthNote}として照合しました`)
   }
 
   // ─── C. 金額の照合 ─────────────────────────────────────────
   let expectedAmount: number | null = null
-  if (contractor && resolvedYear !== null && resolvedMonth !== null) {
-    const expected = await computeExpectedPayout(contractor, resolvedYear, resolvedMonth)
+  if (contractor && payout) {
+    const expected = await computeExpectedPayout(contractor, payout.year, payout.month, payout.month !== resolvedMonth)
     if ('hold' in expected) {
       record('hold', expected.hold)
     } else {
@@ -507,8 +540,9 @@ export async function checkInvoiceAndSave(
 
   // 受領チェックの自動付与はOKのときだけ。ng/hold は中身が確定していないため月次レコードには一切触らない。
   // 付与の結果も判定理由に残す（画面に出るのは check_notes だけなので、ここに書かないと何が起きたか分からない）。
-  if (status === 'ok' && contractor && resolvedYear !== null && resolvedMonth !== null) {
-    const received = await markInvoiceReceived(contractor.id, resolvedYear, resolvedMonth)
+  // 受領チェックは月次レコードに付く印なので、参照先は照合と同じ支払月に揃える（記載月ではない）。
+  if (status === 'ok' && contractor && payout) {
+    const received = await markInvoiceReceived(contractor.id, payout.year, payout.month)
     if (received.marked > 0) {
       notes.push(formatInvoiceNote('received', `請求書受領チェックを自動で付けました（${received.marked}件）`))
     } else if (received.total > 0) {
@@ -525,9 +559,11 @@ export async function checkInvoiceAndSave(
   let driveLink = row.drive_link
   if (driveFileId) {
     notes.push(formatInvoiceNote('saved', 'Googleドライブに保存済みです'))
-  } else if (status === 'ok' && contractor && resolvedYear !== null && resolvedMonth !== null) {
+  } else if (status === 'ok' && contractor && payout) {
     // 保存するのはOKになった請求書だけ。NG・保留のものまで上げると、人が直したあとの版と二重に残る。
-    const saved = await saveInvoiceToDrive(id, contractor.name, resolvedYear, resolvedMonth)
+    // 保存先フォルダ・ファイル名は支払月（payout）で揃える。経理はドライブを「支払った月」で
+    // 整理して確認するため（記載月だと編集者の請求書だけ1か月ズレて別フォルダに入ってしまう）。
+    const saved = await saveInvoiceToDrive(id, contractor.name, payout.year, payout.month)
     if ('fileId' in saved) {
       driveFileId = saved.fileId
       driveLink = saved.link

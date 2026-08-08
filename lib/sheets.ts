@@ -61,14 +61,38 @@ function isDeadlineInMonth(raw: string, month: number): boolean {
   return false
 }
 
+// A列(〆切)が「◯月◯日」やスラッシュ形式（(YYYY/)M/D）の日付として読めるか。
+// 月が一致するかは問わない（isDeadlineInMonth と役割を分ける）。
+function parsesAsDate(raw: string): boolean {
+  const s = normalizeSheetText(raw).trim()
+  if (!s) return false
+  if (/(\d{1,2})\s*月/.test(s)) return true
+  if (/(?:\d{4}\/)?(\d{1,2})\/\d{1,2}/.test(s)) return true
+  return false
+}
+
 // A列(〆切)が対象月の行を「すべき」、そのうちD列(URL)が非空の行を「済み」として数える。
 export function countDeliveries(values: string[][], month: number): { expected: number; delivered: number } {
   let expected = 0
   let delivered = 0
   for (const row of values.slice(DELIVERY_HEADER_ROWS)) {
-    if (!isDeadlineInMonth(row[DELIVERY_COL_DEADLINE] ?? '', month)) continue
-    expected++
-    if ((row[DELIVERY_COL_URL] ?? '').trim().length > 0) delivered++
+    const deadline = row[DELIVERY_COL_DEADLINE] ?? ''
+    const hasUrl = (row[DELIVERY_COL_URL] ?? '').trim().length > 0
+
+    if (isDeadlineInMonth(deadline, month)) {
+      expected++
+      if (hasUrl) delivered++
+      continue
+    }
+
+    // A列が日付として解釈できない行（空欄や「1」等）は、タブ名自体が対象月を表しており、
+    // 〆切を日付形式で書かない運用が実際のシートに存在するための救済措置。
+    // URLが貼られている＝納品済みは確実なので、対象月タブのものとして拾う。
+    // ただし別の月の日付として読める行（例: 7月度タブに8/1）は従来どおり数えない（月またぎ誤カウント防止）。
+    if (!parsesAsDate(deadline) && hasUrl) {
+      expected++
+      delivered++
+    }
   }
   return { expected, delivered }
 }
