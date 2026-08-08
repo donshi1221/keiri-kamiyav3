@@ -11,6 +11,8 @@ export const INVOICE_NOTE_MARKS: Record<InvoiceNoteMark, string> = {
   hold: '保留',
   received: '受領',
   fixed: '修正',
+  saved: '保存',
+  saveFailed: '保存失敗',
 }
 
 // 手動修正の記録文。PATCH後の再チェックで毎回同じ文言を出し、

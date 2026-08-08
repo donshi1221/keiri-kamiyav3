@@ -163,6 +163,17 @@ export const moneyforwardTokens = pgTable('moneyforward_tokens', {
   updated_at: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// Googleドライブ保存用のOAuthトークン。サービスアカウントはストレージ容量を持てず
+// マイドライブへ書き込めないため、ユーザー本人の名義・容量で保存する方式に切り替えた。
+// 連携先アカウントはアプリ全体で1つのため moneyforward_tokens と同じく1行だけを使い回す。
+export const googleDriveTokens = pgTable('google_drive_tokens', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  access_token: text('access_token').notNull(),
+  refresh_token: text('refresh_token').notNull(),
+  expires_at: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 export const moneyforwardExpenses = pgTable('moneyforward_expenses', {
   id: uuid('id').primaryKey().defaultRandom(),
   year: integer('year').notNull(),
@@ -231,6 +242,10 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // 判定理由（人間向け・改行区切りで全観点分）。OK/NGの結論だけでは根拠が追えないため必ず残す。
   check_notes: text('check_notes'),
   checked_at: timestamp('checked_at', { withTimezone: true, mode: 'string' }),
+  // 照合OK後にGoogleドライブへ保存した控え。drive_file_id が入っていること自体が
+  // 「保存済み」の印になり、再チェック時に二重アップロードするか再試行するかの判断に使う。
+  drive_file_id: text('drive_file_id'),
+  drive_link: text('drive_link'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
@@ -321,3 +336,4 @@ export type CronRun = typeof cronRuns.$inferSelect
 export type Expense = typeof expenses.$inferSelect
 export type AppSetting = typeof appSettings.$inferSelect
 export type InvoiceUpload = typeof invoiceUploads.$inferSelect
+export type GoogleDriveToken = typeof googleDriveTokens.$inferSelect

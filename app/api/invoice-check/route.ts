@@ -28,6 +28,8 @@ export async function GET() {
         expected_amount: invoiceUploads.expected_amount,
         check_notes: invoiceUploads.check_notes,
         checked_at: invoiceUploads.checked_at,
+        drive_file_id: invoiceUploads.drive_file_id,
+        drive_link: invoiceUploads.drive_link,
         created_at: invoiceUploads.created_at,
       })
       .from(invoiceUploads)

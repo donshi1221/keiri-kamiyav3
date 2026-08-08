@@ -44,11 +44,14 @@ function StatusBadge({ status }: { status: InvoiceCheckRow['status'] }) {
 
 // NG・保留は人がこれから直すものなので色付きで前に出す。
 // 受領・修正は「システムが何をしたか」の記録で、判定の色と混ぜると本当のNGが埋もれるため控えめにする。
+// 保存失敗だけは記録でありながら人の対応（再チェック）を待つ状態なので、保留と同じ警告色で前に出す。
 const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ng: 'rounded bg-danger-subtle px-2 py-1 font-medium text-danger',
   hold: 'rounded bg-warning-subtle px-2 py-1 text-warning',
+  saveFailed: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   received: 'text-gray-500',
   fixed: 'text-gray-500',
+  saved: 'text-gray-500',
   ok: 'text-gray-500',
 }
 
@@ -351,7 +354,7 @@ export default function InvoiceCheckClient() {
         <p className="text-xs leading-relaxed text-gray-500">
           受付URLから届いた請求書PDFと、AIの読み取り・自動照合の結果一覧です。
           読み取りと照合は受付時に自動で行われます。マスタや納品チェックを直したあとは「再チェック」で判定だけやり直せます。
-          判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付きます（結果は判定理由に出ます）。
+          判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
           判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。
           AIが読み間違えている場合は「修正」から値を直すと、その内容で照合をやり直します。
         </p>
@@ -422,6 +425,16 @@ export default function InvoiceCheckClient() {
                         >
                           PDFを開く
                         </a>
+                        {r.drive_link && (
+                          <a
+                            href={r.drive_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-info hover:underline"
+                          >
+                            ドライブで開く
+                          </a>
+                        )}
                         <button
                           type="button"
                           onClick={() => setEditTarget(r)}
@@ -514,6 +527,17 @@ export default function InvoiceCheckClient() {
                   >
                     PDFを開く
                   </Button>
+                  {r.drive_link && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11"
+                      nativeButton={false}
+                      render={<a href={r.drive_link} target="_blank" rel="noopener noreferrer" />}
+                    >
+                      ドライブで開く
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" className="h-11" onClick={() => setEditTarget(r)}>
                     修正
                   </Button>

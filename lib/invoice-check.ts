@@ -6,8 +6,15 @@ import { checkAssignmentDelivery } from '@/lib/sheets'
 import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delivery-status'
 import { COMPANY_NAME } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
+import { uploadPdfToDrive } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
-import type { DeliveryCheckRow, InvoiceCheckOutcome, InvoiceCheckResult, InvoiceCheckStatus } from '@/lib/ui-types'
+import type {
+  DeliveryCheckRow,
+  DriveUploadOutcome,
+  InvoiceCheckOutcome,
+  InvoiceCheckResult,
+  InvoiceCheckStatus,
+} from '@/lib/ui-types'
 
 // 3観点（差出人・対象月＋金額・宛名）それぞれの結論。
 // - ok   : 一致した
@@ -197,6 +204,36 @@ async function markInvoiceReceived(
   return { marked: updated.length, total: existing.length }
 }
 
+// ドライブ上のファイル名に使うと表示や検索が壊れる文字（フォルダ区切り等）を落とす。
+// 元のファイル名は外部からアップロードされたもので、何が入っているか保証がない。
+function sanitizeFileNamePart(value: string): string {
+  return value.replace(/[\\/:*?"<>|\r\n]/g, '_').trim()
+}
+
+// 「2026-07_中井美由紀_請求書.pdf」の形に揃える。保存先は月別サブフォルダだが、
+// 名前にも対象年月を残すのは、あとでフォルダの外へ移動されても何月分か分かるようにするため。
+// 委託者名を挟むのは「請求書.pdf」のような同名ファイルが重なっても誰の分か分かるようにするため。
+function driveFileName(year: number, month: number, contractorName: string, originalName: string): string {
+  const prefix = `${year}-${String(month).padStart(2, '0')}`
+  return `${prefix}_${sanitizeFileNamePart(contractorName)}_${sanitizeFileNamePart(originalName)}`
+}
+
+// 照合OKの請求書PDFをドライブへ保存する。PDF本体は1件で数MBになりうるため、
+// 実際に保存する時だけ読み出す（毎回の再チェックで読むと転送量が無駄になる）。
+async function saveInvoiceToDrive(
+  id: string,
+  contractorName: string,
+  year: number,
+  month: number
+): Promise<DriveUploadOutcome> {
+  const [file] = await db
+    .select({ file_name: invoiceUploads.file_name, file_data: invoiceUploads.file_data })
+    .from(invoiceUploads)
+    .where(eq(invoiceUploads.id, id))
+  if (!file) return { error: 'PDF本体を取得できませんでした' }
+  return uploadPdfToDrive(driveFileName(year, month, contractorName, file.file_name), file.file_data, year, month)
+}
+
 // 受け付けた請求書1件を自動照合し、結果を同じ行に書き戻す。
 // 受付直後・再読み取り後・画面からの再チェック・手動修正後で同じ処理を使う。
 // manuallyEdited は「今の extracted_* が人の手入力か」。true=手動修正直後 / false=AIが読み直した直後 /
@@ -215,6 +252,8 @@ export async function checkInvoiceAndSave(
       extracted_month: invoiceUploads.extracted_month,
       extract_error: invoiceUploads.extract_error,
       check_notes: invoiceUploads.check_notes,
+      drive_file_id: invoiceUploads.drive_file_id,
+      drive_link: invoiceUploads.drive_link,
     })
     .from(invoiceUploads)
     .where(eq(invoiceUploads.id, id))
@@ -320,6 +359,28 @@ export async function checkInvoiceAndSave(
     }
   }
 
+  // Googleドライブへの保存。check_notes は再チェックのたびに丸ごと作り直されるため、
+  // 保存済みの行はここで印を付け直さないと「保存された」事実が画面から消える。
+  // 判定がNG・保留に変わった行でも印は残す（ファイルは実際にドライブに在るため）。
+  let driveFileId = row.drive_file_id
+  let driveLink = row.drive_link
+  if (driveFileId) {
+    notes.push(formatInvoiceNote('saved', 'Googleドライブに保存済みです'))
+  } else if (status === 'ok' && contractor && resolvedYear !== null && resolvedMonth !== null) {
+    // 保存するのはOKになった請求書だけ。NG・保留のものまで上げると、人が直したあとの版と二重に残る。
+    const saved = await saveInvoiceToDrive(id, contractor.name, resolvedYear, resolvedMonth)
+    if ('fileId' in saved) {
+      driveFileId = saved.fileId
+      driveLink = saved.link
+      notes.push(formatInvoiceNote('saved', `Googleドライブ（${saved.folderName}）に保存しました`))
+    } else if ('error' in saved) {
+      // 保存の失敗は請求内容の問題ではないので status は ok のまま。落とすと「請求が誤っている」と誤読される。
+      // drive_file_id が null のままなので、次の再チェックで自動的に再試行される。
+      notes.push(formatInvoiceNote('saveFailed', `${saved.error}（再チェックで再試行できます）`))
+    }
+    // disabled（環境変数が未設定＝機能を使わない運用）のときは何も残さない。
+  }
+
   const result: InvoiceCheckResult = {
     status,
     contractorId: contractor?.id ?? null,
@@ -340,6 +401,9 @@ export async function checkInvoiceAndSave(
       expected_amount: expectedAmount,
       check_notes: notes.join('\n'),
       checked_at: new Date().toISOString(),
+      // 保存できなかった場合は元の値（null）のまま。次の再チェックで再試行させるため消さない。
+      drive_file_id: driveFileId,
+      drive_link: driveLink,
     })
     .where(eq(invoiceUploads.id, id))
 

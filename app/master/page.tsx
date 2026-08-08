@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -16,6 +17,7 @@ import ErrorToast from '@/app/components/error-toast'
 import { FormDialog } from '@/app/components/form-dialog'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Contractor, Client, Assignment, ClientBillingItem } from '@/lib/schema'
+import type { GoogleDriveStatus } from '@/lib/ui-types'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
@@ -122,6 +124,8 @@ export default function MasterPage() {
 
       {/* 受付URLは委託者・クライアントのどちらにも属さない全体設定なので、タブの外に置く。 */}
       <InvoiceUploadUrlSection onError={showError} />
+      {/* ドライブ連携も受付URLと同じく請求書まわりの全体設定なので、続けて並べる。 */}
+      <GoogleDriveSection onError={showError} />
     </div>
   )
 }
@@ -226,6 +230,93 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
+// Googleドライブ連携
+// ─────────────────────────────────────────────
+// コールバックが付けてくるクエリの意味。原因ごとに次の一手が違うため、まとめて「失敗」にしない。
+const DRIVE_ERROR_MESSAGES: Record<string, string> = {
+  not_configured: 'Googleドライブ連携の設定（クライアントID・シークレット・リダイレクトURI）がサーバー側に未設定です。',
+  no_code: 'Googleドライブの連携が中断されました。もう一度お試しください。',
+  invalid_state: 'Googleドライブの連携確認に失敗しました。お手数ですが最初からやり直してください。',
+  token_failed: 'Googleドライブの連携に失敗しました。もう一度お試しください。',
+}
+
+function GoogleDriveSection({ onError }: { onError: (msg: string) => void }) {
+  const router = useRouter()
+  const [status, setStatus] = useState<GoogleDriveStatus | null>(null)
+  // 取得に失敗したまま「読み込み中…」を出し続けると、いつまでも待てば直ると誤解される。
+  // 連携ボタン自体は状態が分からなくても押せるため、状態表示だけを「不明」に切り替える。
+  const [statusFailed, setStatusFailed] = useState(false)
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/google-drive/status')
+      if (!res.ok) throw new Error(await readErrorMessage(res, 'Googleドライブの連携状態を取得できませんでした。'))
+      setStatus(await res.json())
+      setStatusFailed(false)
+    } catch (err) {
+      setStatusFailed(true)
+      onError(err instanceof Error ? err.message : 'Googleドライブの連携状態を取得できませんでした。')
+    }
+  }, [onError])
+
+  useEffect(() => { loadStatus() }, [loadStatus])
+
+  // 連携コールバックの結果（?drive_connected / ?drive_error）を受け取り、失敗時は理由を通知する。
+  // useSearchParams ではなく window から読むのは、このページ全体がクライアントコンポーネントで
+  // Suspense 境界を増やしたくないため。表示後はクエリを消し、再読み込みで通知が再表示されないようにする。
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const driveError = params.get('drive_error')
+    const connected = params.get('drive_connected') === '1'
+    if (!driveError && !connected) return
+    if (driveError) {
+      onError(DRIVE_ERROR_MESSAGES[driveError] ?? 'Googleドライブの連携に失敗しました。もう一度お試しください。')
+    }
+    router.replace('/master')
+    // 初回マウント時に一度だけ判定する
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const connected = status?.connected ?? false
+
+  return (
+    <div className="rounded-lg border bg-white">
+      <div className="border-b px-4 py-3">
+        <h2 className="font-medium">Googleドライブ連携</h2>
+        <p className="mt-1 text-xs text-gray-600">
+          照合OKになった請求書PDFを、連携したGoogleアカウントのドライブへ自動保存します（対象月のフォルダに振り分け）。
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-[12rem] flex-1">
+          {status === null ? (
+            <p className="text-xs text-gray-500">{statusFailed ? '連携状態を取得できませんでした' : '読み込み中…'}</p>
+          ) : connected ? (
+            <p className="text-xs text-gray-500">
+              連携中
+              {status.updatedAt && `（${new Date(status.updatedAt).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric' })} 更新）`}
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500">未連携</p>
+          )}
+          {status && !status.configured && (
+            <p className="mt-1 text-xs text-danger">
+              サーバー側の設定（クライアントID・シークレット・保存先フォルダID）が未完了のため、自動保存は行われません。
+            </p>
+          )}
+        </div>
+        <a
+          href="/api/google-drive/auth"
+          className="inline-flex min-h-11 items-center rounded border border-info-subtle bg-info-subtle px-3 py-1.5 text-xs text-info hover:bg-info-subtle md:min-h-0"
+        >
+          {connected ? 'Googleと再連携する' : 'Googleと連携する'}
+        </a>
+      </div>
     </div>
   )
 }

@@ -103,9 +103,10 @@ export interface InvoiceCheckResult {
   notes: string[]
 }
 
-// 判定理由1行の意味づけ。ok/ng/hold は判定そのもの、received/fixed は
+// 判定理由1行の意味づけ。ok/ng/hold は判定そのもの、received/fixed/saved は
 // 「判定の結果として何をしたか」の記録で、判定の色分けとは別扱いにする。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'received' | 'fixed'
+// saveFailed だけは記録でありながら人の対応（再チェック）を促すため、警告として見せる。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'received' | 'fixed' | 'saved' | 'saveFailed'
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {
@@ -134,3 +135,22 @@ export interface InvoiceAlertCounts {
 // 読み取りに失敗している行は照合できない（判定材料が無い）ため、status を pending のまま据え置く。
 // 「照合したが保留」と区別できるよう、実行しなかったことを理由付きで返す。
 export type InvoiceCheckOutcome = InvoiceCheckResult | { skipped: string }
+
+// ─── Googleドライブ保存（lib/google-drive）─────────────────────────────
+// disabled は「環境変数が未設定＝この機能を使わない運用」。失敗(error)と区別できないと、
+// 機能を使っていない人にまで保存失敗の記録が出てしまうため、別の値として返す。
+// 設定済みなのに未連携・連携切れの場合は disabled ではなく error（＝画面に理由と次の操作が出る）。
+// folderName は保存先の月別サブフォルダ名。判定理由に載せて「どこに入ったか」を画面から分かるようにする。
+export type DriveUploadOutcome =
+  | { fileId: string; link: string; folderName: string }
+  | { error: string }
+  | { disabled: true }
+
+// GET /api/google-drive/status の応答。configured は環境変数が揃っているか、
+// connected は実際に有効なアクセストークンを取れるか。行はあるが更新できない（＝連携切れ）状態を
+// 「未連携」と同じ表示にしないため、両方を分けて返す。
+export interface GoogleDriveStatus {
+  configured: boolean
+  connected: boolean
+  updatedAt: string | null
+}
