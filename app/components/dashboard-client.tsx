@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
@@ -22,6 +22,13 @@ const TAP_CHECKBOX = 'after:-inset-x-3.5 after:-inset-y-3.5 md:after:-inset-x-3 
 const TAP_ICON_BUTTON = 'relative after:absolute after:-inset-4 md:after:hidden'
 // 32px の丸ボタン用。丸の見た目を保ったまま判定だけ 44×44px にする（32 + 6×2）。
 const TAP_ROUND_BUTTON = 'relative after:absolute after:-inset-1.5 md:after:hidden'
+
+// 請求書チェックの注意カードに並べる区分。緊急度の高い順に固定し、0件の区分は表示時に落とす。
+const INVOICE_ALERT_KINDS: { key: keyof InvoiceAlertCounts; label: string }[] = [
+  { key: 'ng', label: 'NG' },
+  { key: 'hold', label: '保留' },
+  { key: 'pending', label: '未チェック' },
+]
 
 function rowDueState(states: DueState[]): DueState {
   if (states.includes('overdue')) return 'overdue'
@@ -338,10 +345,12 @@ interface Props {
   mfError: string | null
   mfJustConnected: boolean
   carryOver: CarryOverGroup[]
+  // 対応が必要な請求書が1件も無ければ null（カードごと出さない）。
+  invoiceAlert: InvoiceAlertCounts | null
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -1248,6 +1257,25 @@ export default function DashboardClient({
 
       {/* 今日やること */}
       {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} onJump={focusPendingRow} />}
+
+      {/* 要対応の請求書。受け付けた請求書は月に紐づかないため、表示中の月に関係なく出す。 */}
+      {invoiceAlert && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-4 py-2.5 text-sm text-warning">
+          <span>
+            ⚠ 請求書チェック:{' '}
+            {INVOICE_ALERT_KINDS
+              .filter((k) => invoiceAlert[k.key] > 0)
+              .map((k) => `${k.label} ${invoiceAlert[k.key]}件`)
+              .join(' / ')}
+          </span>
+          <Link
+            href="/invoice-check"
+            className="flex h-11 shrink-0 items-center font-medium text-warning underline underline-offset-2 md:h-auto"
+          >
+            確認する
+          </Link>
+        </div>
+      )}
 
       {/* 委託者 — 請求書受領・支払管理 */}
       <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-white">

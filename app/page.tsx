@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, invoiceUploads } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
+import type { InvoiceAlertCounts } from '@/lib/ui-types'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
@@ -31,6 +32,7 @@ export default async function DashboardPage({
     allClientRecordsForCarryOver,
     allGlobalTasksForCarryOver,
     monthExpenses,
+    invoiceStatusCountRows,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -97,6 +99,12 @@ export default async function DashboardPage({
       where: and(eq(expenses.year, year), eq(expenses.month, month)),
       orderBy: [asc(expenses.created_at)],
     }),
+    // 受け付けた請求書の状態別件数。請求書は月に紐づかない（対象月が読み取れない行もある）ため、
+    // 表示中の月では絞らず全件を数える。
+    db.select({
+      status: invoiceUploads.status,
+      count: sql<number>`count(*)`,
+    }).from(invoiceUploads).groupBy(invoiceUploads.status),
   ])
 
   const carryOver = computeCarryOver(
@@ -133,6 +141,20 @@ export default async function DashboardPage({
     assignmentPaymentCounts[row.assignment_id] = { scheduled: Number(row.scheduled), paid: Number(row.paid) }
   }
 
+  // 人の対応が要る請求書だけを数える。1件も無ければ null にしてカードごと出さない
+  // （対応不要な情報でダッシュボードを騒がせないため）。
+  const invoiceCounts: Record<string, number> = {}
+  for (const row of invoiceStatusCountRows) invoiceCounts[row.status] = Number(row.count)
+  const invoiceAlertCounts: InvoiceAlertCounts = {
+    ng: invoiceCounts.ng ?? 0,
+    hold: invoiceCounts.hold ?? 0,
+    pending: invoiceCounts.pending ?? 0,
+  }
+  const invoiceAlert =
+    invoiceAlertCounts.ng + invoiceAlertCounts.hold + invoiceAlertCounts.pending > 0
+      ? invoiceAlertCounts
+      : null
+
   // トークンの行が存在するだけでは「連携中」と言えない（リフレッシュトークン失効時も行は残る）。
   // 実際に有効なアクセストークンを取得できるかで連携状態を判定する。
   const mfHasToken = mfToken.length > 0
@@ -165,6 +187,7 @@ export default async function DashboardPage({
       mfError={params.mf_error ?? null}
       mfJustConnected={params.mf_connected === '1'}
       carryOver={carryOver}
+      invoiceAlert={invoiceAlert}
     />
   )
 }

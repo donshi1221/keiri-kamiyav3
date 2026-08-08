@@ -1,11 +1,12 @@
 import 'server-only'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { contractors, expenses, invoiceUploads, monthlyRecords } from '@/lib/schema'
+import { assignments, contractors, expenses, invoiceUploads, monthlyRecords } from '@/lib/schema'
 import { checkAssignmentDelivery } from '@/lib/sheets'
 import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delivery-status'
 import { COMPANY_NAME } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
+import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
 import type { DeliveryCheckRow, InvoiceCheckOutcome, InvoiceCheckResult, InvoiceCheckStatus } from '@/lib/ui-types'
 
 // 3観点（差出人・対象月＋金額・宛名）それぞれの結論。
@@ -34,17 +35,19 @@ function resolveYear(month: number, extractedYear: number | null): number {
 
 // 納品シートから支払額を割り出せなかった理由。「確定できません」だけでは何を直せばよいか分からないため、
 // シート側の具体的な状況（URL未登録・権限不足・本数不足など）をそのまま伝える。
+// 納品予定0件（tone === 'none'）は呼び出し側で0円として処理するため、ここには来ない。
 function deliveryHoldDetail(row: DeliveryCheckRow, unitPrice: number): string {
   if (row.status !== 'ok' && row.message) return row.message
   const tone = deliveryTone(row)
-  if (tone === 'none') return '対象月に納品予定がありません'
   if (tone === 'short') return `納品が揃っていません（${row.delivered ?? 0}/${row.expected ?? 0}本）`
   if (unitPrice <= 0) return '編集者の単価が未設定です'
   return '納品チェックの結果を取得できませんでした'
 }
 
 type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'video_editor'; unit_price: number }
-type ExpectedOutcome = { amount: number } | { hold: string }
+// notes は算出の途中で人に伝えたい補足（納品予定0件の月など）。金額だけでは
+// 「なぜその予定額になったのか」が追えないため、判定理由に混ぜて残す。
+type ExpectedOutcome = { amount: number; notes: string[] } | { hold: string }
 
 // 対象月に「その委託者へいくら払う予定か」を算出する。
 // 代行者は契約額（当月の控えを優先）、編集者は納品チェックで反映済みの実支払額を正とし、
@@ -82,6 +85,7 @@ async function computeExpectedPayout(
   // 編集者の支払いは前月の納品に対して行うため、読むべき納品シートの月は1つ手前になる。
   const deliveryMonth = deliveryTargetMonth(year, month).month
   let total = 0
+  const notes: string[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -109,6 +113,13 @@ async function computeExpectedPayout(
     )
     const suggested = suggestedPayout(delivery, contractor.unit_price)
     if (suggested === null) {
+      // 納品予定が0件の月は支払いも0円で確定する。ここを保留にすると
+      // 人が確認しても直しようがないのに支払いが止まってしまう。
+      // 未達（short）や設定・権限不備（attention）は人が直す余地があるため従来どおり保留。
+      if (deliveryTone(delivery) === 'none') {
+        notes.push(`${clientName}: 対象月の納品予定なし（¥0）`)
+        continue
+      }
       return {
         hold: `納品チェックが未反映のため金額を確定できません（${clientName}: ${deliveryHoldDetail(delivery, contractor.unit_price)}）`,
       }
@@ -122,7 +133,7 @@ async function computeExpectedPayout(
     .where(and(inArray(expenses.assignment_id, assignmentIds), eq(expenses.year, year), eq(expenses.month, month)))
   total += expenseRows.reduce((sum, e) => sum + e.amount, 0)
 
-  return { amount: total }
+  return { amount: total, notes }
 }
 
 // 差出人名からマスタの委託者を1人に絞る。完全一致を先に試し、見つからない場合だけ
@@ -153,10 +164,48 @@ async function resolveContractor(issuer: string): Promise<{ contractor: Contract
   return { contractor: matched[0] }
 }
 
+// 照合OK＝「その委託者からその月の請求書が正しく届いた」ということなので、
+// 月次レコードの受領チェックを人手を介さず付ける。
+// 既に日時が入っている行は上書きしない（画面のトグルAPIと同じく「最初にチェックした日時」を正とする）。
+// marked（今回付けた件数）と total（対象レコード数）を分けて返すのは、
+// 「全件が既に受領済み」＝同じ月の請求書が二重に届いた可能性を呼び出し側で伝えるため。
+async function markInvoiceReceived(
+  contractorId: string,
+  year: number,
+  month: number
+): Promise<{ marked: number; total: number }> {
+  const assignmentRows = await db
+    .select({ id: assignments.id })
+    .from(assignments)
+    .where(and(eq(assignments.contractor_id, contractorId), eq(assignments.active, true)))
+  if (assignmentRows.length === 0) return { marked: 0, total: 0 }
+
+  const target = and(
+    inArray(monthlyRecords.assignment_id, assignmentRows.map((a) => a.id)),
+    eq(monthlyRecords.year, year),
+    eq(monthlyRecords.month, month)
+  )
+  const existing = await db.select({ id: monthlyRecords.id }).from(monthlyRecords).where(target)
+  if (existing.length === 0) return { marked: 0, total: 0 }
+
+  const updated = await db
+    .update(monthlyRecords)
+    .set({ invoice_received_at: new Date().toISOString() })
+    .where(and(target, isNull(monthlyRecords.invoice_received_at)))
+    .returning({ id: monthlyRecords.id })
+
+  return { marked: updated.length, total: existing.length }
+}
+
 // 受け付けた請求書1件を自動照合し、結果を同じ行に書き戻す。
-// 受付直後・再読み取り後・画面からの再チェックで同じ処理を使う。
+// 受付直後・再読み取り後・画面からの再チェック・手動修正後で同じ処理を使う。
+// manuallyEdited は「今の extracted_* が人の手入力か」。true=手動修正直後 / false=AIが読み直した直後 /
+// 未指定=値は変わっていないので前回の判定理由から引き継ぐ、の3通りで呼び分ける。
 // 行が無ければ null（呼び出し側が404を返す）。
-export async function checkInvoiceAndSave(id: string): Promise<InvoiceCheckOutcome | null> {
+export async function checkInvoiceAndSave(
+  id: string,
+  options?: { manuallyEdited?: boolean }
+): Promise<InvoiceCheckOutcome | null> {
   const [row] = await db
     .select({
       extracted_amount: invoiceUploads.extracted_amount,
@@ -165,6 +214,7 @@ export async function checkInvoiceAndSave(id: string): Promise<InvoiceCheckOutco
       extracted_year: invoiceUploads.extracted_year,
       extracted_month: invoiceUploads.extracted_month,
       extract_error: invoiceUploads.extract_error,
+      check_notes: invoiceUploads.check_notes,
     })
     .from(invoiceUploads)
     .where(eq(invoiceUploads.id, id))
@@ -179,11 +229,19 @@ export async function checkInvoiceAndSave(id: string): Promise<InvoiceCheckOutco
   const notes: string[] = []
   let hasNg = false
   let hasHold = false
+  // 印を付けて保存するのは、画面がNG・保留だけを既定表示にできるようにするため。
+  // 保存形式は「[NG] 本文」の1行1件（lib/invoice-notes）。
   const record = (verdict: Verdict, note: string) => {
-    notes.push(note)
+    notes.push(formatInvoiceNote(verdict, note))
     if (verdict === 'ng') hasNg = true
     if (verdict === 'hold') hasHold = true
   }
+
+  // 手動修正の事実は check_notes にしか残らないうえ、再チェックのたびに notes は作り直される。
+  // 呼び出し側が値を触っていないとき（未指定）だけ前回の印を引き継ぐことで、
+  // 「AIが読んだ値か人が直した値か」を再チェックを挟んでも見分けられる状態に保つ。
+  const manuallyEdited = options?.manuallyEdited ?? hasInvoiceNoteMark(row.check_notes, 'fixed')
+  if (manuallyEdited) notes.push(formatInvoiceNote('fixed', INVOICE_MANUAL_EDIT_NOTE))
 
   // ─── A. 差出人 → 委託者の特定 ───────────────────────────────
   let contractor: ContractorRow | null = null
@@ -218,6 +276,7 @@ export async function checkInvoiceAndSave(id: string): Promise<InvoiceCheckOutco
       record('hold', expected.hold)
     } else {
       expectedAmount = expected.amount
+      for (const note of expected.notes) record('ok', note)
       if (row.extracted_amount === null) {
         record('hold', `請求額が読み取れないため金額を照合できません（支払予定 ${yen(expectedAmount)}）`)
       } else if (row.extracted_amount === expectedAmount) {
@@ -247,6 +306,20 @@ export async function checkInvoiceAndSave(id: string): Promise<InvoiceCheckOutco
   }
 
   const status: InvoiceCheckStatus = hasNg ? 'ng' : hasHold ? 'hold' : 'ok'
+
+  // 受領チェックの自動付与はOKのときだけ。ng/hold は中身が確定していないため月次レコードには一切触らない。
+  // 付与の結果も判定理由に残す（画面に出るのは check_notes だけなので、ここに書かないと何が起きたか分からない）。
+  if (status === 'ok' && contractor && resolvedYear !== null && resolvedMonth !== null) {
+    const received = await markInvoiceReceived(contractor.id, resolvedYear, resolvedMonth)
+    if (received.marked > 0) {
+      notes.push(formatInvoiceNote('received', `請求書受領チェックを自動で付けました（${received.marked}件）`))
+    } else if (received.total > 0) {
+      notes.push(
+        formatInvoiceNote('received', '受領チェックは既に付いていました（別の請求書で受領済みの可能性があります）')
+      )
+    }
+  }
+
   const result: InvoiceCheckResult = {
     status,
     contractorId: contractor?.id ?? null,

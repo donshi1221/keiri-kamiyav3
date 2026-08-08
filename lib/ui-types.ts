@@ -99,7 +99,36 @@ export interface InvoiceCheckResult {
   resolvedMonth: number | null
   expectedAmount: number | null
   // 判定理由（観点ごとに1行）。保存時に改行で連結して check_notes に入れる。
+  // 各行の先頭には印（lib/invoice-notes）が付き、画面はそれを見て出し分ける。
   notes: string[]
+}
+
+// 判定理由1行の意味づけ。ok/ng/hold は判定そのもの、received/fixed は
+// 「判定の結果として何をしたか」の記録で、判定の色分けとは別扱いにする。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'received' | 'fixed'
+
+// 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
+export interface InvoiceNoteLine {
+  mark: InvoiceNoteMark | null
+  text: string
+}
+
+// AIの読み取り結果を人が直すときに送る値。読み取れなかった項目を空欄のまま保存できるよう、
+// すべて null を許す（0 や空文字に丸めると「そう書いてあった」と区別が付かなくなる）。
+export interface InvoiceExtractedPatch {
+  extracted_amount: number | null
+  extracted_issuer: string | null
+  extracted_addressee: string | null
+  extracted_year: number | null
+  extracted_month: number | null
+}
+
+// ダッシュボードの注意カード用の件数。人の対応が必要な区分だけを数える
+// （ok は対応不要。全件okならカード自体を出さないため、この型ごと null になる）。
+export interface InvoiceAlertCounts {
+  ng: number
+  hold: number
+  pending: number
 }
 
 // 読み取りに失敗している行は照合できない（判定材料が無い）ため、status を pending のまま据え置く。

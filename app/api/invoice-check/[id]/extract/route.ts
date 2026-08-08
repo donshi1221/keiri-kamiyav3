@@ -26,7 +26,9 @@ export async function POST(
     const outcome = await extractInvoiceAndSave(id, row.file_data, row.file_name)
     // 読み取り直した内容で判定もやり直す。読み取り失敗のまま照合しても
     // 「材料が無い」保留が並ぶだけなので、成功したときだけ続けて実行する。
-    const check = !('error' in outcome) ? await checkInvoiceAndSave(id) : null
+    // manuallyEdited: false は、手動修正した値をAIが読み直して上書きした以上、
+    // 過去の「手動修正」の印を引き継がせないため（引き継ぐと今の値の出どころを誤解させる）。
+    const check = !('error' in outcome) ? await checkInvoiceAndSave(id, { manuallyEdited: false }) : null
     // 読み取れなかった理由は画面に出す必要があるため、失敗も200で内容として返す
     // （HTTPエラーにすると「通信に失敗しました」に丸められ、理由が伝わらない）。
     return Response.json({ ...outcome, check })

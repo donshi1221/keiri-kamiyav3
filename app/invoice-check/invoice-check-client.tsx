@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatInTimeZone } from 'date-fns-tz'
+import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -13,9 +14,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import type { InvoiceCheckRow } from '@/lib/ui-types'
+import { parseInvoiceNotes } from '@/lib/invoice-notes'
+import type { InvoiceCheckRow, InvoiceExtractedPatch, InvoiceNoteLine, InvoiceNoteMark } from '@/lib/ui-types'
 
 const STATUS_LABEL: Record<InvoiceCheckRow['status'], string> = {
   pending: '未チェック',
@@ -39,10 +42,61 @@ function StatusBadge({ status }: { status: InvoiceCheckRow['status'] }) {
   )
 }
 
-// 判定理由は改行区切りの1本の文字列。観点ごとに1行なので、改行をそのまま活かして出す。
+// NG・保留は人がこれから直すものなので色付きで前に出す。
+// 受領・修正は「システムが何をしたか」の記録で、判定の色と混ぜると本当のNGが埋もれるため控えめにする。
+const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
+  ng: 'rounded bg-danger-subtle px-2 py-1 font-medium text-danger',
+  hold: 'rounded bg-warning-subtle px-2 py-1 text-warning',
+  received: 'text-gray-500',
+  fixed: 'text-gray-500',
+  ok: 'text-gray-500',
+}
+
+function NoteLine({ line }: { line: InvoiceNoteLine }) {
+  // 印が読めない行は印を付ける前に保存された過去データ。内容が判断できないので中立表示にする。
+  return (
+    <p className={cn('text-xs leading-relaxed', line.mark ? NOTE_CLASS[line.mark] : 'text-gray-600')}>{line.text}</p>
+  )
+}
+
+// 判定理由は観点ごとに1行。全行を並べるとOK行がノイズになりNGが埋もれるため、
+// 既定ではNG・保留（と受領・修正の記録、印なしの過去データ）だけを出し、OK行は開いたときだけ見せる。
 function CheckNotes({ notes }: { notes: string | null }) {
-  if (!notes) return null
-  return <p className="text-xs leading-relaxed whitespace-pre-line text-gray-500">{notes}</p>
+  const [open, setOpen] = useState(false)
+  const lines = useMemo(() => parseInvoiceNotes(notes), [notes])
+  if (lines.length === 0) return null
+
+  const primary = lines.filter((line) => line.mark !== 'ok')
+  const details = lines.filter((line) => line.mark === 'ok')
+
+  return (
+    <div className="space-y-1">
+      {primary.map((line, i) => (
+        <NoteLine key={i} line={line} />
+      ))}
+      {details.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+            className="flex min-h-11 w-full items-center gap-1 text-left text-xs text-info md:min-h-0"
+          >
+            <ChevronRight size={12} className={cn('shrink-0 transition-transform', open && 'rotate-90')} />
+            <span>{open ? '詳細を閉じる' : `詳細を見る（${details.length}件）`}</span>
+          </button>
+          {open && (
+            <div className="space-y-1 pl-4">
+              {details.map((line, i) => (
+                <NoteLine key={i} line={line} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
 }
 
 // 受付日時はサーバー保存の UTC 文字列。閲覧端末のタイムゾーンに左右されないよう JST 固定で表示する。
@@ -68,12 +122,150 @@ async function readErrorMessage(res: Response, fallback: string) {
   return typeof data?.error === 'string' ? data.error : fallback
 }
 
+// AIの読み取り結果を人が直すフォーム。読み間違いのたびにPDFを投げ直しても同じ結果になりがちなので、
+// 値そのものを上書きできる逃げ道を用意する。保存すると続けて自動照合まで走る。
+function InvoiceEditDialog({ target, onClose, onSaved, onError }: {
+  target: InvoiceCheckRow | null
+  onClose: () => void
+  onSaved: (skipped: string | null) => void
+  onError: (msg: string) => void
+}) {
+  const [amount, setAmount] = useState('')
+  const [issuer, setIssuer] = useState('')
+  const [addressee, setAddressee] = useState('')
+  const [year, setYear] = useState('')
+  const [month, setMonth] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setAmount(target.extracted_amount === null ? '' : String(target.extracted_amount))
+    setIssuer(target.extracted_issuer ?? '')
+    setAddressee(target.extracted_addressee ?? '')
+    // 年は請求書に書かれていないことが多い。照合が補った年（resolved_year）を初期値にすることで、
+    // 空欄から入力し直さずに「システムが使った年」をそのまま確定できる。
+    setYear(String(target.extracted_year ?? target.resolved_year ?? ''))
+    setMonth(String(target.extracted_month ?? target.resolved_month ?? ''))
+  }, [target])
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!target) return
+    setSaving(true)
+    // 空欄は 0 ではなく null で送る。「読み取れていない」と「0円と書いてあった」を区別するため。
+    const payload: InvoiceExtractedPatch = {
+      extracted_amount: amount.trim() === '' ? null : Number(amount),
+      extracted_issuer: issuer.trim() === '' ? null : issuer.trim(),
+      extracted_addressee: addressee.trim() === '' ? null : addressee.trim(),
+      extracted_year: year.trim() === '' ? null : Number(year),
+      extracted_month: month.trim() === '' ? null : Number(month),
+    }
+    try {
+      const res = await fetch(`/api/invoice-check/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '読み取り結果の保存に失敗しました。'))
+        return
+      }
+      // 照合を行わなかった場合は一覧に何も出ないため、理由を呼び出し側へ渡して画面に出す。
+      const data = (await res.json().catch(() => null)) as { check?: { skipped?: string } | null } | null
+      onSaved(typeof data?.check?.skipped === 'string' ? data.check.skipped : null)
+    } catch {
+      // 通信断でも fetch は例外になる。setSaving を戻さないと「保存中…」で固着する。
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <FormDialog open={!!target} onClose={onClose} title="読み取り結果を修正">
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs leading-relaxed text-gray-500">
+          「{target?.file_name}」の読み取り結果を直します。保存すると、直した内容で自動照合をやり直します。
+          空欄にすると「読み取れていない」状態に戻ります。
+        </p>
+        <div>
+          <label className="text-sm font-medium block mb-1">請求額</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="未読み取り"
+          />
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">差出人</label>
+          <input
+            value={issuer}
+            onChange={(e) => setIssuer(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="請求書の発行者名"
+          />
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">宛名</label>
+          <input
+            value={addressee}
+            onChange={(e) => setAddressee(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="請求書の宛名"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-sm font-medium block mb-1">対象年</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              min="2000"
+              max="2100"
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="未読み取り"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium block mb-1">対象月</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              min="1"
+              max="12"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="未読み取り"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>
+            {saving ? '保存中…' : '保存して再チェック'}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
 export default function InvoiceCheckClient() {
   const [rows, setRows] = useState<InvoiceCheckRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [extractingId, setExtractingId] = useState<string | null>(null)
   const [recheckingId, setRecheckingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<InvoiceCheckRow | null>(null)
+  const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -144,6 +336,12 @@ export default function InvoiceCheckClient() {
     }
   }
 
+  async function handleEdited(skipped: string | null) {
+    setEditTarget(null)
+    setError(skipped)
+    await load()
+  }
+
   const busy = (id: string) => extractingId === id || recheckingId === id
 
   return (
@@ -153,6 +351,9 @@ export default function InvoiceCheckClient() {
         <p className="text-xs leading-relaxed text-gray-500">
           受付URLから届いた請求書PDFと、AIの読み取り・自動照合の結果一覧です。
           読み取りと照合は受付時に自動で行われます。マスタや納品チェックを直したあとは「再チェック」で判定だけやり直せます。
+          判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付きます（結果は判定理由に出ます）。
+          判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。
+          AIが読み間違えている場合は「修正」から値を直すと、その内容で照合をやり直します。
         </p>
       </div>
 
@@ -221,6 +422,13 @@ export default function InvoiceCheckClient() {
                         >
                           PDFを開く
                         </a>
+                        <button
+                          type="button"
+                          onClick={() => setEditTarget(r)}
+                          className="text-info hover:underline"
+                        >
+                          修正
+                        </button>
                         <button
                           type="button"
                           onClick={() => recheck(r.id)}
@@ -306,6 +514,9 @@ export default function InvoiceCheckClient() {
                   >
                     PDFを開く
                   </Button>
+                  <Button variant="outline" size="sm" className="h-11" onClick={() => setEditTarget(r)}>
+                    修正
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -333,6 +544,13 @@ export default function InvoiceCheckClient() {
           </div>
         </>
       )}
+
+      <InvoiceEditDialog
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={handleEdited}
+        onError={setError}
+      />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <AlertDialogContent>

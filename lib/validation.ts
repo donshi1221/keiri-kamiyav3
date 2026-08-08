@@ -93,6 +93,43 @@ export const expenseCreateSchema = z.object({
   note: z.string().trim().nullish(),
 })
 
+// ─── 請求書チェック（読み取り結果の手動修正）─────────────────────────────
+// extracted_* は「読み取れなかった」を null で表す列。空欄を 0 や空文字に丸めると
+// 「請求書にそう書いてあった」と区別が付かなくなるため、未入力は必ず null に寄せる。
+// integer列の上限を超える値はDB側で生の500になるため、ここで弾く。
+const INT4_MAX = 2147483647
+
+function nullableIntField(min: number, max: number, message: string) {
+  return z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? null : v),
+    z.coerce
+      .number({ message })
+      .int({ message })
+      .min(min, { message })
+      .max(max, { message })
+      .nullable()
+  )
+}
+
+const optionalTrimmedText = z.preprocess(
+  (v) => {
+    if (typeof v !== 'string') return v === undefined ? null : v
+    const trimmed = v.trim()
+    return trimmed === '' ? null : trimmed
+  },
+  z.string().nullable()
+)
+
+// 画面の修正フォームは5項目すべてを毎回送る（＝空欄はその項目を消す意思）。
+// このため未送信は「部分更新の対象外」ではなく null 扱いにしている。
+export const invoiceExtractedPatchSchema = z.object({
+  extracted_amount: nullableIntField(0, INT4_MAX, '請求額は0以上の整数で入力してください'),
+  extracted_issuer: optionalTrimmedText,
+  extracted_addressee: optionalTrimmedText,
+  extracted_year: nullableIntField(2000, 2100, '対象年は2000〜2100の範囲で入力してください'),
+  extracted_month: nullableIntField(1, 12, '対象月は1〜12の範囲で入力してください'),
+})
+
 export const snapshotBackfillSchema = z.object({
   year: z.coerce.number().int().min(2000).max(3000),
   month: z.coerce.number().int().min(1).max(12),
