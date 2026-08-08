@@ -1,7 +1,8 @@
 import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
-import { contractors, invoiceUploads } from '@/lib/schema'
-import { asc, desc, eq, sql } from 'drizzle-orm'
+import { assignments, clients, contractors, invoiceUploads } from '@/lib/schema'
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
+import type { InvoiceDeliverySheetLink } from '@/lib/ui-types'
 
 // 受け付けた請求書の一覧。
 // PDF本体（file_data）は1件で数MBになりうるため列ごと除外し、必要なときだけ
@@ -21,6 +22,7 @@ export async function GET() {
         extracted_addressee: invoiceUploads.extracted_addressee,
         extracted_year: invoiceUploads.extracted_year,
         extracted_month: invoiceUploads.extracted_month,
+        extracted_items: invoiceUploads.extracted_items,
         extract_error: invoiceUploads.extract_error,
         extracted_at: invoiceUploads.extracted_at,
         resolved_year: invoiceUploads.resolved_year,
@@ -40,8 +42,57 @@ export async function GET() {
         asc(sql`case when ${invoiceUploads.status} in ('ng', 'hold') then 0 else 1 end`),
         desc(invoiceUploads.created_at)
       )
-    return Response.json(rows)
+
+    return Response.json(await withDeliverySheets(rows))
   } catch (err) {
     return serverError(err)
   }
+}
+
+// 編集者の納品シートURLを各行に付ける。NGの多くは本数ズレで、確かめるにはシートを開く必要があるため。
+// 行ごとに引くと件数分のクエリになるので、一覧に出てくる委託者をまとめて1回で引き、メモリ上で配る。
+async function withDeliverySheets<T extends { contractor_id: string | null }>(
+  rows: T[]
+): Promise<(T & { delivery_sheets: InvoiceDeliverySheetLink[] })[]> {
+  const contractorIds = [
+    ...new Set(rows.map((r) => r.contractor_id).filter((id): id is string => id !== null)),
+  ]
+
+  const links = contractorIds.length === 0 ? [] : await db
+    .select({
+      contractor_id: assignments.contractor_id,
+      clientName: clients.name,
+      url: assignments.spreadsheet_url,
+    })
+    .from(assignments)
+    .innerJoin(clients, eq(assignments.client_id, clients.id))
+    .innerJoin(contractors, eq(assignments.contractor_id, contractors.id))
+    .where(
+      and(
+        inArray(assignments.contractor_id, contractorIds),
+        eq(assignments.active, true),
+        // 代行者は納品シートを持たない（契約額での支払いで本数の概念が無い）ため対象外。
+        eq(contractors.contractor_type, 'video_editor'),
+        isNotNull(assignments.spreadsheet_url)
+      )
+    )
+    .orderBy(asc(clients.name))
+
+  const byContractor = new Map<string, InvoiceDeliverySheetLink[]>()
+  for (const link of links) {
+    const url = link.url?.trim()
+    if (!url) continue // 空文字で保存された過去データはリンクにならないので落とす
+    const list = byContractor.get(link.contractor_id)
+    if (list) list.push({ clientName: link.clientName, url })
+    else byContractor.set(link.contractor_id, [{ clientName: link.clientName, url }])
+  }
+  // DBの並びはロケール依存なので、五十音順はアプリ側で確定させる。
+  for (const list of byContractor.values()) {
+    list.sort((x, y) => x.clientName.localeCompare(y.clientName, 'ja'))
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    delivery_sheets: (r.contractor_id && byContractor.get(r.contractor_id)) || [],
+  }))
 }

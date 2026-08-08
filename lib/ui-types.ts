@@ -76,16 +76,39 @@ export interface InvoiceExtracted {
   addressee: string | null
   year: number | null
   month: number | null
+  // 明細行。内訳が書かれていない請求書では空配列になる（＝合計だけで照合する）。
+  items: InvoiceExtractedItem[]
+}
+
+// 請求書の明細1行。列の型（lib/schema）から派生させ、DBに入る形と画面・照合で扱う形を必ず一致させる。
+export type InvoiceExtractedItem = NonNullable<InvoiceUpload['extracted_items']>[number]
+
+// 支払予定額のアサイン別内訳1行。合計だけでは「どのクライアントでズレたか」が出せないため、
+// 照合（lib/invoice-check）が請求書の明細と突き合わせる相手として使う。
+// count は編集者の本数。代行者は契約額での支払いで本数の概念が無いため null になる。
+export interface InvoicePayoutBreakdownRow {
+  clientName: string
+  count: number | null
+  amount: number
 }
 
 // 読み取りは失敗しても例外にせず、理由を持ち回って extract_error に保存する。
 export type InvoiceExtractOutcome = InvoiceExtracted | { error: string }
 
+// 編集者の納品スプレッドシートへの導線1件。NGの原因は本数ズレが多く、実本数はシートを見ないと分からない。
+// マスタ→アサインと辿らないとURLに到達できなかったため、一覧の行から直接開けるように持たせる。
+export interface InvoiceDeliverySheetLink {
+  clientName: string
+  url: string
+}
+
 // 一覧APIが返す1行。PDF本体（file_data）は重いので一覧には載せず、
 // 表示が必要なときだけ /api/invoice-check/[id]/pdf から取り出す。
 // contractor_name は照合で特定した委託者名。IDだけでは画面で誰か分からないため結合して持たせる。
+// delivery_sheets は編集者のときだけ入る（委託者未特定・代行者・URL未登録なら空配列）。
 export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'> & {
   contractor_name: string | null
+  delivery_sheets: InvoiceDeliverySheetLink[]
 }
 
 // 自動照合（lib/invoice-check）の判定結果。DBの列と1対1に対応させ、

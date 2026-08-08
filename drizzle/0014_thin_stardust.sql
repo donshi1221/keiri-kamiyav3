@@ -1,0 +1,1 @@
+ALTER TABLE "invoice_uploads" ADD COLUMN "extracted_items" jsonb;

@@ -5,7 +5,7 @@ import { db } from '@/lib/db'
 import { invoiceUploads } from '@/lib/schema'
 import { getGeminiClient } from '@/lib/gemini'
 import { GEMINI_MODEL } from '@/lib/config'
-import type { InvoiceExtracted, InvoiceExtractOutcome } from '@/lib/ui-types'
+import type { InvoiceExtracted, InvoiceExtractedItem, InvoiceExtractOutcome } from '@/lib/ui-types'
 
 // AIに返させるJSONの形。プロンプトの文章だけで形式を守らせようとすると
 // 「はい、こちらが結果です」等の前置きが混ざってパースに失敗するため、スキーマで固定する。
@@ -17,8 +17,21 @@ const RESPONSE_SCHEMA: ResponseSchema = {
     addressee: { type: SchemaType.STRING, nullable: true, description: '宛名（請求先の名称）' },
     year: { type: SchemaType.INTEGER, nullable: true, description: '対象月の年（西暦）' },
     month: { type: SchemaType.INTEGER, nullable: true, description: '対象月の月（1〜12）' },
+    items: {
+      type: SchemaType.ARRAY,
+      description: '明細行（クライアント別・案件別の内訳）。内訳が無ければ空配列',
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          label: { type: SchemaType.STRING, description: '明細の名称（クライアント名・案件名をそのまま）' },
+          count: { type: SchemaType.INTEGER, nullable: true, description: '本数。記載が無ければ null' },
+          amount: { type: SchemaType.INTEGER, nullable: true, description: 'その明細の金額（円）。記載が無ければ null' },
+        },
+        required: ['label', 'count', 'amount'],
+      },
+    },
   },
-  required: ['amount', 'issuer', 'addressee', 'year', 'month'],
+  required: ['amount', 'issuer', 'addressee', 'year', 'month', 'items'],
 }
 
 const PROMPT = [
@@ -31,6 +44,12 @@ const PROMPT = [
   '- year / month: 「◯年◯月分」として請求されている対象月。',
   '  年が書かれていない場合、year は推定せず null にする（month だけ返してよい）。',
   '  和暦（令和など）で書かれている場合は西暦に直す。',
+  '- items: 明細行（クライアント別・案件別の内訳）。内訳の表があれば全行を抽出する。',
+  '  label は明細に書かれている名称（クライアント名・案件名）をそのまま入れる（要約・省略しない）。',
+  '  count はその明細の本数（「8本」なら 8）。本数の記載が無ければ null。',
+  '  amount はその明細の金額（円）。金額の記載が無ければ null。',
+  '  「小計」「合計」「消費税」「源泉徴収」など、集計行・調整行は items に含めない。',
+  '  内訳が書かれていない請求書では items は空配列にする。',
   '',
   '読み取れない項目、判断がつかない項目は必ず null にすること（推測で埋めない）。',
 ].join('\n')
@@ -53,6 +72,29 @@ function normalizeText(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+// 明細1行の本数の上限。桁を読み違えた値をそのまま残すと、照合が「◯本多い」と桁外れの指摘を出して
+// かえって原因が分からなくなるため、ありえない本数は「読み取れなかった」扱いにする。
+const MAX_ITEM_COUNT = 10_000
+
+// 明細は配列・オブジェクトの入れ子でスカラー項目より崩れやすい。
+// 名称の無い行は「どのクライアント分か」を突き合わせようがなく照合で使えないため、行ごと捨てる。
+function normalizeItems(value: unknown): InvoiceExtractedItem[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((raw): InvoiceExtractedItem[] => {
+    if (typeof raw !== 'object' || raw === null) return []
+    const item = raw as Record<string, unknown>
+    const label = normalizeText(item.label)
+    if (!label) return []
+    return [
+      {
+        label,
+        count: normalizeInt(item.count, 0, MAX_ITEM_COUNT),
+        amount: normalizeInt(item.amount, 0, MAX_AMOUNT),
+      },
+    ]
+  })
 }
 
 // 請求書PDFをAIに読ませ、金額・差出人・宛名・対象月を取り出す。
@@ -98,11 +140,14 @@ export async function extractInvoice(fileDataBase64: string, fileName: string): 
     addressee: normalizeText(parsed.addressee),
     year: normalizeInt(parsed.year, MIN_YEAR, MAX_YEAR),
     month: normalizeInt(parsed.month, 1, 12),
+    items: normalizeItems(parsed.items),
   }
 
   // 1項目も取れないのは「PDFが読めていない」に近い。空欄が並ぶだけだと原因が分からず
   // 再読み取りの判断もできないため、失敗として理由を残す。
-  if (Object.values(extracted).every((v) => v === null)) {
+  // items は内訳の無い請求書でも空配列になる（＝読めた／読めないの材料にならない）ので判定から外す。
+  const { items: _items, ...scalars } = extracted
+  if (Object.values(scalars).every((v) => v === null)) {
     return { error: '請求書の内容を読み取れませんでした（PDFの内容をご確認ください）。' }
   }
 
@@ -126,6 +171,7 @@ export async function extractInvoiceAndSave(
       extracted_addressee: failed ? null : outcome.addressee,
       extracted_year: failed ? null : outcome.year,
       extracted_month: failed ? null : outcome.month,
+      extracted_items: failed ? null : outcome.items,
       extract_error: failed ? outcome.error : null,
       extracted_at: new Date().toISOString(),
     })

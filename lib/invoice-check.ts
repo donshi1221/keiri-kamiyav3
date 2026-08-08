@@ -14,6 +14,8 @@ import type {
   InvoiceCheckOutcome,
   InvoiceCheckResult,
   InvoiceCheckStatus,
+  InvoiceExtractedItem,
+  InvoicePayoutBreakdownRow,
 } from '@/lib/ui-types'
 
 // 3観点（差出人・対象月＋金額・宛名）それぞれの結論。
@@ -24,8 +26,10 @@ type Verdict = 'ok' | 'ng' | 'hold'
 
 // 名前の比較は表記ゆれで落ちやすい。空白（半角・全角）は意味を持たないので除去してから比べる。
 // 「株式会社」等の法人格は略さずそのまま扱う（略すと別法人まで一致してしまうため）。
+// 請求書の明細は「〇〇様」のように敬称付きで書かれるのが普通なので、末尾の敬称も削る
+// （名前の途中に「様」が含まれるケースを誤って消さないよう、末尾アンカーに限定）。
 function normalizeName(value: string): string {
-  return value.replace(/[\s　]/g, '')
+  return value.replace(/[\s　]/g, '').replace(/(様|さま|御中|殿)$/, '')
 }
 
 function yen(amount: number): string {
@@ -54,7 +58,13 @@ function deliveryHoldDetail(row: DeliveryCheckRow, unitPrice: number): string {
 type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'video_editor'; unit_price: number }
 // notes は算出の途中で人に伝えたい補足（納品予定0件の月など）。金額だけでは
 // 「なぜその予定額になったのか」が追えないため、判定理由に混ぜて残す。
-type ExpectedOutcome = { amount: number; notes: string[] } | { hold: string }
+// breakdown は合計の内訳（アサイン単位）。合計が合っていても「Aで1本多くBで1本少ない」ように
+// 相殺していることがあるため、請求書の明細と突き合わせる相手として合計と一緒に持ち回る。
+type ExpectedOutcome = { amount: number; notes: string[]; breakdown: InvoicePayoutBreakdownRow[] } | { hold: string }
+
+// 立替経費の内訳行に使う名前。クライアント別の支払いではないので、
+// 実在のクライアント名と混ざらないよう固定の1行にまとめる。
+const EXPENSE_BREAKDOWN_LABEL = '立替経費'
 
 // 対象月に「その委託者へいくら払う予定か」を算出する。
 // 代行者は契約額（当月の控えを優先）、編集者は納品チェックで反映済みの実支払額を正とし、
@@ -93,6 +103,7 @@ async function computeExpectedPayout(
   const deliveryMonth = deliveryTargetMonth(year, month).month
   let total = 0
   const notes: string[] = []
+  const breakdown: InvoicePayoutBreakdownRow[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -100,11 +111,17 @@ async function computeExpectedPayout(
     const clientName = assignment.clients?.name ?? '?'
 
     if (!isVideoEditor) {
-      total += record.payout_amount_snapshot ?? assignment.contractor_payout_amount
+      // 代行者は契約額での支払い＝本数の概念が無いため count は null。
+      const amount = record.payout_amount_snapshot ?? assignment.contractor_payout_amount
+      total += amount
+      breakdown.push({ clientName, count: null, amount })
       continue
     }
     if (record.actual_payout_amount !== null) {
       total += record.actual_payout_amount
+      // 納品チェックの反映時に控えた本数。古い行では未記録（null）のことがあり、
+      // その場合は金額だけで照合する（本数を単価から逆算すると単価改定の月にズレる）。
+      breakdown.push({ clientName, count: record.delivered_video_count, amount: record.actual_payout_amount })
       continue
     }
 
@@ -125,6 +142,7 @@ async function computeExpectedPayout(
       // 未達（short）や設定・権限不備（attention）は人が直す余地があるため従来どおり保留。
       if (deliveryTone(delivery) === 'none') {
         notes.push(`${clientName}: 対象月の納品予定なし（¥0）`)
+        breakdown.push({ clientName, count: 0, amount: 0 })
         continue
       }
       return {
@@ -132,15 +150,142 @@ async function computeExpectedPayout(
       }
     }
     total += suggested
+    breakdown.push({ clientName, count: delivery.delivered, amount: suggested })
   }
 
   const expenseRows = await db
     .select({ amount: expenses.amount })
     .from(expenses)
     .where(and(inArray(expenses.assignment_id, assignmentIds), eq(expenses.year, year), eq(expenses.month, month)))
-  total += expenseRows.reduce((sum, e) => sum + e.amount, 0)
+  const expenseTotal = expenseRows.reduce((sum, e) => sum + e.amount, 0)
+  total += expenseTotal
+  // 経費が無い月まで内訳に出すと、請求書に立替経費の明細が無いだけでNGになってしまう。
+  if (expenseTotal > 0) breakdown.push({ clientName: EXPENSE_BREAKDOWN_LABEL, count: null, amount: expenseTotal })
 
-  return { amount: total, notes }
+  return { amount: total, notes, breakdown }
+}
+
+// OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
+// 冗長なので、本数が分かるとき（編集者）は本数だけ、無いとき（代行者・立替経費）は金額だけを見せる。
+function formatMatchNote(count: number | null, amount: number | null): string {
+  const value = count !== null ? `${count}本` : amount !== null ? yen(amount) : ''
+  return `${value} 一致`
+}
+
+// NG行のコンパクト表記。本数がある行（編集者の明細）は本数の相違だけを示し、金額や
+// 過不足の向き（多い/少ない）は書かない。ツール側の本数は納品実績のため「実績」と表記する。
+// 本数が無い行（代行者・立替経費）や、本数は一致していて金額だけがズレている行は
+// 「予定」との金額の相違だけを示す。
+function formatMismatchNote(
+  isCountBased: boolean,
+  billedCount: number | null,
+  billedAmount: number | null,
+  targetCount: number | null,
+  targetAmount: number,
+  countDiff: number | null,
+  amountDiff: number | null
+): string {
+  const label = isCountBased ? '実績' : '予定'
+  if (isCountBased && billedCount !== null && targetCount !== null && countDiff !== null && countDiff !== 0) {
+    return `請求 ${billedCount}本　${label} ${targetCount}本（${Math.abs(countDiff)}本相違）`
+  }
+  const billedText = billedAmount !== null ? yen(billedAmount) : '金額不明'
+  const diffText = amountDiff !== null ? `（${yen(Math.abs(amountDiff))}相違）` : ''
+  return `請求 ${billedText}　${label} ${yen(targetAmount)}${diffText}`
+}
+
+// 読み取れた値だけを足す。1行でも読めていれば合計は出せるが、全部 null なら比較自体を諦める
+// （0として扱うと「0本と請求されている」と誤って指摘してしまう）。
+function sumKnown(values: (number | null)[]): number | null {
+  const known = values.filter((v): v is number => v !== null)
+  return known.length === 0 ? null : known.reduce((sum, v) => sum + v, 0)
+}
+
+// 請求書の明細行を、ツール側の内訳（アサイン別の支払予定）へ突き合わせる。
+// 合計が一致していても内訳が入れ替わっていることがあるため、クライアント単位で本数・金額まで見る。
+// 名前は表記ゆれが避けられないので包含一致まで緩め、1つに絞れない行は判定せず保留として人へ回す。
+function compareInvoiceItems(
+  items: InvoiceExtractedItem[],
+  breakdown: InvoicePayoutBreakdownRow[],
+  invoiceAmount: number | null
+): { verdict: Verdict; note: string }[] {
+  const results: { verdict: Verdict; note: string }[] = []
+  const targets = breakdown.map((row) => ({ ...row, norm: normalizeName(row.clientName) }))
+  // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
+  // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
+  const matchedItems = new Map<number, InvoiceExtractedItem[]>()
+
+  for (const item of items) {
+    const norm = normalizeName(item.label)
+    const hits = targets
+      .map((target, index) => ({ target, index }))
+      .filter(({ target }) => norm.length > 0 && target.norm.length > 0)
+      .filter(({ target }) => target.norm.includes(norm) || norm.includes(target.norm))
+    if (hits.length !== 1) {
+      results.push({ verdict: 'hold', note: `明細「${item.label}」がどのクライアント分か特定できません` })
+      continue
+    }
+    const { index } = hits[0]
+    matchedItems.set(index, [...(matchedItems.get(index) ?? []), item])
+  }
+
+  targets.forEach((target, index) => {
+    const matched = matchedItems.get(index)
+    if (!matched) {
+      // 予定0円（納品予定なしの月）は請求書に出てこないのが正しい姿なので指摘しない。
+      if (target.amount === 0) return
+      results.push({ verdict: 'ng', note: `${target.clientName}: 予定 ${yen(target.amount)} が請求書に見当たりません` })
+      return
+    }
+    const billedCount = sumKnown(matched.map((m) => m.count))
+    const billedAmount = sumKnown(matched.map((m) => m.amount))
+    // 本数はどちらか一方でも欠けていれば比べられない（欠けている側を0とみなすと誤検知になる）。
+    const countDiff = billedCount !== null && target.count !== null ? billedCount - target.count : null
+    const amountDiff = billedAmount !== null ? billedAmount - target.amount : null
+    if (countDiff === null && amountDiff === null) {
+      results.push({ verdict: 'hold', note: `${target.clientName}: 明細の本数・金額が読み取れず照合できません` })
+      return
+    }
+    if ((countDiff ?? 0) === 0 && (amountDiff ?? 0) === 0) {
+      results.push({ verdict: 'ok', note: `${target.clientName}　${formatMatchNote(billedCount, billedAmount)}` })
+      return
+    }
+    results.push({
+      verdict: 'ng',
+      note: `${target.clientName}　${formatMismatchNote(
+        target.count !== null,
+        billedCount,
+        billedAmount,
+        target.count,
+        target.amount,
+        countDiff,
+        amountDiff
+      )}`,
+    })
+  })
+
+  // 明細の金額を全行読めているときだけ合計との整合を見る。1行でも読めていなければ
+  // 差が出るのは当たり前で、指摘されても直しようがない。
+  if (invoiceAmount !== null && items.every((item) => item.amount !== null)) {
+    const itemsTotal = items.reduce((sum, item) => sum + (item.amount ?? 0), 0)
+    if (itemsTotal !== invoiceAmount) {
+      results.push({
+        verdict: 'hold',
+        note: `明細の合計（${yen(itemsTotal)}）と請求額（${yen(invoiceAmount)}）が一致しません（読み取りミスの可能性）`,
+      })
+    }
+  }
+
+  return results
+}
+
+// 明細の無い請求書では「いくらズレたか」しか分からない。編集者への支払いは本数×単価なので、
+// 差額が単価で割り切れるなら本数に換算して添える（何本分の食い違いかが分かれば当たる先が絞れる）。
+function unitCountHint(contractor: ContractorRow, diff: number): string {
+  if (contractor.contractor_type !== 'video_editor' || contractor.unit_price <= 0) return ''
+  const abs = Math.abs(diff)
+  if (abs === 0 || abs % contractor.unit_price !== 0) return ''
+  return `（単価${yen(contractor.unit_price)}の${abs / contractor.unit_price}本分に相当）`
 }
 
 // 差出人名からマスタの委託者を1人に絞る。完全一致を先に試し、見つからない場合だけ
@@ -250,6 +395,7 @@ export async function checkInvoiceAndSave(
       extracted_addressee: invoiceUploads.extracted_addressee,
       extracted_year: invoiceUploads.extracted_year,
       extracted_month: invoiceUploads.extracted_month,
+      extracted_items: invoiceUploads.extracted_items,
       extract_error: invoiceUploads.extract_error,
       check_notes: invoiceUploads.check_notes,
       drive_file_id: invoiceUploads.drive_file_id,
@@ -316,16 +462,29 @@ export async function checkInvoiceAndSave(
     } else {
       expectedAmount = expected.amount
       for (const note of expected.notes) record('ok', note)
+      // 明細が読めていれば、合計が合わない理由をクライアント単位まで落として出す。
+      const items = row.extracted_items ?? []
       if (row.extracted_amount === null) {
         record('hold', `請求額が読み取れないため金額を照合できません（支払予定 ${yen(expectedAmount)}）`)
       } else if (row.extracted_amount === expectedAmount) {
         record('ok', `支払予定 ${yen(expectedAmount)} と一致`)
       } else {
         const diff = row.extracted_amount - expectedAmount
+        // 本数換算は明細が無いときの代わりの手がかり。明細があれば下で内訳ごとに出るため付けない。
+        const hint = items.length === 0 ? unitCountHint(contractor, diff) : ''
         record(
           'ng',
-          `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）`
+          `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）${hint}`
         )
+      }
+      // ─── D. 明細（クライアント別内訳）の照合 ──────────────────
+      // 合計が一致していても内訳が入れ替わっている（相殺）ことがあるため、合計とは独立して見る。
+      // 内訳の無い請求書（空配列）は従来どおり合計だけで判定する。ここで内訳を要求すると
+      // 「明細を書かない」書式の請求書が全件NGになってしまう。
+      if (items.length > 0) {
+        for (const item of compareInvoiceItems(items, expected.breakdown, row.extracted_amount)) {
+          record(item.verdict, item.note)
+        }
       }
     }
   } else if (row.extracted_amount === null) {

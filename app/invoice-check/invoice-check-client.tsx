@@ -18,7 +18,13 @@ import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
 import { parseInvoiceNotes } from '@/lib/invoice-notes'
-import type { InvoiceCheckRow, InvoiceExtractedPatch, InvoiceNoteLine, InvoiceNoteMark } from '@/lib/ui-types'
+import type {
+  InvoiceCheckRow,
+  InvoiceDeliverySheetLink,
+  InvoiceExtractedPatch,
+  InvoiceNoteLine,
+  InvoiceNoteMark,
+} from '@/lib/ui-types'
 
 const STATUS_LABEL: Record<InvoiceCheckRow['status'], string> = {
   pending: '未チェック',
@@ -102,6 +108,77 @@ function CheckNotes({ notes }: { notes: string | null }) {
   )
 }
 
+// クライアント名は一覧の狭い列に何件も並ぶ。法人格はどの社名にも付いていて見分けの役に立たないため、
+// 表示だけ落として実名部分に幅を使う（照合には使わない表示専用の処理）。
+function shortenClientName(name: string): string {
+  return name.replace(/^株式会社/, '').trim() || name
+}
+
+// NG（本数ズレ等）の確認先は編集者の納品シート。マスタ→アサインと辿らないと開けなかったため、
+// 判定のすぐ下にクライアント別の入口を出す。編集者以外の行では delivery_sheets が空なので何も出ない。
+function DeliverySheetLinks({ sheets }: { sheets: InvoiceDeliverySheetLink[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 text-xs leading-relaxed text-gray-500">
+      <span className="whitespace-nowrap">納品シート</span>
+      {/* 区切りとリンクを1つの箱に入れて、折り返しで区切りだけが行末に取り残されるのを防ぐ。 */}
+      {sheets.map((sheet, i) => (
+        <span key={`${i}-${sheet.url}`} className="inline-flex items-center gap-x-2">
+          {i > 0 && <span aria-hidden="true">／</span>}
+          <a
+            href={sheet.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={sheet.clientName}
+            // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+            className="inline-flex min-h-11 items-center whitespace-nowrap text-info hover:underline md:min-h-0"
+          >
+            {shortenClientName(sheet.clientName)}
+          </a>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+// ページの説明は毎日読むものではないのに、常時出しておくと一覧の表示領域を圧迫する。
+// 常時見せるのは1文に絞り、使い分けの細かい話は開いたときだけ出す。
+function UsageNotes() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+        className="flex min-h-11 items-center gap-1 text-left text-xs text-info md:min-h-0"
+      >
+        <ChevronRight size={12} className={cn('shrink-0 transition-transform', open && 'rotate-90')} />
+        <span>{open ? '使い方を閉じる' : '使い方を見る'}</span>
+      </button>
+      {open && (
+        <ul className="list-disc space-y-1 pl-8 text-xs leading-relaxed text-gray-500">
+          <li>読み取りと照合は受付時に自動で行われます。</li>
+          <li>
+            マスタや納品チェックを直したあとは「再チェック」で判定だけやり直せます。
+            AIの読み取り自体がずれているときは「再読み取り・再チェック」を使います。
+          </li>
+          <li>AIが読み間違えている場合は「修正」から値を直すと、その内容で照合をやり直します。</li>
+          <li>
+            請求書にクライアント別の明細があるときは、合計に加えて明細ごとの本数・金額も照合します。
+            明細の読み取りがずれている場合は「修正」では直せないため「再読み取り・再チェック」を使います。
+          </li>
+          <li>
+            判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、
+            PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
+          </li>
+          <li>判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。</li>
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // 受付日時はサーバー保存の UTC 文字列。閲覧端末のタイムゾーンに左右されないよう JST 固定で表示する。
 function formatReceivedAt(iso: string): string {
   return formatInTimeZone(iso, TZ, 'M/d HH:mm')
@@ -118,6 +195,12 @@ function formatTargetMonth(r: InvoiceCheckRow): string {
   const month = r.resolved_month ?? r.extracted_month
   if (month === null) return '—'
   return year === null ? `${month}月分` : `${year}年${month}月分`
+}
+
+// 請求額と支払予定額の食い違い。判定そのものはサーバー側が出すが、
+// 金額を1セルにまとめると差がぱっと見で分からなくなるため、表示上の強調にだけ使う。
+function isAmountMismatch(r: InvoiceCheckRow): boolean {
+  return r.extracted_amount !== null && r.expected_amount !== null && r.extracted_amount !== r.expected_amount
 }
 
 async function readErrorMessage(res: Response, fallback: string) {
@@ -352,12 +435,9 @@ export default function InvoiceCheckClient() {
       <div className="space-y-2">
         <h1 className="text-xl font-bold">請求書チェック</h1>
         <p className="text-xs leading-relaxed text-gray-500">
-          受付URLから届いた請求書PDFと、AIの読み取り・自動照合の結果一覧です。
-          読み取りと照合は受付時に自動で行われます。マスタや納品チェックを直したあとは「再チェック」で判定だけやり直せます。
-          判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
-          判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。
-          AIが読み間違えている場合は「修正」から値を直すと、その内容で照合をやり直します。
+          受付URLから届いた請求書をAIが読み取り、支払予定額と自動照合します。対応が必要なのは NG・保留 の行だけです。
         </p>
+        <UsageNotes />
       </div>
 
       {error && (
@@ -382,46 +462,73 @@ export default function InvoiceCheckClient() {
         <>
           {/* 一覧テーブル（PC・タブレット） */}
           <div className="hidden overflow-x-auto rounded-lg border bg-white md:block">
-            <table className="w-full text-sm">
+            {/* 列を増やすと日本語が1文字ずつ折り返されて読めなくなるため、関連する値は1セルに縦積みして5列に抑える。
+                幅が足りない画面では潰さずに横スクロールさせる（min-w）。 */}
+            <table className="w-full min-w-[60rem] text-sm">
               <thead className="border-b bg-gray-50">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium text-gray-600">受付</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">請求額</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">支払予定</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">差出人 / 委託者</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">宛名</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">対象月</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-600">判定</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-600">操作</th>
+                  <th className="w-[13rem] px-4 py-2 text-left font-medium whitespace-nowrap text-gray-600">受付</th>
+                  <th className="w-[12rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">差出人 / 対象月</th>
+                  <th className="w-[9rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">金額</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">判定</th>
+                  <th className="w-[11rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-b align-top last:border-0">
                     <td className="px-4 py-3">
-                      <div className="text-gray-600">{formatReceivedAt(r.created_at)}</div>
-                      <div className="text-xs break-all text-gray-500">{r.file_name}</div>
+                      <div className="whitespace-nowrap text-gray-600">{formatReceivedAt(r.created_at)}</div>
+                      {/* ファイル名は長くて列幅を壊すので1行に省略し、全文は title（マウスを乗せると出る吹き出し）で読めるようにする。 */}
+                      <div className="max-w-[11rem] truncate text-xs text-gray-500" title={r.file_name}>
+                        {r.file_name}
+                      </div>
                       {r.extract_error && <div className="mt-1 text-xs text-danger">{r.extract_error}</div>}
                     </td>
-                    <td className="px-3 py-3 text-right font-medium">{formatAmount(r.extracted_amount)}</td>
-                    <td className="px-3 py-3 text-right text-gray-600">{formatAmount(r.expected_amount)}</td>
                     <td className="px-3 py-3">
-                      <div className="text-gray-600">{r.extracted_issuer ?? '—'}</div>
-                      <div className="text-xs text-gray-500">{r.contractor_name ?? '委託者 未特定'}</div>
+                      {/* 委託者が特定できていれば、以降の作業はマスタ上の名前で行うためそちらを主役にする。 */}
+                      <div className="whitespace-nowrap font-medium text-gray-900">
+                        {r.contractor_name ?? r.extracted_issuer ?? '—'}
+                      </div>
+                      {r.contractor_name === null ? (
+                        <div className="text-xs whitespace-nowrap text-gray-500">委託者 未特定</div>
+                      ) : (
+                        r.extracted_issuer !== null && r.extracted_issuer !== r.contractor_name && (
+                          <div className="text-xs whitespace-nowrap text-gray-500">差出人 {r.extracted_issuer}</div>
+                        )
+                      )}
+                      <div className="mt-1 text-xs whitespace-nowrap text-gray-500">{formatTargetMonth(r)}</div>
                     </td>
-                    <td className="px-3 py-3 text-gray-600">{r.extracted_addressee ?? '—'}</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-gray-600">{formatTargetMonth(r)}</td>
-                    <td className="min-w-64 px-3 py-3">
+                    <td className="px-3 py-3 text-right">
+                      <div
+                        className={cn(
+                          'whitespace-nowrap font-medium',
+                          isAmountMismatch(r) ? 'text-danger' : 'text-gray-900'
+                        )}
+                      >
+                        <span className="mr-1 text-xs font-normal text-gray-500">請求</span>
+                        {formatAmount(r.extracted_amount)}
+                      </div>
+                      <div className="whitespace-nowrap text-xs text-gray-500">
+                        <span className="mr-1">予定</span>
+                        {formatAmount(r.expected_amount)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
                       <StatusBadge status={r.status} />
                       <div className="mt-1"><CheckNotes notes={r.check_notes} /></div>
+                      {r.delivery_sheets.length > 0 && (
+                        <div className="mt-1"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
+                      )}
                     </td>
                     <td className="px-3 py-3">
-                      <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+                      {/* 操作は5つあり横一列だと判定列を圧迫する。折り返して2〜3行に収め、全機能を残す。 */}
+                      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs">
                         <a
                           href={`/api/invoice-check/${r.id}/pdf`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-info hover:underline"
+                          className="whitespace-nowrap text-info hover:underline"
                         >
                           PDFを開く
                         </a>
@@ -430,7 +537,7 @@ export default function InvoiceCheckClient() {
                             href={r.drive_link}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-info hover:underline"
+                            className="whitespace-nowrap text-info hover:underline"
                           >
                             ドライブで開く
                           </a>
@@ -438,7 +545,7 @@ export default function InvoiceCheckClient() {
                         <button
                           type="button"
                           onClick={() => setEditTarget(r)}
-                          className="text-info hover:underline"
+                          className="whitespace-nowrap text-info hover:underline"
                         >
                           修正
                         </button>
@@ -446,7 +553,7 @@ export default function InvoiceCheckClient() {
                           type="button"
                           onClick={() => recheck(r.id)}
                           disabled={busy(r.id)}
-                          className="text-info hover:underline disabled:text-gray-400"
+                          className="whitespace-nowrap text-info hover:underline disabled:text-gray-400"
                         >
                           {recheckingId === r.id ? 'チェック中…' : '再チェック'}
                         </button>
@@ -454,14 +561,14 @@ export default function InvoiceCheckClient() {
                           type="button"
                           onClick={() => reExtract(r.id)}
                           disabled={busy(r.id)}
-                          className="text-info hover:underline disabled:text-gray-400"
+                          className="whitespace-nowrap text-info hover:underline disabled:text-gray-400"
                         >
                           {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                         </button>
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(r)}
-                          className="text-danger hover:underline"
+                          className="whitespace-nowrap text-danger hover:underline"
                         >
                           削除
                         </button>
@@ -514,6 +621,9 @@ export default function InvoiceCheckClient() {
 
                 {r.check_notes && <div className="mt-2"><CheckNotes notes={r.check_notes} /></div>}
                 {r.extract_error && <div className="mt-2 text-xs text-danger">{r.extract_error}</div>}
+                {r.delivery_sheets.length > 0 && (
+                  <div className="mt-2"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
+                )}
 
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button

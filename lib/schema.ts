@@ -1,4 +1,4 @@
-import { pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, unique } from 'drizzle-orm/pg-core'
+import { pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb, unique } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -228,6 +228,12 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // 「◯年◯月分」の対象月。年の記載がない請求書では月だけ埋まり、年は null のままになる。
   extracted_year: integer('extracted_year'),
   extracted_month: integer('extracted_month'),
+  // 明細行（クライアント別・案件別の内訳）。合計だけを見ると「Aで1本多く、Bで1本少ない」のような
+  // 相殺が見逃されるため、行ごとの名称・本数・金額をそのまま残して内訳単位でも照合する。
+  // 読み取れなかった項目は行の中で null にする（行ごと落とすと請求書の見た目と対応が取れなくなる）。
+  // 内訳の無い請求書もあるので、空配列と null（＝まだ読み取っていない）は別物として扱う。
+  // 型は lib/ui-types の InvoiceExtractedItem として派生させて使う。
+  extracted_items: jsonb('extracted_items').$type<{ label: string; count: number | null; amount: number | null }[]>(),
   // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
   extract_error: text('extract_error'),
   extracted_at: timestamp('extracted_at', { withTimezone: true, mode: 'string' }),
