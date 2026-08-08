@@ -60,6 +60,14 @@ export default function InvoiceUploadForm({ token }: { token: string }) {
     <form onSubmit={submit} className="space-y-4">
       <p className="text-sm text-gray-600">請求書のPDFファイルを選んで送信してください。</p>
 
+      <div className="rounded-lg border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-warning">
+        <p className="font-medium">ご確認ください</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>請求書に「◯月分」を必ず記載してください（基本は前月分）</li>
+          <li>ファイル名も記載の月と合わせていただくとスムーズです</li>
+        </ul>
+      </div>
+
       <div>
         <label htmlFor="invoice-file" className="mb-1 block text-sm font-medium">
           請求書ファイル（PDF）
