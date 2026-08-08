@@ -391,7 +391,8 @@ export default function DashboardClient({
   const [deliveryRows, setDeliveryRows] = useState<DeliveryCheckRow[] | null>(null)
   const [deliveryLoading, setDeliveryLoading] = useState(false)
   // 「この月の未完了」から飛んだ行を一時的に目立たせるためのキー（data-pending-row の値）。
-  const [highlightKey, setHighlightKey] = useState<string | null>(null)
+  // 「今日やること」の名前チップは同一人物の複数行をまとめて指すため、複数キーを保持する。
+  const [highlightKeys, setHighlightKeys] = useState<string[]>([])
 
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -417,18 +418,22 @@ export default function DashboardClient({
   // 該当行へスクロールして一時的にハイライトする。
   // PC表とスマホカードは両方をDOMに出してCSSで出し分けているため、
   // 同じ data-pending-row が2つ存在する。実際に表示されている方（offsetParent あり）を選ぶ。
-  function focusPendingRow(target: string) {
-    const found = Array.from(document.querySelectorAll<HTMLElement>(`[data-pending-row="${target}"]`))
+  // 複数行をまとめて指す場合は、全行をハイライトしたうえで先頭の行までスクロールする
+  // （まとめチップを押したときに「どの行が対象なのか」が曖昧にならないようにする）。
+  function focusPendingRow(targets: string | string[]) {
+    const keys = typeof targets === 'string' ? [targets] : targets
+    if (keys.length === 0) return
+    const found = Array.from(document.querySelectorAll<HTMLElement>(`[data-pending-row="${keys[0]}"]`))
     const visible = found.find((el) => el.offsetParent !== null) ?? found[0]
     visible?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setHighlightKey(target)
+    setHighlightKeys(keys)
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
-    highlightTimerRef.current = setTimeout(() => setHighlightKey(null), 1800)
+    highlightTimerRef.current = setTimeout(() => setHighlightKeys([]), 1800)
   }
 
   // ハイライトは既存の行背景（期限色・グループ見出しのグレー）と衝突するため、背景クラスごと差し替える。
   const rowBg = (target: string, base: string) =>
-    highlightKey === target ? 'bg-warning-subtle' : base
+    highlightKeys.includes(target) ? 'bg-warning-subtle' : base
 
   // 支払いは前月納品分に対して行うため、チェック対象は表示中の月ではなく前月。
   const deliveryTarget = deliveryTargetMonth(year, month)
@@ -1072,23 +1077,28 @@ export default function DashboardClient({
       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
       if (sentState === 'overdue') overdueItems.push({ label: name, group: 'clientInvoice', target: sentTarget })
       else if (sentState === 'inWindow') inWindowItems.push({ label: name, group: 'clientInvoice', target: sentTarget })
+      // 入金確認のチェックがグループ見出しに集約されているクライアントは、内訳ごとに分けても
+      // 飛び先も操作も同じ1つなので、クライアント名だけのラベルにして1チップにまとめる。
+      const confirmedLabel = clientHasGroupHeader(cr.client_id) ? baseName : name
       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-      if (confirmedState === 'overdue') overdueItems.push({ label: name, group: 'clientPayment', target: confirmedTarget })
-      else if (confirmedState === 'inWindow') inWindowItems.push({ label: name, group: 'clientPayment', target: confirmedTarget })
+      if (confirmedState === 'overdue') overdueItems.push({ label: confirmedLabel, group: 'clientPayment', target: confirmedTarget })
+      else if (confirmedState === 'inWindow') inWindowItems.push({ label: confirmedLabel, group: 'clientPayment', target: confirmedTarget })
     }
     for (const r of localRecords) {
       const name = r.assignments?.contractors?.name ?? '?'
       const rowTarget = `rec-${r.id}`
       const paidTarget = contractorPaidTarget(r)
+      // 委託者系も作業ごとの group にまとめる（グループ見出しに作業名が出るのでラベルは名前だけ）。
+      // 同じ委託者でもアサインの数だけレコードがあるため、まとめないと同名の行が縦に並んでしまう。
       const receivedState = recordDueState(r, 'invoice_received_at', 10)
-      if (receivedState === 'overdue') overdueItems.push({ label: `${name} — 請求書受領`, target: rowTarget })
-      else if (receivedState === 'inWindow') inWindowItems.push({ label: `${name} — 請求書受領`, target: rowTarget })
+      if (receivedState === 'overdue') overdueItems.push({ label: name, group: 'contractorInvoice', target: rowTarget })
+      else if (receivedState === 'inWindow') inWindowItems.push({ label: name, group: 'contractorInvoice', target: rowTarget })
       const reservedState = recordDueState(r, 'payment_reserved_at', 15)
-      if (reservedState === 'overdue') overdueItems.push({ label: `${name} — 支払い予約`, target: rowTarget })
-      else if (reservedState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い予約`, target: rowTarget })
+      if (reservedState === 'overdue') overdueItems.push({ label: name, group: 'contractorReserve', target: rowTarget })
+      else if (reservedState === 'inWindow') inWindowItems.push({ label: name, group: 'contractorReserve', target: rowTarget })
       const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-      if (paidState === 'overdue') overdueItems.push({ label: `${name} — 支払い確認`, target: paidTarget })
-      else if (paidState === 'inWindow') inWindowItems.push({ label: `${name} — 支払い確認`, target: paidTarget })
+      if (paidState === 'overdue') overdueItems.push({ label: name, group: 'contractorPaid', target: paidTarget })
+      else if (paidState === 'inWindow') inWindowItems.push({ label: name, group: 'contractorPaid', target: paidTarget })
     }
     // 単発タスク: 期日超過なら「期限超過」、期日が近い（既定3日以内）なら「対応期間中」に載せる。
     for (const t of oneTimeTasks) {

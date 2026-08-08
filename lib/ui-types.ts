@@ -21,9 +21,15 @@ export type RecordWithRelations = MonthlyRecord & {
   }) | null
 }
 
-// 「今日やること」の1項目。クライアント系（請求書送付・入金確認）は件数が多くなるため、
-// group を付けてグループ単位の折りたたみ表示にする。group なしは従来どおり個別表示。
-export type TaskGroup = 'clientInvoice' | 'clientPayment'
+// 「今日やること」の1項目。委託者系・クライアント系は人数×アサイン数だけ項目が増え、
+// 同じ作業の行が縦に延々と並んでしまうため、group を付けて作業ごとに1グループへまとめる
+// （グループ内は名前チップの横並び）。group なしの単発・全社タスクは従来どおり個別行で出す。
+export type TaskGroup =
+  | 'contractorInvoice'
+  | 'contractorReserve'
+  | 'contractorPaid'
+  | 'clientInvoice'
+  | 'clientPayment'
 export interface TaskItem {
   label: string
   group?: TaskGroup
