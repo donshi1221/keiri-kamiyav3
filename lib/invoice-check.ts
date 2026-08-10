@@ -13,8 +13,8 @@ import {
   cautionKeyOf,
   clientMatchNames,
   extractItemDate,
-  matchedNameLength,
   normalizeName,
+  resolveItemClient,
 } from '@/lib/invoice-match'
 import type {
   DeliveryCheckRow,
@@ -380,8 +380,9 @@ function compareExpenses(
 
 // 請求書の明細行を、ツール側の内訳（アサイン別の支払予定）へ突き合わせる。
 // 合計が一致していても内訳が入れ替わっていることがあるため、クライアント単位で本数・金額まで見る。
-// 名前は表記ゆれ・通称が避けられないので「ラベルの中に呼び名があるか」まで緩め、
-// 1つに絞れない行は判定せず保留として人へ回す。
+// 帰属の決め方は lib/invoice-match の resolveItemClient に集約している（AIが請求書全体から読んだ
+// 取引先名を優先し、決まらなければ明細ラベルで照合する）。名前は表記ゆれ・通称が避けられないので
+// 「文字列の中に呼び名があるか」まで緩め、1つに絞れない行は判定せず保留として人へ回す。
 // 経費明細はクライアントの支払いではないため、ここでは経費どうしで別に照合する。
 // 支払回数（「19/24」）の確認は判定（ok/ng/hold）とは別枠の countNotes として返す。明細と
 // アサインの対応がここでしか分からない一方、status には影響させたくないため混ぜずに分ける。
@@ -405,28 +406,27 @@ function compareInvoiceItems(
   // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
   const matchedItems = new Map<number, InvoiceExtractedItem[]>()
+  const candidateNames = breakdown.map((target) => target.matchNames)
 
   for (const item of workItems) {
-    const norm = normalizeName(item.label)
-    const hits = breakdown
-      .map((target, index) => ({ target, index, length: matchedNameLength(norm, target.matchNames) }))
-      .filter(({ length }) => norm.length > 0 && length > 0)
-    if (hits.length === 0) {
-      results.push({ verdict: 'hold', note: `明細「${item.label}」がどのクライアント分か特定できません` })
+    const { indexes } = resolveItemClient(item, candidateNames)
+    if (indexes.length === 0) {
+      // AIが取引先名を読めているのに当たらない＝マスタの名称・別名が足りていない可能性が高い。
+      // 読み取れた名称を添えて、別名登録で直せることが分かるようにする。
+      const hint = item.client ? `（請求書の記載「${item.client}」はマスタに見つかりません）` : ''
+      results.push({ verdict: 'hold', note: `明細「${item.label}」がどのクライアント分か特定できません${hint}` })
       addCountNote(item.label, null)
       continue
     }
-    const longest = Math.max(...hits.map((h) => h.length))
-    const best = hits.filter((h) => h.length === longest)
-    if (best.length > 1) {
+    if (indexes.length > 1) {
       results.push({
         verdict: 'hold',
-        note: `明細「${item.label}」の候補が複数あります（${best.map((h) => h.target.clientName).join(' / ')}）`,
+        note: `明細「${item.label}」の候補が複数あります（${indexes.map((i) => breakdown[i].clientName).join(' / ')}）`,
       })
       addCountNote(item.label, null)
       continue
     }
-    const { index } = best[0]
+    const index = indexes[0]
     matchedItems.set(index, [...(matchedItems.get(index) ?? []), item])
     addCountNote(item.label, breakdown[index])
   }

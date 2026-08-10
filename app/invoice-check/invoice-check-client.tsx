@@ -22,8 +22,7 @@ import {
   CAUTION_LABEL_SEPARATOR,
   cautionKeyFromNoteText,
   extractItemDate,
-  matchedNameLength,
-  normalizeName,
+  resolveItemClient,
   toExpenseDate,
 } from '@/lib/invoice-match'
 import type {
@@ -539,20 +538,14 @@ function canRegisterExpense(r: InvoiceCheckRow): boolean {
   )
 }
 
-// 明細ラベルから登録先アサインを推定する。照合本体と同じ「ラベルの中に呼び名があるか」で見て、
-// 最長一致が1つに絞れたときだけ採用する（複数当たる場合は人に選ばせる）。
+// 明細から登録先アサインを推定する。照合本体（lib/invoice-check）と同じ resolveItemClient を使い、
+// AIが請求書全体から読んだ取引先名を優先しつつ、決まらなければ明細ラベルで照合する。
+// 1つに絞れたときだけ採用する（複数当たる場合は人に選ばせる）。
 // 候補が1つしかない委託者は迷いようがないのでそれを選ぶ。
-function guessAssignmentId(label: string, candidates: InvoiceExpenseAssignment[]): string {
+function guessAssignmentId(item: InvoiceExtractedItem, candidates: InvoiceExpenseAssignment[]): string {
   if (candidates.length === 1) return candidates[0].id
-  const norm = normalizeName(label)
-  if (norm.length === 0) return ''
-  const hits = candidates
-    .map((a) => ({ a, length: matchedNameLength(norm, a.matchNames) }))
-    .filter(({ length }) => length > 0)
-  if (hits.length === 0) return ''
-  const longest = Math.max(...hits.map((h) => h.length))
-  const best = hits.filter((h) => h.length === longest)
-  return best.length === 1 ? best[0].a.id : ''
+  const { indexes } = resolveItemClient(item, candidates.map((a) => a.matchNames))
+  return indexes.length === 1 ? candidates[indexes[0]].id : ''
 }
 
 // 明細ラベルの「7/16」を経費の日付に直す。基準は請求書の対象月（記載月）で、
@@ -590,7 +583,7 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
         amount: item.amount === null ? '' : String(item.amount),
         date: guessExpenseDate(item.label, target),
         note: item.label,
-        assignmentId: guessAssignmentId(item.label, target.expense_assignments),
+        assignmentId: guessAssignmentId(item, target.expense_assignments),
         done: false,
       }))
     )

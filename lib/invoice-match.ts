@@ -54,6 +54,35 @@ export function matchedNameLength(label: string, names: string[]): number {
   return best
 }
 
+// 突き合わせる文字列（明細ラベル、またはAIが読んだ取引先名）に対して、最も長く一致した候補の位置を返す。
+// 返り値を配列にしているのは、同じ長さで複数当たった＝1つに絞れないことを呼び出し側が
+// 「保留にして人へ回す」と判断できるようにするため（空配列＝どれにも当たらなかった）。
+export function bestMatchIndexes(text: string, candidateNames: string[][]): number[] {
+  const norm = normalizeName(text)
+  if (norm.length === 0) return []
+  const lengths = candidateNames.map((names) => matchedNameLength(norm, names))
+  const longest = Math.max(0, ...lengths)
+  if (longest === 0) return []
+  return lengths.flatMap((length, index) => (length === longest ? [index] : []))
+}
+
+// 明細1行がどのクライアント分かを決める。
+// AIが請求書全体（摘要欄・備考欄など）から判断した帰属（item.client）を最優先にするのは、
+// 明細が動画タイトルで書かれる請求書ではラベルにクライアント名が一切現れず、
+// ラベルの文字列照合だけでは全行が「特定できません」になってしまうため。
+// client で1つに絞れない場合（未読み取り・マスタに無い名称・複数該当）は従来どおりラベルで照合する。
+// client を持たない過去の読み取り結果もこの経路に落ちるので、既存データの挙動は変わらない。
+export function resolveItemClient(
+  item: { label: string; client?: string | null },
+  candidateNames: string[][]
+): { indexes: number[]; source: 'client' | 'label' } {
+  if (item.client) {
+    const byClient = bestMatchIndexes(item.client, candidateNames)
+    if (byClient.length === 1) return { indexes: byClient, source: 'client' }
+  }
+  return { indexes: bestMatchIndexes(item.label, candidateNames), source: 'label' }
+}
+
 // 明細ラベルの「N/M」を日付（月/日）として読む。
 // クライアントによっては「7/28」が支払回数ではなく台本作成日を指す運用があり（clients.nm_as_date）、
 // 経費明細の日付欄を埋めるときも同じ書き方から日付を拾いたいため、抽出をここに1本化する。

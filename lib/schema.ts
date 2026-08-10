@@ -247,9 +247,19 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // kind は明細の種別。業務の対価（work）はクライアント別の支払予定と、実費・立替（expense）は
   // 登録済みの立替経費と突き合わせる＝照合相手が別物なので、読み取り時に分けておく。
   // kind を追加する前に保存された行には入っていないため任意にし、照合側で work とみなす。
+  // client はその明細がどのクライアント分かをAIが請求書全体（摘要・備考など）から判断した名称。
+  // 明細が動画タイトルで書かれ、クライアント名は摘要欄にしか無い請求書があり、ラベルの文字列照合だけでは
+  // 帰属を決められないため、読み取りの時点で別項目として残す。client を追加する前に保存された行には
+  // 入っていないため任意にし、照合側はラベル照合へ自動的に戻る。
   // 型は lib/ui-types の InvoiceExtractedItem として派生させて使う。
   extracted_items: jsonb('extracted_items').$type<
-    { label: string; count: number | null; amount: number | null; kind?: 'work' | 'expense' }[]
+    {
+      label: string
+      count: number | null
+      amount: number | null
+      kind?: 'work' | 'expense'
+      client?: string | null
+    }[]
   >(),
   // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
   extract_error: text('extract_error'),

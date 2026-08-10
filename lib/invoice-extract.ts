@@ -32,8 +32,14 @@ const RESPONSE_SCHEMA: ResponseSchema = {
             enum: ['work', 'expense'],
             description: "明細の種別。交通費など実費の立替は 'expense'、業務の対価は 'work'",
           },
+          client: {
+            type: SchemaType.STRING,
+            nullable: true,
+            description:
+              'その明細がどの取引先（クライアント）の分か。明細行だけでなく請求書全体（摘要・備考など）から判断する。判断できなければ null',
+          },
         },
-        required: ['label', 'count', 'amount', 'kind'],
+        required: ['label', 'count', 'amount', 'kind', 'client'],
       },
     },
   },
@@ -58,6 +64,11 @@ const PROMPT = [
   "  かかった費用をそのまま請求している行は 'expense'。",
   "  台本作成費・編集費・作業費・撮影費など業務の対価にあたる行や、本数で数える行は 'work'。",
   '  移動区間（「渋谷→籠原」など）や日付だけが書かれた行も、交通費の明細なら expense にする。',
+  '  client はその明細がどの取引先（クライアント）に対する業務・費用かを表す名称。',
+  '  明細行だけを見るのではなく、請求書全体（摘要欄・備考欄・見出し・グループの小見出し・宛先近くの記載など）',
+  '  から判断し、請求書に書かれている名称のまま入れる（略さない・補わない・敬称はそのままでよい）。',
+  '  明細が動画タイトルや作業内容だけで書かれていて、取引先名は摘要欄にしか無い請求書があるため、',
+  '  明細行の文字だけで判断しないこと。どの取引先の分か判断できなければ null にする。',
   '  「小計」「合計」「消費税」「源泉徴収」など、集計行・調整行は items に含めない。',
   '  内訳が書かれていない請求書では items は空配列にする。',
   '',
@@ -105,6 +116,9 @@ function normalizeItems(value: unknown): InvoiceExtractedItem[] {
         // 判断がつかない値が返ってきたときは work に寄せる。expense と誤判定すると
         // クライアント別の照合から行が丸ごと消えて、本数のズレを見逃してしまうため。
         kind: item.kind === 'expense' ? 'expense' : 'work',
+        // 空文字は「判断できなかった」と同じ意味なので null に揃える
+        // （照合側で「値がある＝帰属が読めた」と単純に判定できるようにするため）。
+        client: normalizeText(item.client),
       },
     ]
   })
