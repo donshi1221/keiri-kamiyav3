@@ -102,6 +102,8 @@ export type InvoiceItemKind = NonNullable<InvoiceExtractedItem['kind']>
 // 明細に書かれる「19/24」（全24回中19回目）が支払予定と合っているかは、この期間から導いた
 // 契約終了月と突き合わせないと判定できないため、内訳の行に持たせる。
 // どちらかが未設定の行は「継続」（回数の定めなし）＝突き合わせる相手が無いので null になる。
+// nmAsDate はそのクライアントの「N/M」の読み方（clients.nm_as_date）。回数として読むか
+// 日付として読むかは明細を当てたクライアントが決まらないと判断できないため、内訳の行に持たせる。
 export interface InvoicePayoutBreakdownRow {
   clientName: string
   count: number | null
@@ -109,6 +111,7 @@ export interface InvoicePayoutBreakdownRow {
   matchNames: string[]
   paymentStartMonth: string | null
   paymentCount: number | null
+  nmAsDate: boolean
 }
 
 // 読み取りは失敗しても例外にせず、理由を持ち回って extract_error に保存する。
@@ -121,13 +124,27 @@ export interface InvoiceDeliverySheetLink {
   url: string
 }
 
+// 経費のその場登録で選ぶ「登録先アサイン」1件。画面側で明細ラベルからクライアントを推定して
+// 初期選択するため、表示用の正式名とは別に照合用の呼び名（matchNames）も持たせる。
+export interface InvoiceExpenseAssignment {
+  id: string
+  clientName: string
+  matchNames: string[]
+}
+
 // 一覧APIが返す1行。PDF本体（file_data）は重いので一覧には載せず、
 // 表示が必要なときだけ /api/invoice-check/[id]/pdf から取り出す。
 // contractor_name は照合で特定した委託者名。IDだけでは画面で誰か分からないため結合して持たせる。
 // delivery_sheets は編集者のときだけ入る（委託者未特定・代行者・URL未登録なら空配列）。
+// payout_year / payout_month は照合に使った支払月（記載月の翌月）。経費は支払月の行に登録する
+// 決まりなので、画面側で月をずらす計算をやり直さずに済むようサーバーで確定させて渡す。
+// expense_assignments は経費の登録先候補（その委託者のアクティブなアサイン）。
 export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'> & {
   contractor_name: string | null
   delivery_sheets: InvoiceDeliverySheetLink[]
+  payout_year: number | null
+  payout_month: number | null
+  expense_assignments: InvoiceExpenseAssignment[]
 }
 
 // 自動照合（lib/invoice-check）の判定結果。DBの列と1対1に対応させ、

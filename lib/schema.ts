@@ -31,6 +31,10 @@ export const clients = pgTable('clients', {
   // 明細は「めぐ姉様」「ファースト」のようにマスタの正式名と別の呼び方で書かれることが多く、
   // 正式名だけでは突き合わせようがないため、照合用の別名をクライアント側に持たせる。
   aliases: text('aliases'),
+  // 請求書の明細に書かれる「N/M」（例「7/28」）の読み方。既定は支払回数（全M回中N回目）だが、
+  // クライアントによっては台本作成日（7月28日）を書く運用がある。読み方を取り違えると
+  // 支払回数の整合チェックが必ず外れるため、切り替えをクライアント単位で持つ。
+  nm_as_date: boolean('nm_as_date').notNull().default(false),
   contact_person: text('contact_person'),
   // billing_amount / contract_start / contract_months は請求内訳（client_billing_items）へ移行済み。
   // 列は移行の履歴と後方互換のため残すが、金額・契約期間の正本は client_billing_items 側。

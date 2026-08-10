@@ -20,6 +20,7 @@ export async function PATCH(
     const patch: Partial<typeof clients.$inferInsert> = {}
     if (v.name !== undefined) patch.name = v.name
     if (v.aliases !== undefined) patch.aliases = v.aliases ?? null
+    if (v.nm_as_date !== undefined) patch.nm_as_date = v.nm_as_date
     if (v.contact_person !== undefined) patch.contact_person = v.contact_person ?? null
     if (v.monthly_video_count !== undefined) patch.monthly_video_count = v.monthly_video_count
     if (v.notes !== undefined) patch.notes = v.notes ?? null

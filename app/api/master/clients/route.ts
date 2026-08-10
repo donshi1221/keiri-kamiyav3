@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     const [data] = await db.insert(clients).values({
       name: body.name,
       aliases: body.aliases ?? null,
+      nm_as_date: body.nm_as_date ?? false,
       contact_person: body.contact_person ?? null,
       monthly_video_count: body.monthly_video_count ?? 0,
       notes: body.notes ?? null,

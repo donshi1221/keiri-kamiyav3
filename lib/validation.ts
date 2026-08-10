@@ -44,6 +44,8 @@ export const clientCreateSchema = z.object({
   // 請求書の明細に書かれる呼び名（通称・略称）。カンマ区切りの1行として保存し、
   // 分解は照合側（lib/invoice-check）で行う＝入力の見た目とDBの値を一致させる。
   aliases: z.string().nullish(),
+  // 明細の「N/M」を支払回数ではなく日付（台本作成日など）として扱うクライアントの印。
+  nm_as_date: z.boolean().optional(),
   contact_person: z.string().nullish(),
   monthly_video_count: countInt.optional(),
   notes: z.string().nullish(),

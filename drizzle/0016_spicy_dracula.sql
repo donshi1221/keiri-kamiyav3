@@ -1,0 +1,1 @@
+ALTER TABLE "clients" ADD COLUMN "nm_as_date" boolean DEFAULT false NOT NULL;

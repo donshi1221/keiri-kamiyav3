@@ -8,6 +8,7 @@ import { COMPANY_NAME } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
 import { uploadPdfToDrive } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
+import { clientMatchNames, extractItemDate, matchedNameLength, normalizeName } from '@/lib/invoice-match'
 import type {
   DeliveryCheckRow,
   DriveUploadOutcome,
@@ -24,44 +25,8 @@ import type {
 // - hold : 判定材料が足りず結論を出せない（マスタ登録漏れ・納品未反映など）
 type Verdict = 'ok' | 'ng' | 'hold'
 
-// 名前の比較は表記ゆれで落ちやすい。空白（半角・全角）は意味を持たないので除去してから比べる。
-// 「株式会社」等の法人格は略さずそのまま扱う（略すと別法人まで一致してしまうため）。
-// 請求書の明細は「〇〇様」のように敬称付きで書かれるのが普通なので、末尾の敬称も削る
-// （名前の途中に「様」が含まれるケースを誤って消さないよう、末尾アンカーに限定）。
-function normalizeName(value: string): string {
-  return value.replace(/[\s　]/g, '').replace(/(様|さま|御中|殿)$/, '')
-}
-
-// 請求書の明細は法人格を省いて書かれるのが普通（「株式会社四季」→「四季様 台本作成費」）。
-// 正式名から法人格を外した形も呼び名の候補に加え、別名を登録しなくても拾えるようにする。
-// 除くのは先頭・末尾に付く一般的な法人格だけ（名前の途中を削ると別法人と混ざるため）。
-const CORPORATE_FORMS = [
-  '一般社団法人', '一般財団法人', '公益社団法人', '公益財団法人', '特定非営利活動法人', '社会福祉法人',
-  '株式会社', '有限会社', '合同会社', '合資会社', '合名会社', '医療法人', '学校法人', '宗教法人',
-  '（株）', '(株)', '（有）', '(有)', '（同）', '(同)', '㈱', '㈲',
-]
-
-function stripCorporateForm(normalized: string): string {
-  for (const form of CORPORATE_FORMS) {
-    if (normalized.startsWith(form)) return normalized.slice(form.length)
-    if (normalized.endsWith(form)) return normalized.slice(0, -form.length)
-  }
-  return normalized
-}
-
-// 別名は1つの入力欄にカンマ区切りで登録する。全角カンマ・読点で区切る人もいるため、いずれも区切りとして扱う。
-function parseClientAliases(value: string | null | undefined): string[] {
-  if (!value) return []
-  return value.split(/[,、，]/).map((s) => s.trim()).filter((s) => s.length > 0)
-}
-
-// 明細ラベルの中から探す「そのクライアントの呼び名」の一覧。
-// 正式名・法人格を外した形・別名（通称や字違い）を、比較しやすいよう正規化して重複を除く。
-function clientMatchNames(name: string, aliases: string | null | undefined): string[] {
-  const normalized = normalizeName(name)
-  const candidates = [normalized, stripCorporateForm(normalized), ...parseClientAliases(aliases).map(normalizeName)]
-  return [...new Set(candidates.filter((c) => c.length > 0))]
-}
+// 名前の正規化・呼び名の展開・ラベルとの一致判定は lib/invoice-match に集約している
+// （経費のその場登録ダイアログでも同じ基準で明細をクライアントへ割り当てるため）。
 
 function yen(amount: number): string {
   return `¥${amount.toLocaleString('ja-JP')}`
@@ -82,7 +47,8 @@ function resolveYear(month: number, extractedYear: number | null): number {
 // 一方 resolved_year / resolved_month（画面の対象月表示）は請求書の記載どおり M のままにする
 // （人が請求書を見て探す手がかりは記載月のため）。
 // 12月分→翌年1月支払いの繰り上がりは Date に任せる（自前の +1 では年をまたげない）。
-function payoutMonthOf(year: number, month: number): { year: number; month: number } {
+// 一覧API（経費のその場登録で「どの月に登録するか」を決めるとき）からも使うため export する。
+export function payoutMonthOf(year: number, month: number): { year: number; month: number } {
   const d = new Date(year, month, 1)
   return { year: d.getFullYear(), month: d.getMonth() + 1 }
 }
@@ -128,7 +94,8 @@ async function computeExpectedPayout(
   const assignmentRows = await db.query.assignments.findMany({
     where: (a, { and: andOp, eq: eqOp }) => andOp(eqOp(a.contractor_id, contractor.id), eqOp(a.active, true)),
     // aliases は明細ラベルとの照合に使う（正式名だけでは通称・略称で書かれた明細を拾えない）。
-    with: { clients: { columns: { name: true, aliases: true } } },
+    // nm_as_date は明細の「N/M」を支払回数と読むか日付と読むかの切り替え（クライアント単位の運用差）。
+    with: { clients: { columns: { name: true, aliases: true, nm_as_date: true } } },
   })
   if (assignmentRows.length === 0) {
     return { hold: `委託者「${contractor.name}」に有効なアサインがありません` }
@@ -166,7 +133,13 @@ async function computeExpectedPayout(
     // （'?' を候補にすると、記号を含む明細に誤って吸い付いてしまう）。
     const matchNames = client ? clientMatchNames(client.name, client.aliases) : []
     // 明細の「19/24」（支払回数）の検証に使う支払期間。どの行でも同じ値を渡すのでまとめて作る。
-    const payment = { paymentStartMonth: assignment.payment_start_month, paymentCount: assignment.payment_count }
+    // nmAsDate はそのクライアントの「N/M」の読み方。クライアントが引けない行は
+    // 回数として読む従来どおりの扱い（false）にする。
+    const payment = {
+      paymentStartMonth: assignment.payment_start_month,
+      paymentCount: assignment.payment_count,
+      nmAsDate: client?.nm_as_date ?? false,
+    }
 
     if (!isVideoEditor) {
       // 代行者は契約額での支払い＝本数の概念が無いため count は null。
@@ -264,18 +237,6 @@ function sumKnown(values: (number | null)[]): number | null {
   return known.length === 0 ? null : known.reduce((sum, v) => sum + v, 0)
 }
 
-// 明細ラベルの中に含まれる呼び名のうち、最も長く一致したものの文字数（0＝一致なし）。
-// 「四季様 台本作成費 7/28」のように工程名や支払回数が付くため、名前どうしの一致では拾えない。
-// 長さで比べるのは、「がじゅまる」と「がじゅまるレンタカー」の両方が登録されているとき、
-// 短い方にも当たってしまう（＝候補が複数になる）のを避けて長い方に寄せるため。
-function matchedNameLength(label: string, names: string[]): number {
-  let best = 0
-  for (const name of names) {
-    if (name.length > best && label.includes(name)) best = name.length
-  }
-  return best
-}
-
 // 業務明細に書かれる「N/M」は支払回数（例「運用代行費 19/24」＝全24回中19回目）。
 // 数字の並びをそのまま取り、桁数で回数かどうかを見分ける（「2026/8」のような年月を回数と
 // 読み違えないよう、4桁以上を含む並びは対象外にする）。
@@ -330,6 +291,17 @@ function checkPaymentCount(
   target: InvoicePayoutBreakdownRow | null,
   payout: YearMonth
 ): PaymentCountNote | null {
+  // 「N/M」を台本作成日として書くクライアント（clients.nm_as_date）では、回数として突き合わせると
+  // 必ず不整合になる。回数チェックは行わず、記載日の作業実施を人に確かめてもらう案内に切り替える。
+  // 日付として読めない並び（「19/24」など）は案内の材料が無いため何も出さない。
+  if (target?.nmAsDate) {
+    const date = extractItemDate(label)
+    if (!date) return null
+    return {
+      mark: 'caution',
+      note: `${label} — 記載日（${date.month}/${date.day}）の作業実施をご確認ください`,
+    }
+  }
   const ref = extractPaymentCount(label)
   if (!ref) return null
   const shown = `支払回数（${ref.index}/${ref.total}）`

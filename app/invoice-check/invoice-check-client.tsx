@@ -18,9 +18,12 @@ import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
 import { parseInvoiceNotes } from '@/lib/invoice-notes'
+import { extractItemDate, matchedNameLength, normalizeName, toExpenseDate } from '@/lib/invoice-match'
 import type {
   InvoiceCheckRow,
   InvoiceDeliverySheetLink,
+  InvoiceExpenseAssignment,
+  InvoiceExtractedItem,
   InvoiceExtractedPatch,
   InvoiceNoteLine,
   InvoiceNoteMark,
@@ -181,12 +184,18 @@ function UsageNotes() {
             契約の終了月を割り出して照合します。合わない場合は判定を変えずに注意として出ます。
           </li>
           <li>
+            「7/28」を台本作成日として書くクライアントは、マスタ管理のクライアント編集で
+            「明細の数字（N/M）を日付として扱う」にチェックを入れてください。回数としての照合を行わず、
+            記載日の作業実施を確認する注意だけを出します。
+          </li>
+          <li>
             明細が通称や略称（「めぐ姉様」など）で書かれていて特定できないときは、マスタ管理のクライアント編集で
             「別名」にカンマ区切りで登録すると、次回の照合から正式名と同じものとして扱われます。
           </li>
           <li>
             交通費などの経費の明細は、クライアント別ではなく対象月に登録済みの立替経費の合計と照合します。
-            経費が未登録だとNGになるため、ダッシュボードの「＋経費」から先に登録してください。
+            経費が未登録でNGになった行には「経費を登録」ボタンが出るので、請求書の明細をそのまま
+            立替経費として登録できます（登録後は自動で再チェックまで行います）。
           </li>
           <li>
             判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、
@@ -365,6 +374,230 @@ function InvoiceEditDialog({ target, onClose, onSaved, onError }: {
   )
 }
 
+// ─── 経費のその場登録 ───────────────────────────────────────────
+// 請求書に経費の明細があるのに立替経費が未登録・金額違いだと必ずNGになる。従来はダッシュボードへ
+// 移動して1件ずつ入力し直す必要があったため、請求書の明細をそのまま初期値にした登録口をここに置く。
+
+function expenseItemsOf(r: InvoiceCheckRow): InvoiceExtractedItem[] {
+  return (r.extracted_items ?? []).filter((item) => item.kind === 'expense')
+}
+
+// 経費が原因のNGかどうか。判定理由（lib/invoice-check の compareExpenses）が出す経費関連のNGは
+// いずれも文言に「経費」を含むため、印がNGの行にその語があるかで見分ける。
+function hasExpenseNg(notes: string | null): boolean {
+  return parseInvoiceNotes(notes).some((line) => line.mark === 'ng' && line.text.includes('経費'))
+}
+
+// 登録口を出す条件。経費のNGが出ていても、初期値にする明細・登録先アサイン・登録先の月が
+// 揃っていなければフォームを埋められないため、そろっている行だけに出す。
+function canRegisterExpense(r: InvoiceCheckRow): boolean {
+  return (
+    hasExpenseNg(r.check_notes) &&
+    expenseItemsOf(r).length > 0 &&
+    r.expense_assignments.length > 0 &&
+    r.payout_year !== null &&
+    r.payout_month !== null
+  )
+}
+
+// 明細ラベルから登録先アサインを推定する。照合本体と同じ「ラベルの中に呼び名があるか」で見て、
+// 最長一致が1つに絞れたときだけ採用する（複数当たる場合は人に選ばせる）。
+// 候補が1つしかない委託者は迷いようがないのでそれを選ぶ。
+function guessAssignmentId(label: string, candidates: InvoiceExpenseAssignment[]): string {
+  if (candidates.length === 1) return candidates[0].id
+  const norm = normalizeName(label)
+  if (norm.length === 0) return ''
+  const hits = candidates
+    .map((a) => ({ a, length: matchedNameLength(norm, a.matchNames) }))
+    .filter(({ length }) => length > 0)
+  if (hits.length === 0) return ''
+  const longest = Math.max(...hits.map((h) => h.length))
+  const best = hits.filter((h) => h.length === longest)
+  return best.length === 1 ? best[0].a.id : ''
+}
+
+// 明細ラベルの「7/16」を経費の日付に直す。基準は請求書の対象月（記載月）で、
+// 読めなければ空欄にする（推測で日付を入れると、あとから実費と突き合わせられなくなる）。
+function guessExpenseDate(label: string, r: InvoiceCheckRow): string {
+  const baseYear = r.resolved_year ?? r.extracted_year
+  const baseMonth = r.resolved_month ?? r.extracted_month
+  if (baseYear === null || baseMonth === null) return ''
+  const date = extractItemDate(label)
+  return date ? toExpenseDate(date.month, date.day, baseYear, baseMonth) : ''
+}
+
+interface ExpenseDraft {
+  amount: string
+  date: string
+  note: string
+  assignmentId: string
+  // 途中で失敗したときの再送で同じ経費を二重登録しないための控え。
+  done: boolean
+}
+
+function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
+  target: InvoiceCheckRow | null
+  onClose: () => void
+  onRegistered: (id: string) => void
+  onError: (msg: string) => void
+}) {
+  const [drafts, setDrafts] = useState<ExpenseDraft[]>([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setDrafts(
+      expenseItemsOf(target).map((item) => ({
+        amount: item.amount === null ? '' : String(item.amount),
+        date: guessExpenseDate(item.label, target),
+        note: item.label,
+        assignmentId: guessAssignmentId(item.label, target.expense_assignments),
+        done: false,
+      }))
+    )
+  }, [target])
+
+  function update(index: number, patch: Partial<ExpenseDraft>) {
+    setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)))
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!target || target.payout_year === null || target.payout_month === null) return
+    const pending = drafts.map((d, i) => ({ d, i })).filter(({ d }) => !d.done)
+    if (pending.length === 0) {
+      onRegistered(target.id)
+      return
+    }
+    if (pending.some(({ d }) => d.assignmentId === '')) {
+      onError('登録先アサインを選んでください。')
+      return
+    }
+    if (pending.some(({ d }) => d.amount.trim() === '' || !(Number(d.amount) > 0))) {
+      onError('金額を入力してください。')
+      return
+    }
+
+    setSaving(true)
+    try {
+      // 経費APIは1件ずつの登録なので順に送る。途中で失敗しても、成功した行は done を立てて
+      // 再送の対象から外す（まとめて送り直すと同じ経費が二重に入る）。
+      for (const { d, i } of pending) {
+        const res = await fetch('/api/expenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assignment_id: d.assignmentId,
+            // 経費は支払月の行に紐づく（照合もその月の合計と突き合わせる）。
+            year: target.payout_year,
+            month: target.payout_month,
+            expense_date: d.date || null,
+            amount: Number(d.amount),
+            note: d.note.trim() || null,
+          }),
+        })
+        if (!res.ok) {
+          setSaving(false)
+          onError(await readErrorMessage(res, '経費の登録に失敗しました。'))
+          return
+        }
+        update(i, { done: true })
+      }
+      setSaving(false)
+      onRegistered(target.id)
+    } catch {
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <FormDialog open={!!target} onClose={onClose} title="経費を登録" maxWidth="max-w-2xl">
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs leading-relaxed text-gray-500">
+          「{target?.file_name}」の経費明細をそのまま立替経費として登録します。登録先は
+          {target && target.payout_year !== null && target.payout_month !== null
+            ? `${target.payout_year}年${target.payout_month}月（支払月）`
+            : '支払月'}
+          です。登録後は自動で再チェックを行います。
+        </p>
+
+        <div className="space-y-3">
+          {drafts.map((d, index) => (
+            <div key={index} className="space-y-2 rounded-lg border bg-gray-50/50 p-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500">
+                    金額 <span className="text-danger">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    value={d.amount}
+                    disabled={d.done}
+                    onChange={(e) => update(index, { amount: e.target.value })}
+                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500">日付</label>
+                  <input
+                    type="date"
+                    value={d.date}
+                    disabled={d.done}
+                    onChange={(e) => update(index, { date: e.target.value })}
+                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-500">メモ</label>
+                <input
+                  value={d.note}
+                  disabled={d.done}
+                  onChange={(e) => update(index, { note: e.target.value })}
+                  className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                  placeholder="明細の内容"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-500">
+                  登録先アサイン <span className="text-danger">*</span>
+                </label>
+                <select
+                  value={d.assignmentId}
+                  disabled={d.done}
+                  onChange={(e) => update(index, { assignmentId: e.target.value })}
+                  className="min-h-11 w-full rounded border bg-white px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                >
+                  <option value="">選択してください</option>
+                  {(target?.expense_assignments ?? []).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.clientName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {d.done && <p className="text-xs text-success">登録しました</p>}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || drafts.length === 0}>
+            {saving ? '登録中…' : '登録して再チェック'}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
 export default function InvoiceCheckClient() {
   const [rows, setRows] = useState<InvoiceCheckRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -372,6 +605,7 @@ export default function InvoiceCheckClient() {
   const [recheckingId, setRecheckingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<InvoiceCheckRow | null>(null)
   const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
+  const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -446,6 +680,13 @@ export default function InvoiceCheckClient() {
     setEditTarget(null)
     setError(skipped)
     await load()
+  }
+
+  // 経費を登録しただけでは判定は変わらない（保存済みの check_notes を見ているため）。
+  // 登録の目的は「経費のNGを消すこと」なので、続けて再チェックまで自動で走らせる。
+  async function handleExpensesRegistered(id: string) {
+    setExpenseTarget(null)
+    await recheck(id)
   }
 
   const busy = (id: string) => extractingId === id || recheckingId === id
@@ -539,6 +780,14 @@ export default function InvoiceCheckClient() {
                       <div className="mt-1"><CheckNotes notes={r.check_notes} /></div>
                       {r.delivery_sheets.length > 0 && (
                         <div className="mt-1"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
+                      )}
+                      {/* 経費NGの対応はこの場で終わらせられるので、判定のすぐ下（右寄せ）に登録口を出す。 */}
+                      {canRegisterExpense(r) && (
+                        <div className="mt-2 flex justify-end">
+                          <Button size="sm" className="h-11 md:h-7" onClick={() => setExpenseTarget(r)}>
+                            経費を登録
+                          </Button>
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-3">
@@ -645,6 +894,15 @@ export default function InvoiceCheckClient() {
                   <div className="mt-2"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
                 )}
 
+                {/* 経費NGはこの場で直せるため、他の操作より前に出す（塗りボタンで目立たせる）。 */}
+                {canRegisterExpense(r) && (
+                  <div className="mt-2">
+                    <Button size="sm" className="h-11 w-full" onClick={() => setExpenseTarget(r)}>
+                      経費を登録
+                    </Button>
+                  </div>
+                )}
+
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button
                     variant="outline"
@@ -703,6 +961,13 @@ export default function InvoiceCheckClient() {
         target={editTarget}
         onClose={() => setEditTarget(null)}
         onSaved={handleEdited}
+        onError={setError}
+      />
+
+      <ExpenseRegisterDialog
+        target={expenseTarget}
+        onClose={() => setExpenseTarget(null)}
+        onRegistered={handleExpensesRegistered}
         onError={setError}
       />
 

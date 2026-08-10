@@ -978,6 +978,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
 }) {
   const [name, setName] = useState('')
   const [aliases, setAliases] = useState('')
+  const [nmAsDate, setNmAsDate] = useState(false)
   const [monthlyVideoCount, setMonthlyVideoCount] = useState('')
   const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
   const [removedIds, setRemovedIds] = useState<string[]>([])
@@ -989,6 +990,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     if (open) {
       setName(initial?.name ?? '')
       setAliases(initial?.aliases ?? '')
+      setNmAsDate(initial?.nm_as_date ?? false)
       setMonthlyVideoCount(initial?.monthly_video_count ? initial.monthly_video_count.toString() : '')
       setRemovedIds([])
       setCreatedClientId(null)
@@ -1048,6 +1050,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         const patch: Record<string, unknown> = {}
         if (name !== initial.name) patch.name = name
         if (aliasesValue !== (initial.aliases ?? null)) patch.aliases = aliasesValue
+        if (nmAsDate !== initial.nm_as_date) patch.nm_as_date = nmAsDate
         if (countNum !== initial.monthly_video_count) patch.monthly_video_count = countNum
         if (Object.keys(patch).length > 0) {
           const res = await fetch(`/api/master/clients/${initial.id}`, {
@@ -1062,14 +1065,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         const res = await fetch(`/api/master/clients/${clientId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, aliases: aliasesValue, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate, monthly_video_count: countNum }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
       } else {
         const res = await fetch('/api/master/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, aliases: aliasesValue, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate, monthly_video_count: countNum }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         clientId = (await res.json()).id
@@ -1134,6 +1137,24 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           <input value={aliases} onChange={(e) => setAliases(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="めぐ姉, Reseed" />
           <p className="mt-1 text-xs text-gray-600">
             請求書の明細に書かれる通称・略称・字違いを登録すると、請求書チェックの照合で正式名と同じものとして扱います。
+          </p>
+        </div>
+
+        <div>
+          {/* スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。 */}
+          <label className="flex min-h-11 items-start gap-2 text-sm md:min-h-0">
+            <input
+              type="checkbox"
+              checked={nmAsDate}
+              onChange={(e) => setNmAsDate(e.target.checked)}
+              className="mt-1 size-4 shrink-0"
+            />
+            <span>明細の数字（N/M）を日付として扱う（台本作成日など）</span>
+          </label>
+          <p className="mt-1 text-xs text-gray-600">
+            通常「7/28」は支払回数（全28回中7回目）として支払期間と照合します。このクライアントが
+            台本作成日を書く運用の場合はチェックを入れてください。回数の照合を行わず、記載日の作業実施を
+            確認する注意だけを出します。
           </p>
         </div>
 

@@ -2,7 +2,9 @@ import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
 import { assignments, clients, contractors, invoiceUploads } from '@/lib/schema'
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
-import type { InvoiceDeliverySheetLink } from '@/lib/ui-types'
+import { payoutMonthOf } from '@/lib/invoice-check'
+import { clientMatchNames } from '@/lib/invoice-match'
+import type { InvoiceDeliverySheetLink, InvoiceExpenseAssignment } from '@/lib/ui-types'
 
 // 受け付けた請求書の一覧。
 // PDF本体（file_data）は1件で数MBになりうるため列ごと除外し、必要なときだけ
@@ -43,10 +45,71 @@ export async function GET() {
         desc(invoiceUploads.created_at)
       )
 
-    return Response.json(await withDeliverySheets(rows))
+    return Response.json(await withExpenseTargets(await withDeliverySheets(rows)))
   } catch (err) {
     return serverError(err)
   }
+}
+
+// 経費のその場登録に必要な情報を各行に付ける。
+// - payout_year / payout_month: 経費を登録する月＝支払月（記載月の翌月。lib/invoice-check の payoutMonthOf と同じ定義）。
+//   画面側で月をずらす計算を再実装すると照合とズレるため、サーバーで確定させて渡す。
+// - expense_assignments: 登録先の候補。経費は assignment_id に紐づけるので、委託者のアクティブな
+//   アサインを候補として出す。明細ラベルからクライアントを推定できるよう照合用の呼び名も添える。
+// 納品シートと同じく、行ごとに引くと件数分のクエリになるためまとめて1回で引いて配る。
+async function withExpenseTargets<
+  T extends { contractor_id: string | null; resolved_year: number | null; resolved_month: number | null },
+>(
+  rows: T[]
+): Promise<(T & {
+  payout_year: number | null
+  payout_month: number | null
+  expense_assignments: InvoiceExpenseAssignment[]
+})[]> {
+  const contractorIds = [
+    ...new Set(rows.map((r) => r.contractor_id).filter((id): id is string => id !== null)),
+  ]
+
+  const assignmentRows = contractorIds.length === 0 ? [] : await db
+    .select({
+      id: assignments.id,
+      contractor_id: assignments.contractor_id,
+      clientName: clients.name,
+      aliases: clients.aliases,
+    })
+    .from(assignments)
+    .innerJoin(clients, eq(assignments.client_id, clients.id))
+    .where(and(inArray(assignments.contractor_id, contractorIds), eq(assignments.active, true)))
+
+  const byContractor = new Map<string, InvoiceExpenseAssignment[]>()
+  for (const a of assignmentRows) {
+    const entry: InvoiceExpenseAssignment = {
+      id: a.id,
+      clientName: a.clientName,
+      matchNames: clientMatchNames(a.clientName, a.aliases),
+    }
+    const list = byContractor.get(a.contractor_id)
+    if (list) list.push(entry)
+    else byContractor.set(a.contractor_id, [entry])
+  }
+  // DBの並びはロケール依存なので、五十音順はアプリ側で確定させる。
+  for (const list of byContractor.values()) {
+    list.sort((x, y) => x.clientName.localeCompare(y.clientName, 'ja'))
+  }
+
+  return rows.map((r) => {
+    // 対象月が決まっていない行（読み取り失敗・未照合）は支払月も出せない。
+    const payout =
+      r.resolved_year !== null && r.resolved_month !== null
+        ? payoutMonthOf(r.resolved_year, r.resolved_month)
+        : null
+    return {
+      ...r,
+      payout_year: payout?.year ?? null,
+      payout_month: payout?.month ?? null,
+      expense_assignments: (r.contractor_id && byContractor.get(r.contractor_id)) || [],
+    }
+  })
 }
 
 // 編集者の納品シートURLを各行に付ける。NGの多くは本数ズレで、確かめるにはシートを開く必要があるため。
