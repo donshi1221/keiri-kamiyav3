@@ -135,6 +135,13 @@ export const invoiceExtractedPatchSchema = z.object({
   extracted_month: nullableIntField(1, 12, '対象月は1〜12の範囲で入力してください'),
 })
 
+// 注意行の「確認済みにする / 取り消す」。key は画面が注意行の本文から復元したキー
+// （lib/invoice-match の cautionKeyOf）で、invoice_uploads.confirmed_cautions に貯める。
+export const cautionConfirmSchema = z.object({
+  key: z.string().trim().min(1, { message: '確認対象の注意を特定できません' }),
+  confirmed: z.boolean({ message: 'confirmed は true / false で指定してください' }),
+})
+
 export const snapshotBackfillSchema = z.object({
   year: z.coerce.number().int().min(2000).max(3000),
   month: z.coerce.number().int().min(1).max(12),

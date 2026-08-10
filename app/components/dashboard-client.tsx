@@ -273,6 +273,95 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
   )
 }
 
+// 委託者1件分の報酬額。代行者（editable）は月次の控え（payout_amount_snapshot）をその場で直せる。
+// マスタの契約額を変えても既に生成された月の控えは変わらないため、途中で契約額が変わった月は
+// この入力でしか直せない（マスタを直すと過去月まで遡って金額が変わってしまう）。
+// 空欄で保存すると控えが外れ、表示・請求書照合ともマスタの契約額を使う状態に戻る。
+// 見た目と操作は経費の追加フォーム（ExpenseBlock）に揃え、スマホでのタップ領域は44pxを確保する。
+function PayoutAmountCell({ amount, editable, edited, onSave }: {
+  amount: number | null
+  editable: boolean
+  // 控えがマスタの契約額と食い違っている＝この月だけ手で直した状態。人が見て区別できるよう印を出す。
+  edited: boolean
+  onSave: (value: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const text = amount ? `¥${amount.toLocaleString()}` : '—'
+
+  async function submit() {
+    setSaving(true)
+    await onSave(value.trim())
+    setSaving(false)
+    setEditing(false)
+  }
+
+  // 編集者の報酬は納品チェックの「反映」で入るため、ここでは直接編集させない（二重の入口を作らない）。
+  if (!editable) return <span className="text-gray-600">{text}</span>
+
+  if (editing) {
+    return (
+      <span className="flex flex-wrap items-center justify-end gap-1 text-xs">
+        <input
+          type="number"
+          inputMode="numeric"
+          min="0"
+          value={value}
+          autoFocus
+          disabled={saving}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          placeholder="空欄でマスタ額"
+          aria-label="この月の報酬額"
+          className="w-28 rounded border border-gray-200 px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={saving}
+          className="flex h-11 items-center rounded border border-info/40 px-2 font-medium text-info hover:bg-info-subtle disabled:opacity-40 md:h-6"
+        >
+          {saving ? '保存中…' : '保存'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          disabled={saving}
+          className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+        >
+          やめる
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center justify-end gap-1">
+      <button
+        type="button"
+        onClick={() => { setValue(amount === null ? '' : String(amount)); setEditing(true) }}
+        aria-label="この月の報酬額を編集"
+        className="flex h-11 items-center rounded px-1 text-gray-600 underline decoration-dotted underline-offset-4 hover:bg-gray-100 md:h-6"
+      >
+        {text}
+      </button>
+      {edited && (
+        <span
+          title="この月だけ金額を直した控えです（マスタの契約額とは異なります）"
+          className="rounded bg-gray-100 px-1 py-0.5 text-[10px] text-gray-500"
+        >
+          控え
+        </span>
+      )}
+    </span>
+  )
+}
+
 // 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
 // タップ領域はスマホで44px以上を確保し、PCの表では詰めて表示する。
 function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onConfirm, onCancel, badge }: {
@@ -484,6 +573,24 @@ export default function DashboardClient({
         prev.map((x) => x.id === recordId
           ? { ...x, actual_payout_amount: data.actual_payout_amount, delivered_video_count: data.delivered_video_count }
           : x)
+      )
+    } catch {
+      showError('金額の保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  // 代行者の月次金額（控え）を直接書き換える。空文字は控えを外す＝マスタの契約額へ戻す指示。
+  async function savePayoutSnapshot(recordId: string, value: string) {
+    try {
+      const res = await fetch(`/api/checklist/records/${recordId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field: 'payout_amount_snapshot', value }),
+      })
+      if (!res.ok) throw new Error('save failed')
+      const data = (await res.json()) as { payout_amount_snapshot: number | null }
+      setLocalRecords((prev) =>
+        prev.map((x) => x.id === recordId ? { ...x, payout_amount_snapshot: data.payout_amount_snapshot } : x)
       )
     } catch {
       showError('金額の保存に失敗しました。もう一度お試しください。')
@@ -1416,7 +1523,12 @@ export default function DashboardClient({
                             )}
                           </td>
                           <td className="py-3 px-3 text-right">
-                            <span className="text-gray-600">{payout ? `¥${payout.toLocaleString()}` : '—'}</span>
+                            <PayoutAmountCell
+                              amount={payout}
+                              editable={!isVideoEditor && !!asgn}
+                              edited={r.payout_amount_snapshot !== null && r.payout_amount_snapshot !== asgn?.contractor_payout_amount}
+                              onSave={(value) => savePayoutSnapshot(r.id, value)}
+                            />
                             {expenseTotalOf(asgn?.id) > 0 && (
                               <div className="text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</div>
                             )}
@@ -1553,7 +1665,12 @@ export default function DashboardClient({
                                 )}
                               </div>
                               <span className="shrink-0 text-right text-sm text-gray-600">
-                                {payout ? `¥${payout.toLocaleString()}` : '—'}
+                                <PayoutAmountCell
+                                  amount={payout}
+                                  editable={!isVideoEditor && !!asgn}
+                                  edited={r.payout_amount_snapshot !== null && r.payout_amount_snapshot !== asgn?.contractor_payout_amount}
+                                  onSave={(value) => savePayoutSnapshot(r.id, value)}
+                                />
                                 {expenseTotalOf(asgn?.id) > 0 && (
                                   <span className="block text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</span>
                                 )}

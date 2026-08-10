@@ -31,6 +31,7 @@ export async function GET() {
         resolved_month: invoiceUploads.resolved_month,
         expected_amount: invoiceUploads.expected_amount,
         check_notes: invoiceUploads.check_notes,
+        confirmed_cautions: invoiceUploads.confirmed_cautions,
         checked_at: invoiceUploads.checked_at,
         drive_file_id: invoiceUploads.drive_file_id,
         drive_link: invoiceUploads.drive_link,

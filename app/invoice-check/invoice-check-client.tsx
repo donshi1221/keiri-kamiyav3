@@ -18,7 +18,14 @@ import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
 import { parseInvoiceNotes } from '@/lib/invoice-notes'
-import { extractItemDate, matchedNameLength, normalizeName, toExpenseDate } from '@/lib/invoice-match'
+import {
+  CAUTION_LABEL_SEPARATOR,
+  cautionKeyFromNoteText,
+  extractItemDate,
+  matchedNameLength,
+  normalizeName,
+  toExpenseDate,
+} from '@/lib/invoice-match'
 import type {
   InvoiceCheckRow,
   InvoiceDeliverySheetLink,
@@ -68,16 +75,128 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ok: 'text-gray-500',
 }
 
-function NoteLine({ line }: { line: InvoiceNoteLine }) {
+// 注意（[注意]）は「自動では判断できないので人が見てください」という案内。人が見終わったら
+// 消し込めるようにする。確認済みの印はサーバー側（invoice_uploads.confirmed_cautions）に貯め、
+// 注意1件を指すキーは注意行の本文から復元する（lib/invoice-match の cautionKeyFromNoteText）。
+// 判定理由に「|key=…」のような機械用の文字列を埋め込む方式は、そのまま人の目に触れるうえ
+// 文言を1文字変えるとキーが壊れるため採らない。本文の先頭が必ず明細ラベルの原文になっている
+// という約束だけを守れば、サーバーと画面が同じキーを作れる。
+function NoteLine({ line, onConfirmCaution, busy }: {
+  line: InvoiceNoteLine
+  onConfirmCaution: (key: string, confirmed: boolean) => void
+  busy: boolean
+}) {
+  // キーを復元できない行（この仕組みより前に保存された注意など）は操作の対象外。
+  const key = cautionKeyFromNoteText(line.text)
+  // 確認済みにした注意は [OK] の「…確認済み」行として残る（消してしまうと、確認した結果なのか
+  // 注意自体が出なくなったのかが区別できない）。誤操作の戻し用に取り消しも出す。
+  const confirmed = line.mark === 'ok' && line.text.includes('確認済み')
+  const action: { kind: 'confirm' | 'revert'; key: string } | null =
+    key === null
+      ? null
+      : line.mark === 'caution'
+        ? { kind: 'confirm', key }
+        : confirmed
+          ? { kind: 'revert', key }
+          : null
+
   // 印が読めない行は印を付ける前に保存された過去データ。内容が判断できないので中立表示にする。
   return (
-    <p className={cn('text-xs leading-relaxed', line.mark ? NOTE_CLASS[line.mark] : 'text-gray-600')}>{line.text}</p>
+    <div className={cn('flex items-start justify-between gap-2', line.mark === 'caution' && 'rounded bg-warning-subtle pr-1')}>
+      <p
+        className={cn(
+          'text-xs leading-relaxed',
+          line.mark ? NOTE_CLASS[line.mark] : 'text-gray-600',
+          // 背景は外側の箱に移したので、注意行の内側では重ねない。
+          line.mark === 'caution' && 'bg-transparent'
+        )}
+      >
+        {line.text}
+      </p>
+      {action?.kind === 'confirm' && (
+        <button
+          type="button"
+          onClick={() => onConfirmCaution(action.key, true)}
+          disabled={busy}
+          // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+          className="flex min-h-11 shrink-0 items-center rounded border border-warning/40 px-2 text-xs font-medium whitespace-nowrap text-warning hover:bg-warning-subtle disabled:opacity-40 md:min-h-7"
+        >
+          確認済みにする
+        </button>
+      )}
+      {action?.kind === 'revert' && (
+        <button
+          type="button"
+          onClick={() => onConfirmCaution(action.key, false)}
+          disabled={busy}
+          className="flex min-h-11 shrink-0 items-center px-1 text-xs whitespace-nowrap text-gray-400 hover:underline disabled:opacity-40 md:min-h-0"
+        >
+          取り消す
+        </button>
+      )}
+    </div>
+  )
+}
+
+// 注意1件をコンパクト表示に要約する。本文が「<明細ラベル原文> — <説明>」の形（cautionKeyFromNoteText
+// が読める形）でない古い形式は null を返し、呼び出し側で従来どおりの単独箱にフォールバックさせる。
+// 表示名はラベル原文の「様」までに切り詰め、種別（記載日／支払回数）と N/M は既存のキー抽出
+// （lib/invoice-match の cautionKeyOf 由来）を再利用して取り出す。新しく正規表現を作り直さない。
+function summarizeCaution(text: string): { key: string; display: string } | null {
+  const key = cautionKeyFromNoteText(text)
+  if (key === null) return null
+  const sepIndex = text.lastIndexOf(CAUTION_LABEL_SEPARATOR)
+  const label = text.slice(0, sepIndex)
+  const body = text.slice(sepIndex + CAUTION_LABEL_SEPARATOR.length)
+  const nameEnd = label.indexOf('様')
+  const displayName = nameEnd >= 0 ? label.slice(0, nameEnd + 1) : label
+  const typeLabel = body.includes('記載日') ? '記載日' : body.includes('支払回数') ? '支払回数' : null
+  // cautionKeyOf は "<正規化ラベル>|<N/M>" の形を作るので、キーの後半をそのままN/Mとして使い回す。
+  const nm = key.split('|')[1] || null
+  const display = typeLabel && nm ? `${displayName}（${typeLabel} ${nm}）` : displayName
+  return { key, display }
+}
+
+// 注意（[注意]）が複数件あると縦に長文の箱が並んで冗長になるため、1つの警告枠にまとめて
+// 1件1行のコンパクト表示にする。キーが読めない古い形式の行だけは従来どおり個別の箱に残す
+// （このコンポーネントの外＝CheckNotes 側で振り分ける）。
+function CautionGroup({ items, onConfirmCaution, busy }: {
+  items: { line: InvoiceNoteLine; key: string; display: string }[]
+  onConfirmCaution: (key: string, confirmed: boolean) => void
+  busy: boolean
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="rounded bg-warning-subtle px-2 py-1.5">
+      <p className="mb-1 text-[10px] font-semibold tracking-wide text-warning">要確認</p>
+      <div className="space-y-1">
+        {items.map(({ line, key, display }, i) => (
+          <div key={i} title={line.text} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <span className="min-w-0 flex-1 text-xs break-words text-warning">{display}</span>
+            <button
+              type="button"
+              onClick={() => onConfirmCaution(key, true)}
+              disabled={busy}
+              // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+              className="flex min-h-11 shrink-0 items-center rounded border border-warning/40 px-2 text-xs font-medium whitespace-nowrap text-warning hover:bg-warning-subtle disabled:opacity-40 md:min-h-7"
+            >
+              確認済み
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
 // 判定理由は観点ごとに1行。全行を並べるとOK行がノイズになりNGが埋もれるため、
 // 既定ではNG・保留（と受領・修正の記録、印なしの過去データ）だけを出し、OK行は開いたときだけ見せる。
-function CheckNotes({ notes }: { notes: string | null }) {
+// 注意（caution）行だけは複数件並ぶと冗長なので、他の行とは別にまとめて1つの枠に集約する。
+function CheckNotes({ notes, onConfirmCaution, busy }: {
+  notes: string | null
+  onConfirmCaution: (key: string, confirmed: boolean) => void
+  busy: boolean
+}) {
   const [open, setOpen] = useState(false)
   const lines = useMemo(() => parseInvoiceNotes(notes), [notes])
   if (lines.length === 0) return null
@@ -85,10 +204,25 @@ function CheckNotes({ notes }: { notes: string | null }) {
   const primary = lines.filter((line) => line.mark !== 'ok')
   const details = lines.filter((line) => line.mark === 'ok')
 
+  const otherPrimary = primary.filter((line) => line.mark !== 'caution')
+  const cautionLines = primary.filter((line) => line.mark === 'caution')
+  // キーが読める行だけを集約枠へ。読めない古い形式はNoteLineでの従来表示（単独箱・ボタンなし）に残す。
+  const keyedCautions: { line: InvoiceNoteLine; key: string; display: string }[] = []
+  const legacyCautions: InvoiceNoteLine[] = []
+  for (const line of cautionLines) {
+    const summary = summarizeCaution(line.text)
+    if (summary) keyedCautions.push({ line, ...summary })
+    else legacyCautions.push(line)
+  }
+
   return (
     <div className="space-y-1">
-      {primary.map((line, i) => (
-        <NoteLine key={i} line={line} />
+      {otherPrimary.map((line, i) => (
+        <NoteLine key={`other-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} />
+      ))}
+      <CautionGroup items={keyedCautions} onConfirmCaution={onConfirmCaution} busy={busy} />
+      {legacyCautions.map((line, i) => (
+        <NoteLine key={`legacy-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} />
       ))}
       {details.length > 0 && (
         <>
@@ -105,7 +239,7 @@ function CheckNotes({ notes }: { notes: string | null }) {
           {open && (
             <div className="space-y-1 pl-4">
               {details.map((line, i) => (
-                <NoteLine key={i} line={line} />
+                <NoteLine key={i} line={line} onConfirmCaution={onConfirmCaution} busy={busy} />
               ))}
             </div>
           )}
@@ -187,6 +321,11 @@ function UsageNotes() {
             「7/28」を台本作成日として書くクライアントは、マスタ管理のクライアント編集で
             「明細の数字（N/M）を日付として扱う」にチェックを入れてください。回数としての照合を行わず、
             記載日の作業実施を確認する注意だけを出します。
+          </li>
+          <li>
+            「◯◯の作業実施をご確認ください」のような注意は、内容を確かめたら「確認済みにする」で消し込めます。
+            確認済みにした注意は「詳細を見る」の中に残り、押し間違えたときは「取り消す」で戻せます。
+            再チェックや再読み取りを行っても確認済みの状態は保持されます。
           </li>
           <li>
             明細が通称や略称（「めぐ姉様」など）で書かれていて特定できないときは、マスタ管理のクライアント編集で
@@ -606,6 +745,7 @@ export default function InvoiceCheckClient() {
   const [deleteTarget, setDeleteTarget] = useState<InvoiceCheckRow | null>(null)
   const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
   const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
+  const [cautionBusyId, setCautionBusyId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -656,6 +796,32 @@ export default function InvoiceCheckClient() {
       setError('通信に失敗しました。接続を確認して再度お試しください。')
     } finally {
       setRecheckingId(null)
+    }
+  }
+
+  // 注意の消し込み（confirmed=false で取り消し）。サーバー側で確認済みキーを保存したあと
+  // 照合をやり直すため、戻ってきたら一覧を取り直して判定理由を差し替える。
+  async function confirmCaution(id: string, key: string, confirmed: boolean) {
+    setCautionBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoice-check/${id}/confirm-caution`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, confirmed }),
+      })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '注意の確認状態を更新できませんでした。'))
+        return
+      }
+      // 読み取り失敗行では照合そのものが行われない。理由が返ってきたら画面に出す。
+      const data = (await res.json().catch(() => null)) as { skipped?: string } | null
+      if (typeof data?.skipped === 'string') setError(data.skipped)
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setCautionBusyId(null)
     }
   }
 
@@ -777,7 +943,13 @@ export default function InvoiceCheckClient() {
                     </td>
                     <td className="px-3 py-3">
                       <StatusBadge status={r.status} />
-                      <div className="mt-1"><CheckNotes notes={r.check_notes} /></div>
+                      <div className="mt-1">
+                        <CheckNotes
+                          notes={r.check_notes}
+                          onConfirmCaution={(key, confirmed) => confirmCaution(r.id, key, confirmed)}
+                          busy={cautionBusyId === r.id || busy(r.id)}
+                        />
+                      </div>
                       {r.delivery_sheets.length > 0 && (
                         <div className="mt-1"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
                       )}
@@ -888,7 +1060,15 @@ export default function InvoiceCheckClient() {
                   </div>
                 </div>
 
-                {r.check_notes && <div className="mt-2"><CheckNotes notes={r.check_notes} /></div>}
+                {r.check_notes && (
+                  <div className="mt-2">
+                    <CheckNotes
+                      notes={r.check_notes}
+                      onConfirmCaution={(key, confirmed) => confirmCaution(r.id, key, confirmed)}
+                      busy={cautionBusyId === r.id || busy(r.id)}
+                    />
+                  </div>
+                )}
                 {r.extract_error && <div className="mt-2 text-xs text-danger">{r.extract_error}</div>}
                 {r.delivery_sheets.length > 0 && (
                   <div className="mt-2"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>

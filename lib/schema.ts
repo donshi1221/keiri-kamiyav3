@@ -260,6 +260,10 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   expected_amount: integer('expected_amount'),
   // 判定理由（人間向け・改行区切りで全観点分）。OK/NGの結論だけでは根拠が追えないため必ず残す。
   check_notes: text('check_notes'),
+  // 人が目視で確認を済ませた「注意」行のキー一覧（lib/invoice-match の cautionKeyOf が作る文字列）。
+  // check_notes は再チェックのたびに丸ごと作り直されるため、確認済みの事実を注意行そのものには残せない。
+  // 別列に持たせることで、マスタ修正・再読み取りを挟んでも「人が見た」ことが消えないようにする。
+  confirmed_cautions: jsonb('confirmed_cautions').$type<string[]>(),
   checked_at: timestamp('checked_at', { withTimezone: true, mode: 'string' }),
   // 照合OK後にGoogleドライブへ保存した控え。drive_file_id が入っていること自体が
   // 「保存済み」の印になり、再チェック時に二重アップロードするか再試行するかの判断に使う。

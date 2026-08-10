@@ -8,7 +8,14 @@ import { COMPANY_NAME } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
 import { uploadPdfToDrive } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
-import { clientMatchNames, extractItemDate, matchedNameLength, normalizeName } from '@/lib/invoice-match'
+import {
+  CAUTION_LABEL_SEPARATOR,
+  cautionKeyOf,
+  clientMatchNames,
+  extractItemDate,
+  matchedNameLength,
+  normalizeName,
+} from '@/lib/invoice-match'
 import type {
   DeliveryCheckRow,
   DriveUploadOutcome,
@@ -281,25 +288,37 @@ function extractPaymentCount(label: string): { index: number; total: number } | 
 // 一致していれば「確認できた」ことを OK として残し、合わないときだけ注意を促す。
 type PaymentCountNote = { mark: 'ok' | 'caution'; note: string }
 
+// 注意行の本文。先頭は必ず明細ラベルの原文にする。画面はここからラベルを取り出して
+// 確認済みキー（lib/invoice-match の cautionKeyOf）を復元するため、この形を崩さない。
+function cautionNote(label: string, body: string): string {
+  return `${label}${CAUTION_LABEL_SEPARATOR}${body}`
+}
+
 // 明細の支払回数がマスタの支払期間と整合するかを見る。
 // 請求書の支払月 P が「全M回中N回目」なら、契約は P-(N-1) 月に始まり P+(M-N) 月で終わる。
 // マスタ側の終了月（開始月+回数-1）と突き合わせ、終わりが揃っていれば回数の記載は正しい。
 // 突き合わせる相手が無い場合（クライアント未特定・支払期間が「継続」）は、判断できないことを
 // そのまま伝えて人に回す（勝手に整合とみなすと、回数のズレを黙って通してしまう）。
+// confirmed は人が目視で確認済みにした注意のキー一覧。該当する注意は消さずにOKへ落とす
+// （消してしまうと「確認した結果その注意は問題なかった」のか「注意自体が出なくなった」のかが
+// 区別できなくなる）。
 function checkPaymentCount(
   label: string,
   target: InvoicePayoutBreakdownRow | null,
-  payout: YearMonth
+  payout: YearMonth,
+  confirmed: Set<string>
 ): PaymentCountNote | null {
+  const isConfirmed = confirmed.has(cautionKeyOf(label))
   // 「N/M」を台本作成日として書くクライアント（clients.nm_as_date）では、回数として突き合わせると
   // 必ず不整合になる。回数チェックは行わず、記載日の作業実施を人に確かめてもらう案内に切り替える。
   // 日付として読めない並び（「19/24」など）は案内の材料が無いため何も出さない。
   if (target?.nmAsDate) {
     const date = extractItemDate(label)
     if (!date) return null
+    if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '作業実施を確認済み') }
     return {
       mark: 'caution',
-      note: `${label} — 記載日（${date.month}/${date.day}）の作業実施をご確認ください`,
+      note: cautionNote(label, `記載日（${date.month}/${date.day}）の作業実施をご確認ください`),
     }
   }
   const ref = extractPaymentCount(label)
@@ -308,16 +327,22 @@ function checkPaymentCount(
   const start = target?.paymentStartMonth ? parseYearMonth(target.paymentStartMonth) : null
   const count = target?.paymentCount ?? null
   if (!target || !start || count === null || count < 1) {
-    return { mark: 'caution', note: `${shown}の記載があります。回数が合っているかご確認ください` }
+    if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '回数を確認済み') }
+    // どの明細についての注意かが分からないと確認しようがないため、本文にラベル原文を必ず含める。
+    return { mark: 'caution', note: cautionNote(label, '支払回数の記載があります。回数が合っているかご確認ください') }
   }
   const billedEnd = addMonths(payout, ref.total - ref.index)
   const masterEnd = addMonths(start, count - 1)
   if (billedEnd.year === masterEnd.year && billedEnd.month === masterEnd.month) {
     return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
   }
+  if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '回数を確認済み') }
   return {
     mark: 'caution',
-    note: `${target.clientName}　${shown}が支払予定と整合しません（記載どおりなら${formatYearMonth(billedEnd)}終了・マスタは${formatYearMonth(masterEnd)}終了）。ご確認ください`,
+    note: cautionNote(
+      label,
+      `${target.clientName}の${shown}が支払予定と整合しません（記載どおりなら${formatYearMonth(billedEnd)}終了・マスタは${formatYearMonth(masterEnd)}終了）。ご確認ください`
+    ),
   }
 }
 
@@ -365,12 +390,13 @@ function compareInvoiceItems(
   breakdown: InvoicePayoutBreakdownRow[],
   expenseTotal: number,
   invoiceAmount: number | null,
-  payout: YearMonth
+  payout: YearMonth,
+  confirmedCautions: Set<string>
 ): { results: { verdict: Verdict; note: string }[]; countNotes: PaymentCountNote[] } {
   const results: { verdict: Verdict; note: string }[] = []
   const countNotes: PaymentCountNote[] = []
   const addCountNote = (label: string, target: InvoicePayoutBreakdownRow | null) => {
-    const note = checkPaymentCount(label, target, payout)
+    const note = checkPaymentCount(label, target, payout, confirmedCautions)
     if (note) countNotes.push(note)
   }
   // kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
@@ -576,6 +602,7 @@ export async function checkInvoiceAndSave(
       extracted_items: invoiceUploads.extracted_items,
       extract_error: invoiceUploads.extract_error,
       check_notes: invoiceUploads.check_notes,
+      confirmed_cautions: invoiceUploads.confirmed_cautions,
       drive_file_id: invoiceUploads.drive_file_id,
       drive_link: invoiceUploads.drive_link,
     })
@@ -588,6 +615,9 @@ export async function checkInvoiceAndSave(
   if (row.extract_error) {
     return { skipped: 'AIの読み取りに失敗しているため照合できません。先に再読み取りを行ってください。' }
   }
+
+  // 人が確認済みにした注意のキー。Set にしてから注意の生成へ渡す（明細1行ごとに毎回照合するため）。
+  const confirmedCautions = new Set(row.confirmed_cautions ?? [])
 
   const notes: string[] = []
   let hasNg = false
@@ -677,7 +707,8 @@ export async function checkInvoiceAndSave(
           expected.breakdown,
           expected.expenseTotal,
           row.extracted_amount,
-          payout
+          payout,
+          confirmedCautions
         )
         for (const item of compared.results) {
           record(item.verdict, item.note)
