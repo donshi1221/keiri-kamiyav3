@@ -197,6 +197,47 @@ export interface InvoiceAlertCounts {
 // 「照合したが保留」と区別できるよう、実行しなかったことを理由付きで返す。
 export type InvoiceCheckOutcome = InvoiceCheckResult | { skipped: string }
 
+// ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
+// disabled は「CHATWORK_API_TOKEN 未設定＝この機能を使わない運用」。失敗(error)と区別できないと、
+// 使っていない人にまで送信失敗が出てしまうため別の値として返す（Googleドライブ保存と同じ流儀）。
+// messageId は送信できたことの控え。Chatworkが返さなかった場合でも成功は成功なので null を許す。
+export type ChatworkSendOutcome =
+  | { messageId: string | null }
+  | { error: string }
+  | { disabled: true }
+
+// リマインドの送信先候補1人分。hasRoomId が false の人は送りようがないため、
+// 画面では選択不可にしたうえで「ルームID未登録」と出し、マスタ登録へ誘導する。
+export interface InvoiceReminderTarget {
+  contractorId: string
+  name: string
+  hasRoomId: boolean
+}
+
+// GET /api/invoice-reminder の応答。
+// invoiceMonth は「何月分の請求書を催促するか」＝表示中の支払月の前月（全委託者「◯月分＝前月業務分」ルール）。
+// 画面が月をずらす計算をやり直さずに済むよう、サーバーで確定させて渡す。
+export interface InvoiceReminderPlan {
+  year: number
+  month: number
+  invoiceYear: number
+  invoiceMonth: number
+  targets: InvoiceReminderTarget[]
+  // 画面で編集できる文面のたたき台。{name} {month} {url} は送信時にサーバーが置き換える。
+  template: string
+}
+
+// 送信結果1人分。sent 以外は理由を出す必要があるので、区分と文言を分けて持つ。
+// no_room はマスタ未登録（人が直せる）、error は送信そのものの失敗。
+export type InvoiceReminderSendStatus = 'sent' | 'no_room' | 'error'
+
+export interface InvoiceReminderSendResult {
+  contractorId: string
+  name: string
+  status: InvoiceReminderSendStatus
+  message: string | null
+}
+
 // ─── Googleドライブ保存（lib/google-drive）─────────────────────────────
 // disabled は「環境変数が未設定＝この機能を使わない運用」。失敗(error)と区別できないと、
 // 機能を使っていない人にまで保存失敗の記録が出てしまうため、別の値として返す。

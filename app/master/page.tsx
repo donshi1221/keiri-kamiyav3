@@ -866,6 +866,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
 }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  const [chatworkRoomId, setChatworkRoomId] = useState('')
   const [contractorType, setContractorType] = useState<'daiko' | 'video_editor'>('daiko')
   const [unitPrice, setUnitPrice] = useState('')
   const [saving, setSaving] = useState(false)
@@ -874,6 +875,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
     if (open) {
       setName(initial?.name ?? '')
       setEmail(initial?.email ?? '')
+      setChatworkRoomId(initial?.chatwork_room_id ?? '')
       setContractorType(initial?.contractor_type ?? 'daiko')
       setUnitPrice(initial?.unit_price ? initial.unit_price.toString() : '')
     }
@@ -887,6 +889,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
     const payload = {
       name,
       email: email || null,
+      chatwork_room_id: chatworkRoomId || null,
       contractor_type: contractorType,
       ...(contractorType === 'video_editor' ? { unit_price: unitPrice ? Number(unitPrice) : 0 } : {}),
     }
@@ -939,6 +942,19 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">メール</label>
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">ChatworkルームID</label>
+          <input
+            inputMode="numeric"
+            value={chatworkRoomId}
+            onChange={(e) => setChatworkRoomId(e.target.value)}
+            placeholder="例: 123456789"
+            className="w-full border rounded px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-gray-600">
+            その人とのチャットを開いたURLの #!rid の後ろの数字。請求書の未提出リマインドの送信先になります（未登録の人には送れません）。
+          </p>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>

@@ -127,6 +127,13 @@
       "when": 1786336133206,
       "tag": "0017_peaceful_prima",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786343404240,
+      "tag": "0018_clumsy_smiling_tiger",
+      "breakpoints": true
     }
   ]
 }

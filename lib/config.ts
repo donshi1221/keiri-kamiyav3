@@ -32,6 +32,20 @@ export const MF_EXPENSE_ACCOUNTS = (process.env.MF_EXPENSE_ACCOUNTS ?? '')
   .map((s) => s.trim())
   .filter(Boolean)
 
+// ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
+// 送信前に画面で編集できる「たたき台」。プレースホルダは送信時にサーバーで置き換える:
+//   {name}  委託者名 / {month} 請求書の対象月（＝支払月の前月） / {url} 請求書受付URL
+// 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
+export const INVOICE_REMINDER_TEMPLATE =
+  process.env.INVOICE_REMINDER_TEMPLATE?.replace(/\\n/g, '\n') ??
+  [
+    'お世話になっております！',
+    '{month}月分の請求書が確認できておりません。',
+    '',
+    'お手数ですが、以下のURLよりご提出をお願いいたします。',
+    '{url}',
+  ].join('\n')
+
 // ─── 納品チェック（編集者スプレッドシート）─────────────────────────────
 // 編集者の納品スプレッドシートは全員同じ列構成（A:納品〆切 / B:本数 / C:動画のNo / D:納品URL）。
 // 列は0始まりのインデックスで持ち、将来レイアウトが変わっても env で追従できるようにする。

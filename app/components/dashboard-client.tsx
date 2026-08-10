@@ -14,6 +14,7 @@ import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryChe
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
+import InvoiceReminderDialog from './invoice-reminder-dialog'
 
 // Checkbox は見た目 16px のままだとスマホで押しづらいため、当たり判定用の after 疑似要素だけを
 // 44×44px に広げる（16 + 14×2）。md 以上は shadcn 既定のコンパクトな判定に戻す。
@@ -479,6 +480,7 @@ export default function DashboardClient({
   const [snapshotBusy, setSnapshotBusy] = useState(false)
   const [deliveryRows, setDeliveryRows] = useState<DeliveryCheckRow[] | null>(null)
   const [deliveryLoading, setDeliveryLoading] = useState(false)
+  const [reminderOpen, setReminderOpen] = useState(false)
   // 「この月の未完了」から飛んだ行を一時的に目立たせるためのキー（data-pending-row の値）。
   // 「今日やること」の名前チップは同一人物の複数行をまとめて指すため、複数キーを保持する。
   const [highlightKeys, setHighlightKeys] = useState<string[]>([])
@@ -1147,6 +1149,15 @@ export default function DashboardClient({
     return g && g.items.length > 1 ? `cgroup-${g.contractorId}` : `rec-${r.id}`
   }
 
+  // 請求書が未受領の委託者の人数（Chatworkリマインドの対象になりうる人数）。
+  // ローカル状態から数えることで、受領チェックを付けた瞬間にボタンが消える。
+  // 対象はAPI側でも数え直すため、ここでの用途はボタンを出すかどうかの判断だけ。
+  const unreceivedContractorCount = new Set(
+    localRecords
+      .filter((r) => !r.invoice_received_at && r.assignments?.active)
+      .map((r) => r.assignments!.contractor_id)
+  ).size
+
   // 単発タスクの期日判定（日付のみで比較）。'YYYY-MM-DD' 文字列は辞書順＝日付順なので直接比較できる。
   const pad2 = (n: number) => String(n).padStart(2, '0')
   const todayYmd = `${todayDate.getFullYear()}-${pad2(todayDate.getMonth() + 1)}-${pad2(todayDate.getDate())}`
@@ -1373,7 +1384,33 @@ export default function DashboardClient({
       )}
 
       {/* 今日やること */}
-      {isCurrentMonth && <TodayTasks overdueItems={overdueItems} inWindowItems={inWindowItems} onJump={focusPendingRow} />}
+      {isCurrentMonth && (
+        <TodayTasks
+          overdueItems={overdueItems}
+          inWindowItems={inWindowItems}
+          onJump={focusPendingRow}
+          action={
+            unreceivedContractorCount > 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-11 md:h-7"
+                onClick={() => setReminderOpen(true)}
+              >
+                未提出リマインド（{unreceivedContractorCount}名）
+              </Button>
+            ) : null
+          }
+        />
+      )}
+
+      {/* 請求書の未提出リマインド。押したときだけ送る（自動送信・定期送信は行わない）。 */}
+      <InvoiceReminderDialog
+        open={reminderOpen}
+        year={year}
+        month={month}
+        onClose={() => setReminderOpen(false)}
+      />
 
       {/* 要対応の請求書。受け付けた請求書は月に紐づかないため、表示中の月に関係なく出す。 */}
       {invoiceAlert && (

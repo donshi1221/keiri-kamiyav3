@@ -10,6 +10,10 @@ interface Props {
   // 1チップが複数レコードを表すことがあるため、飛び先は配列で渡す
   // （先頭へスクロールし、まとめた全行をハイライトする）。
   onJump?: (targets: string[]) => void
+  // 見出し行の右に出す操作（請求書の未提出リマインド）。
+  // 請求書受領グループ自体は期日を過ぎるまで現れないため、常に見える見出し行に置く
+  // （催促は期日前でも打ちたいことがあり、グループの中に隠すと押せない日がある）。
+  action?: React.ReactNode
 }
 
 // グループの表示順と見出し名。unit は「何が何件あるか」を見出しに出すための単位で、
@@ -161,19 +165,29 @@ function TaskSection({ heading, items, tone, onJump }: {
   )
 }
 
-export default function TodayTasks({ overdueItems, inWindowItems, onJump }: Props) {
+// 見出しと操作ボタンの行。スマホでは折り返して縦に積む。
+function Heading({ action }: { action?: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-sm font-semibold text-gray-900">今日やること</h2>
+      {action}
+    </div>
+  )
+}
+
+export default function TodayTasks({ overdueItems, inWindowItems, onJump, action }: Props) {
   if (overdueItems.length === 0 && inWindowItems.length === 0) {
     return (
       <section className="rounded-lg border bg-white p-4">
-        <h2 className="text-sm font-semibold text-gray-900 mb-1">今日やること</h2>
-        <p className="text-sm text-gray-600">未対応のタスクはありません。</p>
+        <Heading action={action} />
+        <p className="mt-1 text-sm text-gray-600">未対応のタスクはありません。</p>
       </section>
     )
   }
 
   return (
     <section className="rounded-lg border bg-white p-4 space-y-3">
-      <h2 className="text-sm font-semibold text-gray-900">今日やること</h2>
+      <Heading action={action} />
       {overdueItems.length > 0 && (
         <TaskSection heading="期限超過" items={overdueItems} tone="danger" onJump={onJump} />
       )}

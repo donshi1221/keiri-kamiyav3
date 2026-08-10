@@ -64,11 +64,28 @@ export const billingItemCreateSchema = z.object({
 })
 export const billingItemPatchSchema = billingItemCreateSchema.partial().omit({ client_id: true })
 
+// ChatworkルームID。受付URL（#!rid12345678）から数字だけを写してもらう欄なので、
+// 「rid」付きや空白混じりの貼り付けをここで数字だけに寄せる（画面の入力を弾かずに済む）。
+// 空欄は「未登録」＝null。数字以外が残る入力は、送信時に必ず失敗するので保存前に弾く。
+const optionalChatworkRoomId = z.preprocess(
+  (v) => {
+    if (typeof v !== 'string') return v === undefined ? null : v
+    // メッセージリンク付きURL（#!rid123-456 の形式）を貼られてもルームIDだけを取り出す。
+    // ハイフン以降はメッセージIDで、混ざったまま保存すると送信が必ず失敗するため。
+    const trimmed = v.trim()
+    if (trimmed === '') return null
+    const m = trimmed.match(/#!rid(\d+)/) ?? trimmed.match(/^(\d+)/)
+    return m ? m[1] : trimmed
+  },
+  z.string().regex(/^\d+$/, { message: 'ChatworkルームIDは数字で入力してください' }).nullable()
+)
+
 export const contractorCreateSchema = z.object({
   name: z.string().trim().min(1, { message: '委託者名は必須です' }),
   contractor_type: z.enum(['daiko', 'video_editor']).optional(),
   unit_price: moneyInt.optional(),
   email: optionalEmail.optional(),
+  chatwork_room_id: optionalChatworkRoomId.optional(),
   notes: z.string().nullish(),
 })
 export const contractorPatchSchema = contractorCreateSchema.partial()
@@ -140,6 +157,16 @@ export const invoiceExtractedPatchSchema = z.object({
 export const cautionConfirmSchema = z.object({
   key: z.string().trim().min(1, { message: '確認対象の注意を特定できません' }),
   confirmed: z.boolean({ message: 'confirmed は true / false で指定してください' }),
+})
+
+// ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
+// template は画面で編集された文面。プレースホルダの置換はサーバー側で行うため、ここでは中身を検証しない。
+// 誤って全員に空文にすることを防ぐため、空文字だけは弾く。
+export const invoiceReminderSendSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+  contractorIds: z.array(z.uuid({ message: '委託者の指定が不正です' })).min(1, { message: '送信先を1人以上選んでください' }),
+  template: z.string().trim().min(1, { message: '文面を入力してください' }),
 })
 
 export const snapshotBackfillSchema = z.object({

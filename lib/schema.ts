@@ -20,6 +20,10 @@ export const contractors = pgTable('contractors', {
   // フル納品時の支払額は保存せず「unit_price × clients.monthly_video_count」で表示時に計算する。
   unit_price: integer('unit_price').notNull().default(0),
   email: text('email'),
+  // Chatworkの個別チャットのルームID（数字の文字列）。請求書未提出リマインドの送信先。
+  // 数値ではなく text にしているのは、IDがAPIのURLにそのまま載る識別子で計算に使わないため
+  // （桁あふれや先頭0の欠落といった数値化に伴う事故を避ける）。未登録の人には送らない。
+  chatwork_room_id: text('chatwork_room_id'),
   notes: text('notes'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
