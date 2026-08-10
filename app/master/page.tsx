@@ -977,6 +977,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   initial: ClientWithItems | null
 }) {
   const [name, setName] = useState('')
+  const [aliases, setAliases] = useState('')
   const [monthlyVideoCount, setMonthlyVideoCount] = useState('')
   const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
   const [removedIds, setRemovedIds] = useState<string[]>([])
@@ -987,6 +988,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? '')
+      setAliases(initial?.aliases ?? '')
       setMonthlyVideoCount(initial?.monthly_video_count ? initial.monthly_video_count.toString() : '')
       setRemovedIds([])
       setCreatedClientId(null)
@@ -1037,11 +1039,15 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     try {
       // 1) クライアント本体（名前・月本数）を作成/更新して client_id を確定させる。
       const countNum = monthlyVideoCount ? Number(monthlyVideoCount) : 0
+      // 空欄は「別名なし」なので null に寄せる（空文字のまま保存すると、
+      // 未入力と「空の別名を登録した」が見分けられなくなる）。
+      const aliasesValue = aliases.trim() || null
       let clientId = initial?.id ?? createdClientId ?? undefined
       if (initial) {
         // 変更のあった項目だけ送る（未送信の項目はサーバ側で触らない仕様）。
         const patch: Record<string, unknown> = {}
         if (name !== initial.name) patch.name = name
+        if (aliasesValue !== (initial.aliases ?? null)) patch.aliases = aliasesValue
         if (countNum !== initial.monthly_video_count) patch.monthly_video_count = countNum
         if (Object.keys(patch).length > 0) {
           const res = await fetch(`/api/master/clients/${initial.id}`, {
@@ -1056,14 +1062,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         const res = await fetch(`/api/master/clients/${clientId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, monthly_video_count: countNum }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
       } else {
         const res = await fetch('/api/master/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, monthly_video_count: countNum }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         clientId = (await res.json()).id
@@ -1121,6 +1127,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">名前 <span className="text-danger">*</span></label>
           <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium block mb-1">別名（カンマ区切り）</label>
+          <input value={aliases} onChange={(e) => setAliases(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="めぐ姉, Reseed" />
+          <p className="mt-1 text-xs text-gray-600">
+            請求書の明細に書かれる通称・略称・字違いを登録すると、請求書チェックの照合で正式名と同じものとして扱います。
+          </p>
         </div>
 
         <div>

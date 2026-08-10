@@ -19,6 +19,7 @@ export async function PATCH(
     // これをしないと、UIが一部の項目だけ送った場合に未送信の項目が null / 0 上書きで消える。
     const patch: Partial<typeof clients.$inferInsert> = {}
     if (v.name !== undefined) patch.name = v.name
+    if (v.aliases !== undefined) patch.aliases = v.aliases ?? null
     if (v.contact_person !== undefined) patch.contact_person = v.contact_person ?? null
     if (v.monthly_video_count !== undefined) patch.monthly_video_count = v.monthly_video_count
     if (v.notes !== undefined) patch.notes = v.notes ?? null

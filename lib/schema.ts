@@ -27,6 +27,10 @@ export const contractors = pgTable('contractors', {
 export const clients = pgTable('clients', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
+  // 請求書の明細に書かれる呼び名（通称・略称・字違い）。カンマ区切りで複数持つ。
+  // 明細は「めぐ姉様」「ファースト」のようにマスタの正式名と別の呼び方で書かれることが多く、
+  // 正式名だけでは突き合わせようがないため、照合用の別名をクライアント側に持たせる。
+  aliases: text('aliases'),
   contact_person: text('contact_person'),
   // billing_amount / contract_start / contract_months は請求内訳（client_billing_items）へ移行済み。
   // 列は移行の履歴と後方互換のため残すが、金額・契約期間の正本は client_billing_items 側。
@@ -232,8 +236,13 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // 相殺が見逃されるため、行ごとの名称・本数・金額をそのまま残して内訳単位でも照合する。
   // 読み取れなかった項目は行の中で null にする（行ごと落とすと請求書の見た目と対応が取れなくなる）。
   // 内訳の無い請求書もあるので、空配列と null（＝まだ読み取っていない）は別物として扱う。
+  // kind は明細の種別。業務の対価（work）はクライアント別の支払予定と、実費・立替（expense）は
+  // 登録済みの立替経費と突き合わせる＝照合相手が別物なので、読み取り時に分けておく。
+  // kind を追加する前に保存された行には入っていないため任意にし、照合側で work とみなす。
   // 型は lib/ui-types の InvoiceExtractedItem として派生させて使う。
-  extracted_items: jsonb('extracted_items').$type<{ label: string; count: number | null; amount: number | null }[]>(),
+  extracted_items: jsonb('extracted_items').$type<
+    { label: string; count: number | null; amount: number | null; kind?: 'work' | 'expense' }[]
+  >(),
   // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
   extract_error: text('extract_error'),
   extracted_at: timestamp('extracted_at', { withTimezone: true, mode: 'string' }),

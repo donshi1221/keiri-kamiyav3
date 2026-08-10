@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     // /api/master/billing-items 経由で別途作成する（フォームが続けて送る）。
     const [data] = await db.insert(clients).values({
       name: body.name,
+      aliases: body.aliases ?? null,
       contact_person: body.contact_person ?? null,
       monthly_video_count: body.monthly_video_count ?? 0,
       notes: body.notes ?? null,

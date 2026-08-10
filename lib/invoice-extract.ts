@@ -26,8 +26,14 @@ const RESPONSE_SCHEMA: ResponseSchema = {
           label: { type: SchemaType.STRING, description: '明細の名称（クライアント名・案件名をそのまま）' },
           count: { type: SchemaType.INTEGER, nullable: true, description: '本数。記載が無ければ null' },
           amount: { type: SchemaType.INTEGER, nullable: true, description: 'その明細の金額（円）。記載が無ければ null' },
+          kind: {
+            type: SchemaType.STRING,
+            format: 'enum',
+            enum: ['work', 'expense'],
+            description: "明細の種別。交通費など実費の立替は 'expense'、業務の対価は 'work'",
+          },
         },
-        required: ['label', 'count', 'amount'],
+        required: ['label', 'count', 'amount', 'kind'],
       },
     },
   },
@@ -48,6 +54,10 @@ const PROMPT = [
   '  label は明細に書かれている名称（クライアント名・案件名）をそのまま入れる（要約・省略しない）。',
   '  count はその明細の本数（「8本」なら 8）。本数の記載が無ければ null。',
   '  amount はその明細の金額（円）。金額の記載が無ければ null。',
+  "  kind はその明細の種別。交通費・電車代・タクシー代・宿泊費・立替・実費など、",
+  "  かかった費用をそのまま請求している行は 'expense'。",
+  "  台本作成費・編集費・作業費・撮影費など業務の対価にあたる行や、本数で数える行は 'work'。",
+  '  移動区間（「渋谷→籠原」など）や日付だけが書かれた行も、交通費の明細なら expense にする。',
   '  「小計」「合計」「消費税」「源泉徴収」など、集計行・調整行は items に含めない。',
   '  内訳が書かれていない請求書では items は空配列にする。',
   '',
@@ -92,6 +102,9 @@ function normalizeItems(value: unknown): InvoiceExtractedItem[] {
         label,
         count: normalizeInt(item.count, 0, MAX_ITEM_COUNT),
         amount: normalizeInt(item.amount, 0, MAX_AMOUNT),
+        // 判断がつかない値が返ってきたときは work に寄せる。expense と誤判定すると
+        // クライアント別の照合から行が丸ごと消えて、本数のズレを見逃してしまうため。
+        kind: item.kind === 'expense' ? 'expense' : 'work',
       },
     ]
   })

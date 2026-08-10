@@ -41,6 +41,9 @@ const optionalUrl = z.preprocess(
 // クライアント本体（内訳は含まない）。金額・契約期間は請求内訳（client_billing_items）側で管理する。
 export const clientCreateSchema = z.object({
   name: z.string().trim().min(1, { message: 'クライアント名は必須です' }),
+  // 請求書の明細に書かれる呼び名（通称・略称）。カンマ区切りの1行として保存し、
+  // 分解は照合側（lib/invoice-check）で行う＝入力の見た目とDBの値を一致させる。
+  aliases: z.string().nullish(),
   contact_person: z.string().nullish(),
   monthly_video_count: countInt.optional(),
   notes: z.string().nullish(),

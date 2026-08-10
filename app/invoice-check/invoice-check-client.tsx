@@ -51,9 +51,13 @@ function StatusBadge({ status }: { status: InvoiceCheckRow['status'] }) {
 // NG・保留は人がこれから直すものなので色付きで前に出す。
 // 受領・修正は「システムが何をしたか」の記録で、判定の色と混ぜると本当のNGが埋もれるため控えめにする。
 // 保存失敗だけは記録でありながら人の対応（再チェック）を待つ状態なので、保留と同じ警告色で前に出す。
+// caution（注意）はNG・保留と違い判定そのものではなく「自動確認できないので人が見て」という
+// 案内。印としては保留と同系の警告色で見せてよいが、[注意]という別の印として保存・パースされる
+// ため、判定理由に「注意」という別種の行があることは区別できる。
 const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ng: 'rounded bg-danger-subtle px-2 py-1 font-medium text-danger',
   hold: 'rounded bg-warning-subtle px-2 py-1 text-warning',
+  caution: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   saveFailed: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   received: 'text-gray-500',
   fixed: 'text-gray-500',
@@ -171,6 +175,18 @@ function UsageNotes() {
           <li>
             請求書にクライアント別の明細があるときは、合計に加えて明細ごとの本数・金額も照合します。
             明細の読み取りがずれている場合は「修正」では直せないため「再読み取り・再チェック」を使います。
+          </li>
+          <li>
+            明細に「19/24」のような支払回数が書かれているときは、マスタの支払期間（開始月と回数）から
+            契約の終了月を割り出して照合します。合わない場合は判定を変えずに注意として出ます。
+          </li>
+          <li>
+            明細が通称や略称（「めぐ姉様」など）で書かれていて特定できないときは、マスタ管理のクライアント編集で
+            「別名」にカンマ区切りで登録すると、次回の照合から正式名と同じものとして扱われます。
+          </li>
+          <li>
+            交通費などの経費の明細は、クライアント別ではなく対象月に登録済みの立替経費の合計と照合します。
+            経費が未登録だとNGになるため、ダッシュボードの「＋経費」から先に登録してください。
           </li>
           <li>
             判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、

@@ -89,13 +89,26 @@ export interface InvoiceExtracted {
 // 請求書の明細1行。列の型（lib/schema）から派生させ、DBに入る形と画面・照合で扱う形を必ず一致させる。
 export type InvoiceExtractedItem = NonNullable<InvoiceUpload['extracted_items']>[number]
 
+// 明細の種別。work（業務の対価）はクライアント別の支払予定と、expense（交通費などの実費・立替）は
+// 登録済みの立替経費と照合する。列の型から派生させ、AIに返させる値と照合の分岐を1か所に揃える。
+export type InvoiceItemKind = NonNullable<InvoiceExtractedItem['kind']>
+
 // 支払予定額のアサイン別内訳1行。合計だけでは「どのクライアントでズレたか」が出せないため、
 // 照合（lib/invoice-check）が請求書の明細と突き合わせる相手として使う。
 // count は編集者の本数。代行者は契約額での支払いで本数の概念が無いため null になる。
+// matchNames は明細ラベルの中から探す呼び名の候補（正式名・法人格を外した形・別名）。
+// 表示に使う clientName は正式名のままにしたいので、照合用の名前は別に持たせる。
+// paymentStartMonth / paymentCount はマスタのアサインに登録された支払期間（開始年月と支払回数）。
+// 明細に書かれる「19/24」（全24回中19回目）が支払予定と合っているかは、この期間から導いた
+// 契約終了月と突き合わせないと判定できないため、内訳の行に持たせる。
+// どちらかが未設定の行は「継続」（回数の定めなし）＝突き合わせる相手が無いので null になる。
 export interface InvoicePayoutBreakdownRow {
   clientName: string
   count: number | null
   amount: number
+  matchNames: string[]
+  paymentStartMonth: string | null
+  paymentCount: number | null
 }
 
 // 読み取りは失敗しても例外にせず、理由を持ち回って extract_error に保存する。
@@ -135,7 +148,9 @@ export interface InvoiceCheckResult {
 // 判定理由1行の意味づけ。ok/ng/hold は判定そのもの、received/fixed/saved は
 // 「判定の結果として何をしたか」の記録で、判定の色分けとは別扱いにする。
 // saveFailed だけは記録でありながら人の対応（再チェック）を促すため、警告として見せる。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'received' | 'fixed' | 'saved' | 'saveFailed'
+// caution は判定（ok/ng/hold）とは独立の注意喚起。明細の支払回数（「19/24」）が支払予定と
+// 合わないときのように、判定を変えずに「人が確認して」と伝えるためだけに使う。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'received' | 'fixed' | 'saved' | 'saveFailed'
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {

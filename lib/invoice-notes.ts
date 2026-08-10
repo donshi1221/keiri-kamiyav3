@@ -9,6 +9,7 @@ export const INVOICE_NOTE_MARKS: Record<InvoiceNoteMark, string> = {
   ok: 'OK',
   ng: 'NG',
   hold: '保留',
+  caution: '注意',
   received: '受領',
   fixed: '修正',
   saved: '保存',

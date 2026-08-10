@@ -32,6 +32,37 @@ function normalizeName(value: string): string {
   return value.replace(/[\s　]/g, '').replace(/(様|さま|御中|殿)$/, '')
 }
 
+// 請求書の明細は法人格を省いて書かれるのが普通（「株式会社四季」→「四季様 台本作成費」）。
+// 正式名から法人格を外した形も呼び名の候補に加え、別名を登録しなくても拾えるようにする。
+// 除くのは先頭・末尾に付く一般的な法人格だけ（名前の途中を削ると別法人と混ざるため）。
+const CORPORATE_FORMS = [
+  '一般社団法人', '一般財団法人', '公益社団法人', '公益財団法人', '特定非営利活動法人', '社会福祉法人',
+  '株式会社', '有限会社', '合同会社', '合資会社', '合名会社', '医療法人', '学校法人', '宗教法人',
+  '（株）', '(株)', '（有）', '(有)', '（同）', '(同)', '㈱', '㈲',
+]
+
+function stripCorporateForm(normalized: string): string {
+  for (const form of CORPORATE_FORMS) {
+    if (normalized.startsWith(form)) return normalized.slice(form.length)
+    if (normalized.endsWith(form)) return normalized.slice(0, -form.length)
+  }
+  return normalized
+}
+
+// 別名は1つの入力欄にカンマ区切りで登録する。全角カンマ・読点で区切る人もいるため、いずれも区切りとして扱う。
+function parseClientAliases(value: string | null | undefined): string[] {
+  if (!value) return []
+  return value.split(/[,、，]/).map((s) => s.trim()).filter((s) => s.length > 0)
+}
+
+// 明細ラベルの中から探す「そのクライアントの呼び名」の一覧。
+// 正式名・法人格を外した形・別名（通称や字違い）を、比較しやすいよう正規化して重複を除く。
+function clientMatchNames(name: string, aliases: string | null | undefined): string[] {
+  const normalized = normalizeName(name)
+  const candidates = [normalized, stripCorporateForm(normalized), ...parseClientAliases(aliases).map(normalizeName)]
+  return [...new Set(candidates.filter((c) => c.length > 0))]
+}
+
 function yen(amount: number): string {
   return `¥${amount.toLocaleString('ja-JP')}`
 }
@@ -72,11 +103,14 @@ type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'vid
 // 「なぜその予定額になったのか」が追えないため、判定理由に混ぜて残す。
 // breakdown は合計の内訳（アサイン単位）。合計が合っていても「Aで1本多くBで1本少ない」ように
 // 相殺していることがあるため、請求書の明細と突き合わせる相手として合計と一緒に持ち回る。
-type ExpectedOutcome = { amount: number; notes: string[]; breakdown: InvoicePayoutBreakdownRow[] } | { hold: string }
+// expenseTotal（登録済みの立替経費の合計）は breakdown に混ぜず別に持つ。経費の請求は
+// クライアント別ではなく「実費の合計」で書かれるため、突き合わせる相手が違うため。
+type ExpectedOutcome =
+  | { amount: number; notes: string[]; breakdown: InvoicePayoutBreakdownRow[]; expenseTotal: number }
+  | { hold: string }
 
-// 立替経費の内訳行に使う名前。クライアント別の支払いではないので、
-// 実在のクライアント名と混ざらないよう固定の1行にまとめる。
-const EXPENSE_BREAKDOWN_LABEL = '立替経費'
+// 判定理由に出す立替経費の呼び名。実在のクライアント名と混ざらないよう固定の1語にまとめる。
+const EXPENSE_LABEL = '立替経費'
 
 // 支払月に「その委託者へいくら払う予定か」を算出する。year / month は請求書の記載月ではなく
 // 支払月（記載月の翌月。payoutMonthOf 参照）。月次レコードも立替経費も支払月で並んでいるため。
@@ -93,7 +127,8 @@ async function computeExpectedPayout(
 ): Promise<ExpectedOutcome> {
   const assignmentRows = await db.query.assignments.findMany({
     where: (a, { and: andOp, eq: eqOp }) => andOp(eqOp(a.contractor_id, contractor.id), eqOp(a.active, true)),
-    with: { clients: { columns: { name: true } } },
+    // aliases は明細ラベルとの照合に使う（正式名だけでは通称・略称で書かれた明細を拾えない）。
+    with: { clients: { columns: { name: true, aliases: true } } },
   })
   if (assignmentRows.length === 0) {
     return { hold: `委託者「${contractor.name}」に有効なアサインがありません` }
@@ -125,20 +160,32 @@ async function computeExpectedPayout(
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
     if (!assignment) continue
-    const clientName = assignment.clients?.name ?? '?'
+    const client = assignment.clients
+    const clientName = client?.name ?? '?'
+    // クライアントが引けない行は照合の当たり先にならないよう候補名を空にする
+    // （'?' を候補にすると、記号を含む明細に誤って吸い付いてしまう）。
+    const matchNames = client ? clientMatchNames(client.name, client.aliases) : []
+    // 明細の「19/24」（支払回数）の検証に使う支払期間。どの行でも同じ値を渡すのでまとめて作る。
+    const payment = { paymentStartMonth: assignment.payment_start_month, paymentCount: assignment.payment_count }
 
     if (!isVideoEditor) {
       // 代行者は契約額での支払い＝本数の概念が無いため count は null。
       const amount = record.payout_amount_snapshot ?? assignment.contractor_payout_amount
       total += amount
-      breakdown.push({ clientName, count: null, amount })
+      breakdown.push({ clientName, count: null, amount, matchNames, ...payment })
       continue
     }
     if (record.actual_payout_amount !== null) {
       total += record.actual_payout_amount
       // 納品チェックの反映時に控えた本数。古い行では未記録（null）のことがあり、
       // その場合は金額だけで照合する（本数を単価から逆算すると単価改定の月にズレる）。
-      breakdown.push({ clientName, count: record.delivered_video_count, amount: record.actual_payout_amount })
+      breakdown.push({
+        clientName,
+        count: record.delivered_video_count,
+        amount: record.actual_payout_amount,
+        matchNames,
+        ...payment,
+      })
       continue
     }
 
@@ -159,7 +206,7 @@ async function computeExpectedPayout(
       // 未達（short）や設定・権限不備（attention）は人が直す余地があるため従来どおり保留。
       if (deliveryTone(delivery) === 'none') {
         notes.push(`${clientName}: 対象月の納品予定なし（¥0）`)
-        breakdown.push({ clientName, count: 0, amount: 0 })
+        breakdown.push({ clientName, count: 0, amount: 0, matchNames, ...payment })
         continue
       }
       return {
@@ -167,7 +214,7 @@ async function computeExpectedPayout(
       }
     }
     total += suggested
-    breakdown.push({ clientName, count: delivery.delivered, amount: suggested })
+    breakdown.push({ clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
   }
 
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
@@ -177,10 +224,8 @@ async function computeExpectedPayout(
     .where(and(inArray(expenses.assignment_id, assignmentIds), eq(expenses.year, year), eq(expenses.month, month)))
   const expenseTotal = expenseRows.reduce((sum, e) => sum + e.amount, 0)
   total += expenseTotal
-  // 経費が無い月まで内訳に出すと、請求書に立替経費の明細が無いだけでNGになってしまう。
-  if (expenseTotal > 0) breakdown.push({ clientName: EXPENSE_BREAKDOWN_LABEL, count: null, amount: expenseTotal })
 
-  return { amount: total, notes, breakdown }
+  return { amount: total, notes, breakdown, expenseTotal }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -219,35 +264,176 @@ function sumKnown(values: (number | null)[]): number | null {
   return known.length === 0 ? null : known.reduce((sum, v) => sum + v, 0)
 }
 
+// 明細ラベルの中に含まれる呼び名のうち、最も長く一致したものの文字数（0＝一致なし）。
+// 「四季様 台本作成費 7/28」のように工程名や支払回数が付くため、名前どうしの一致では拾えない。
+// 長さで比べるのは、「がじゅまる」と「がじゅまるレンタカー」の両方が登録されているとき、
+// 短い方にも当たってしまう（＝候補が複数になる）のを避けて長い方に寄せるため。
+function matchedNameLength(label: string, names: string[]): number {
+  let best = 0
+  for (const name of names) {
+    if (name.length > best && label.includes(name)) best = name.length
+  }
+  return best
+}
+
+// 業務明細に書かれる「N/M」は支払回数（例「運用代行費 19/24」＝全24回中19回目）。
+// 数字の並びをそのまま取り、桁数で回数かどうかを見分ける（「2026/8」のような年月を回数と
+// 読み違えないよう、4桁以上を含む並びは対象外にする）。
+const PAYMENT_COUNT_PATTERN = /(\d+)\s*\/\s*(\d+)/g
+
+type YearMonth = { year: number; month: number }
+
+// 年またぎ（12月+1＝翌年1月、1月-1＝前年12月）は自前の加減算では扱えないため Date に任せる。
+function addMonths(base: YearMonth, delta: number): YearMonth {
+  const d = new Date(base.year, base.month - 1 + delta, 1)
+  return { year: d.getFullYear(), month: d.getMonth() + 1 }
+}
+
+function formatYearMonth(ym: YearMonth): string {
+  return `${ym.year}年${ym.month}月`
+}
+
+// マスタの支払開始月は date 列（'YYYY-MM-DD'）。日は使わないので年月だけ取り出す。
+function parseYearMonth(value: string): YearMonth | null {
+  const m = /^(\d{4})-(\d{2})/.exec(value)
+  if (!m) return null
+  const month = Number(m[2])
+  if (month < 1 || month > 12) return null
+  return { year: Number(m[1]), month }
+}
+
+// 明細ラベルから支払回数「N回目 / 全M回」を取り出す。回数として成り立たない並び
+// （4桁以上＝年月などの別物、0回目、N>M）は読み飛ばし、最初に見つかった回数だけを返す
+// （「2026/8分 運用代行費 19/24」のように別の数字が先に来る書き方があるため全体を走査する）。
+function extractPaymentCount(label: string): { index: number; total: number } | null {
+  for (const [, left, right] of label.matchAll(PAYMENT_COUNT_PATTERN)) {
+    if (left.length > 3 || right.length > 3) continue
+    const index = Number(left)
+    const total = Number(right)
+    if (index < 1 || total < 1 || index > total) continue
+    return { index, total }
+  }
+  return null
+}
+
+// 支払回数の確認結果1行。ok/ng/hold（判定）とは別枠で、status には影響させない。
+// 一致していれば「確認できた」ことを OK として残し、合わないときだけ注意を促す。
+type PaymentCountNote = { mark: 'ok' | 'caution'; note: string }
+
+// 明細の支払回数がマスタの支払期間と整合するかを見る。
+// 請求書の支払月 P が「全M回中N回目」なら、契約は P-(N-1) 月に始まり P+(M-N) 月で終わる。
+// マスタ側の終了月（開始月+回数-1）と突き合わせ、終わりが揃っていれば回数の記載は正しい。
+// 突き合わせる相手が無い場合（クライアント未特定・支払期間が「継続」）は、判断できないことを
+// そのまま伝えて人に回す（勝手に整合とみなすと、回数のズレを黙って通してしまう）。
+function checkPaymentCount(
+  label: string,
+  target: InvoicePayoutBreakdownRow | null,
+  payout: YearMonth
+): PaymentCountNote | null {
+  const ref = extractPaymentCount(label)
+  if (!ref) return null
+  const shown = `支払回数（${ref.index}/${ref.total}）`
+  const start = target?.paymentStartMonth ? parseYearMonth(target.paymentStartMonth) : null
+  const count = target?.paymentCount ?? null
+  if (!target || !start || count === null || count < 1) {
+    return { mark: 'caution', note: `${shown}の記載があります。回数が合っているかご確認ください` }
+  }
+  const billedEnd = addMonths(payout, ref.total - ref.index)
+  const masterEnd = addMonths(start, count - 1)
+  if (billedEnd.year === masterEnd.year && billedEnd.month === masterEnd.month) {
+    return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
+  }
+  return {
+    mark: 'caution',
+    note: `${target.clientName}　${shown}が支払予定と整合しません（記載どおりなら${formatYearMonth(billedEnd)}終了・マスタは${formatYearMonth(masterEnd)}終了）。ご確認ください`,
+  }
+}
+
+// 経費明細（交通費など）とツール側に登録済みの立替経費を突き合わせる。
+// 経費はクライアント別ではなく実費の合計で請求されるため、クライアント別の内訳とは別枠で見る。
+function compareExpenses(
+  expenseItems: InvoiceExtractedItem[],
+  expenseTotal: number
+): { verdict: Verdict; note: string }[] {
+  if (expenseItems.length === 0) {
+    // 経費が無い月まで指摘すると、立替の無い請求書が全件NGになってしまう。
+    if (expenseTotal === 0) return []
+    return [{ verdict: 'ng', note: `${EXPENSE_LABEL}: 予定 ${yen(expenseTotal)} が請求書に見当たりません` }]
+  }
+  const billed = sumKnown(expenseItems.map((i) => i.amount))
+  if (billed === null) {
+    return [{ verdict: 'hold', note: `${EXPENSE_LABEL}の明細の金額が読み取れず照合できません` }]
+  }
+  if (expenseTotal === 0) {
+    return [
+      {
+        verdict: 'ng',
+        note: `経費 ${yen(billed)} が請求書にありますが、経費が未登録です（ダッシュボードの＋経費から登録してください）`,
+      },
+    ]
+  }
+  if (billed === expenseTotal) return [{ verdict: 'ok', note: `経費 ${yen(billed)} 一致` }]
+  return [
+    {
+      verdict: 'ng',
+      note: `経費　請求 ${yen(billed)}　登録 ${yen(expenseTotal)}（${yen(Math.abs(billed - expenseTotal))}相違）`,
+    },
+  ]
+}
+
 // 請求書の明細行を、ツール側の内訳（アサイン別の支払予定）へ突き合わせる。
 // 合計が一致していても内訳が入れ替わっていることがあるため、クライアント単位で本数・金額まで見る。
-// 名前は表記ゆれが避けられないので包含一致まで緩め、1つに絞れない行は判定せず保留として人へ回す。
+// 名前は表記ゆれ・通称が避けられないので「ラベルの中に呼び名があるか」まで緩め、
+// 1つに絞れない行は判定せず保留として人へ回す。
+// 経費明細はクライアントの支払いではないため、ここでは経費どうしで別に照合する。
+// 支払回数（「19/24」）の確認は判定（ok/ng/hold）とは別枠の countNotes として返す。明細と
+// アサインの対応がここでしか分からない一方、status には影響させたくないため混ぜずに分ける。
 function compareInvoiceItems(
   items: InvoiceExtractedItem[],
   breakdown: InvoicePayoutBreakdownRow[],
-  invoiceAmount: number | null
-): { verdict: Verdict; note: string }[] {
+  expenseTotal: number,
+  invoiceAmount: number | null,
+  payout: YearMonth
+): { results: { verdict: Verdict; note: string }[]; countNotes: PaymentCountNote[] } {
   const results: { verdict: Verdict; note: string }[] = []
-  const targets = breakdown.map((row) => ({ ...row, norm: normalizeName(row.clientName) }))
+  const countNotes: PaymentCountNote[] = []
+  const addCountNote = (label: string, target: InvoicePayoutBreakdownRow | null) => {
+    const note = checkPaymentCount(label, target, payout)
+    if (note) countNotes.push(note)
+  }
+  // kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
+  const workItems = items.filter((item) => item.kind !== 'expense')
+  const expenseItems = items.filter((item) => item.kind === 'expense')
   // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
   const matchedItems = new Map<number, InvoiceExtractedItem[]>()
 
-  for (const item of items) {
+  for (const item of workItems) {
     const norm = normalizeName(item.label)
-    const hits = targets
-      .map((target, index) => ({ target, index }))
-      .filter(({ target }) => norm.length > 0 && target.norm.length > 0)
-      .filter(({ target }) => target.norm.includes(norm) || norm.includes(target.norm))
-    if (hits.length !== 1) {
+    const hits = breakdown
+      .map((target, index) => ({ target, index, length: matchedNameLength(norm, target.matchNames) }))
+      .filter(({ length }) => norm.length > 0 && length > 0)
+    if (hits.length === 0) {
       results.push({ verdict: 'hold', note: `明細「${item.label}」がどのクライアント分か特定できません` })
+      addCountNote(item.label, null)
       continue
     }
-    const { index } = hits[0]
+    const longest = Math.max(...hits.map((h) => h.length))
+    const best = hits.filter((h) => h.length === longest)
+    if (best.length > 1) {
+      results.push({
+        verdict: 'hold',
+        note: `明細「${item.label}」の候補が複数あります（${best.map((h) => h.target.clientName).join(' / ')}）`,
+      })
+      addCountNote(item.label, null)
+      continue
+    }
+    const { index } = best[0]
     matchedItems.set(index, [...(matchedItems.get(index) ?? []), item])
+    addCountNote(item.label, breakdown[index])
   }
 
-  targets.forEach((target, index) => {
+  breakdown.forEach((target, index) => {
     const matched = matchedItems.get(index)
     if (!matched) {
       // 予定0円（納品予定なしの月）は請求書に出てこないのが正しい姿なので指摘しない。
@@ -282,6 +468,8 @@ function compareInvoiceItems(
     })
   })
 
+  results.push(...compareExpenses(expenseItems, expenseTotal))
+
   // 明細の金額を全行読めているときだけ合計との整合を見る。1行でも読めていなければ
   // 差が出るのは当たり前で、指摘されても直しようがない。
   if (invoiceAmount !== null && items.every((item) => item.amount !== null)) {
@@ -294,7 +482,7 @@ function compareInvoiceItems(
     }
   }
 
-  return results
+  return { results, countNotes }
 }
 
 // 明細の無い請求書では「いくらズレたか」しか分からない。編集者への支払いは本数×単価なので、
@@ -512,8 +700,20 @@ export async function checkInvoiceAndSave(
       // 内訳の無い請求書（空配列）は従来どおり合計だけで判定する。ここで内訳を要求すると
       // 「明細を書かない」書式の請求書が全件NGになってしまう。
       if (items.length > 0) {
-        for (const item of compareInvoiceItems(items, expected.breakdown, row.extracted_amount)) {
+        const compared = compareInvoiceItems(
+          items,
+          expected.breakdown,
+          expected.expenseTotal,
+          row.extracted_amount,
+          payout
+        )
+        for (const item of compared.results) {
           record(item.verdict, item.note)
+        }
+        // 支払回数の確認結果は record() を通さず直接積む。回数が合わなくても請求額そのものが
+        // 誤っているとは限らないため、判定（status）は動かさず注意として見せるだけにする。
+        for (const note of compared.countNotes) {
+          notes.push(formatInvoiceNote(note.mark, note.note))
         }
       }
     }
