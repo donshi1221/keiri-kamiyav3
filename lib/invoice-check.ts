@@ -72,6 +72,11 @@ function deliveryHoldDetail(row: DeliveryCheckRow, unitPrice: number): string {
 }
 
 type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'video_editor'; unit_price: number }
+
+// 照合OKになったときだけ月次レコードへ書き戻す納品実績。請求書チェックの中で納品シートを
+// 読んで金額を出せた編集者の行だけが入る（既に実支払額が入っている行・代行者は対象外）。
+type DeliveryPayoutApply = { recordId: string; amount: number; videoCount: number }
+
 // notes は算出の途中で人に伝えたい補足（納品予定0件の月など）。金額だけでは
 // 「なぜその予定額になったのか」が追えないため、判定理由に混ぜて残す。
 // breakdown は合計の内訳（アサイン単位）。合計が合っていても「Aで1本多くBで1本少ない」ように
@@ -79,7 +84,13 @@ type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'vid
 // expenseTotal（登録済みの立替経費の合計）は breakdown に混ぜず別に持つ。経費の請求は
 // クライアント別ではなく「実費の合計」で書かれるため、突き合わせる相手が違うため。
 type ExpectedOutcome =
-  | { amount: number; notes: string[]; breakdown: InvoicePayoutBreakdownRow[]; expenseTotal: number }
+  | {
+      amount: number
+      notes: string[]
+      breakdown: InvoicePayoutBreakdownRow[]
+      expenseTotal: number
+      payouts: DeliveryPayoutApply[]
+    }
   | { hold: string }
 
 // 判定理由に出す立替経費の呼び名。実在のクライアント名と混ざらないよう固定の1語にまとめる。
@@ -130,6 +141,7 @@ async function computeExpectedPayout(
   let total = 0
   const notes: string[] = []
   const breakdown: InvoicePayoutBreakdownRow[] = []
+  const payouts: DeliveryPayoutApply[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -187,6 +199,9 @@ async function computeExpectedPayout(
       if (deliveryTone(delivery) === 'none') {
         notes.push(`${clientName}: 対象月の納品予定なし（¥0）`)
         breakdown.push({ clientName, count: 0, amount: 0, matchNames, ...payment })
+        // 0円も書き戻す。請求書全体の金額が一致してOKになった時点でこの0円は検証を通った数字であり、
+        // 支払額欄を空欄のまま残すと「まだ確認していない行」と見分けが付かなくなるため。
+        payouts.push({ recordId: record.id, amount: 0, videoCount: 0 })
         continue
       }
       return {
@@ -195,6 +210,7 @@ async function computeExpectedPayout(
     }
     total += suggested
     breakdown.push({ clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
+    payouts.push({ recordId: record.id, amount: suggested, videoCount: delivery.delivered ?? 0 })
   }
 
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
@@ -205,7 +221,7 @@ async function computeExpectedPayout(
   const expenseTotal = expenseRows.reduce((sum, e) => sum + e.amount, 0)
   total += expenseTotal
 
-  return { amount: total, notes, breakdown, expenseTotal }
+  return { amount: total, notes, breakdown, expenseTotal, payouts }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -553,6 +569,28 @@ async function markInvoiceReceived(
   return { marked: updated.length, total: existing.length }
 }
 
+// 照合に使った納品実績（本数・金額）を月次レコードへ書き戻す。ダッシュボードの「反映」ボタンと同じ2列を
+// 同じ意味で埋めるので、どちらの経路で入っても後続の集計は変わらない。
+// where に isNull を重ねているのは、computeExpectedPayout の時点で実支払額入りの行を外しているとはいえ、
+// 読み取りから書き込みまでの間に人が手で入れた値を消してしまわないための二重の歯止め。
+async function applyDeliveryPayouts(
+  payouts: DeliveryPayoutApply[]
+): Promise<{ applied: number; amount: number }> {
+  let applied = 0
+  let amount = 0
+  for (const p of payouts) {
+    const updated = await db
+      .update(monthlyRecords)
+      .set({ actual_payout_amount: p.amount, delivered_video_count: p.videoCount })
+      .where(and(eq(monthlyRecords.id, p.recordId), isNull(monthlyRecords.actual_payout_amount)))
+      .returning({ id: monthlyRecords.id })
+    if (updated.length === 0) continue
+    applied += 1
+    amount += p.amount
+  }
+  return { applied, amount }
+}
+
 // ドライブ上のファイル名に使うと表示や検索が壊れる文字（フォルダ区切り等）を落とす。
 // 元のファイル名は外部からアップロードされたもので、何が入っているか保証がない。
 function sanitizeFileNamePart(value: string): string {
@@ -675,12 +713,15 @@ export async function checkInvoiceAndSave(
 
   // ─── C. 金額の照合 ─────────────────────────────────────────
   let expectedAmount: number | null = null
+  // expected はこのブロックのスコープから出られないため、後段のOK判定で使う納品実績だけ外へ持ち出す。
+  let deliveryPayouts: DeliveryPayoutApply[] = []
   if (contractor && payout) {
     const expected = await computeExpectedPayout(contractor, payout.year, payout.month, payout.month !== resolvedMonth)
     if ('hold' in expected) {
       record('hold', expected.hold)
     } else {
       expectedAmount = expected.amount
+      deliveryPayouts = expected.payouts
       for (const note of expected.notes) record('ok', note)
       // 明細が読めていれば、合計が合わない理由をクライアント単位まで落として出す。
       const items = row.extracted_items ?? []
@@ -749,6 +790,19 @@ export async function checkInvoiceAndSave(
       notes.push(
         formatInvoiceNote('received', '受領チェックは既に付いていました（別の請求書で受領済みの可能性があります）')
       )
+    }
+
+    // 照合が通った時点で「請求額＝納品実績」が確認できているので、その根拠になった本数・金額を
+    // ダッシュボード側にも残す。ここで書かないと編集者の支払額欄は空のままになる。
+    // 受領チェック・ドライブ保存と同じくOKのときだけ行う（NG・保留は中身が確定していないため
+    // 月次レコードには一切触らない）。
+    if (deliveryPayouts.length > 0) {
+      const applied = await applyDeliveryPayouts(deliveryPayouts)
+      if (applied.applied > 0) {
+        notes.push(
+          formatInvoiceNote('applied', `納品実績から支払額を反映しました（${applied.applied}件・計${yen(applied.amount)}）`)
+        )
+      }
     }
   }
 

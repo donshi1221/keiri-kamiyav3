@@ -164,10 +164,12 @@ export interface InvoiceCheckResult {
 
 // 判定理由1行の意味づけ。ok/ng/hold は判定そのもの、received/fixed/saved は
 // 「判定の結果として何をしたか」の記録で、判定の色分けとは別扱いにする。
+// applied（納品実績の月次レコードへの書き戻し）も同じ「何をしたか」の記録。受領と分けるのは、
+// 受領＝請求書が届いた事実、applied＝金額を反映した事実で、意味が別のため。
 // saveFailed だけは記録でありながら人の対応（再チェック）を促すため、警告として見せる。
 // caution は判定（ok/ng/hold）とは独立の注意喚起。明細の支払回数（「19/24」）が支払予定と
 // 合わないときのように、判定を変えずに「人が確認して」と伝えるためだけに使う。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'received' | 'fixed' | 'saved' | 'saveFailed'
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed'
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {

@@ -70,6 +70,7 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   saveFailed: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   received: 'text-gray-500',
   fixed: 'text-gray-500',
+  applied: 'text-gray-500',
   saved: 'text-gray-500',
   ok: 'text-gray-500',
 }
