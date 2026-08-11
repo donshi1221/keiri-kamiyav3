@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
@@ -82,6 +82,57 @@ function renderTaskTitle(title: string): React.ReactNode[] {
 function formatShortDate(iso: string): string {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+// 指定した行までスクロールする。
+// PC表とスマホカードは両方をDOMに出してCSSで出し分けているため、同じ data-pending-row が2つ存在する。
+// 実際に表示されている方（offsetParent あり）を選ぶ。
+function scrollToPendingRow(key: string) {
+  const found = Array.from(document.querySelectorAll<HTMLElement>(`[data-pending-row="${key}"]`))
+  const visible = found.find((el) => el.offsetParent !== null) ?? found[0]
+  visible?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+// 開閉できるセクションの見出し。1ヶ月分の明細は縦に長く、全部開いたままだと下のタスク欄まで
+// 数画面スクロールが必要なため折りたためるようにしている。
+// 閉じていても対応漏れに気づけるよう、金額・未完了件数・期限超過件数は見出しに常に出す。
+function SectionHeader({ title, open, onToggle, amountLabel, amount, pending, overdue, action }: {
+  title: string
+  open: boolean
+  onToggle: () => void
+  amountLabel: string
+  amount: number
+  pending: number
+  overdue: number
+  action?: React.ReactNode
+}) {
+  return (
+    // 閉じているときはヘッダーだけの箱になるため、余白を詰めて1行のバーに見えるようにする。
+    <div className={`flex flex-wrap items-center justify-between gap-2 px-3 ${open ? 'border-b px-4 pt-3 pb-2' : 'py-1'}`}>
+      <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-900">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex min-h-11 w-full items-center gap-2 rounded text-left hover:bg-gray-50 md:min-h-7"
+        >
+          <ChevronRight size={16} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span>{title}</span>
+            <span className="text-xs font-normal text-gray-500">
+              {amountLabel} ¥{amount.toLocaleString()} ・ {pending > 0 ? `未完了 ${pending}件` : 'すべて完了'}
+            </span>
+            {overdue > 0 && (
+              <span className="rounded bg-danger-subtle px-1.5 py-0.5 text-xs font-normal text-danger">
+                ⚠ 期限超過 {overdue}件
+              </span>
+            )}
+          </span>
+        </button>
+      </h2>
+      {action}
+    </div>
+  )
 }
 
 // アサイン1件分の立替経費（一覧＋追加フォーム）。代行者にのみ表示する。
@@ -484,6 +535,9 @@ export default function DashboardClient({
   // 「この月の未完了」から飛んだ行を一時的に目立たせるためのキー（data-pending-row の値）。
   // 「今日やること」の名前チップは同一人物の複数行をまとめて指すため、複数キーを保持する。
   const [highlightKeys, setHighlightKeys] = useState<string[]>([])
+  // 折りたたまれたセクションへ飛ぶときの飛び先。開く指示（setState）は即座にDOMへ反映されないため、
+  // 行が描画されるまでスクロールを持ち越す入れ物として使う。
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null)
 
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -493,9 +547,10 @@ export default function DashboardClient({
   const globalTaskSectionRef = useRef<HTMLElement | null>(null)
   const summarySectionRef = useRef<HTMLElement | null>(null)
 
-  const jumpTargets: { label: string; ref: React.RefObject<HTMLElement | null> }[] = [
-    { label: '委託者', ref: contractorSectionRef },
-    { label: 'クライアント', ref: clientSectionRef },
+  // onOpen は折りたためるセクション用。閉じたまま飛ぶと中身が見えないため、飛ぶ前に開く。
+  const jumpTargets: { label: string; ref: React.RefObject<HTMLElement | null>; onOpen?: () => void }[] = [
+    { label: '委託者', ref: contractorSectionRef, onOpen: () => setContractorOpen(true) },
+    { label: 'クライアント', ref: clientSectionRef, onOpen: () => setClientOpen(true) },
     { label: 'タスク', ref: globalTaskSectionRef },
     { label: 'サマリー', ref: summarySectionRef },
   ]
@@ -507,16 +562,24 @@ export default function DashboardClient({
   }
 
   // 該当行へスクロールして一時的にハイライトする。
-  // PC表とスマホカードは両方をDOMに出してCSSで出し分けているため、
-  // 同じ data-pending-row が2つ存在する。実際に表示されている方（offsetParent あり）を選ぶ。
   // 複数行をまとめて指す場合は、全行をハイライトしたうえで先頭の行までスクロールする
   // （まとめチップを押したときに「どの行が対象なのか」が曖昧にならないようにする）。
+  // 飛び先のセクションが折りたたまれていると行が DOM に無いため、先に開いてから次の描画でスクロールする。
   function focusPendingRow(targets: string | string[]) {
     const keys = typeof targets === 'string' ? [targets] : targets
     if (keys.length === 0) return
-    const found = Array.from(document.querySelectorAll<HTMLElement>(`[data-pending-row="${keys[0]}"]`))
-    const visible = found.find((el) => el.offsetParent !== null) ?? found[0]
-    visible?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const key = keys[0]
+    let deferred = false
+    if ((key.startsWith('rec-') || key.startsWith('cgroup-')) && !contractorOpen) {
+      setContractorOpen(true)
+      deferred = true
+    }
+    if (key.startsWith('cli') && !clientOpen) {
+      setClientOpen(true)
+      deferred = true
+    }
+    if (deferred) setScrollTarget(key)
+    else scrollToPendingRow(key)
     setHighlightKeys(keys)
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
     highlightTimerRef.current = setTimeout(() => setHighlightKeys([]), 1800)
@@ -1158,6 +1221,76 @@ export default function DashboardClient({
       .map((r) => r.assignments!.contractor_id)
   ).size
 
+  // ─── セクション見出しの要約と開閉 ─────────────────────────
+  // 未完了の数え方は「この月の未完了」に合わせる（支払い確認・入金確認は、複数アサイン／複数内訳では
+  // 見出しのチェックに集約されていて操作が1回で済むため、1件と数える）。
+  // 期日は表・カードの表示と同じ（受領10日 / 支払い予約15日 / 支払い確認 末日 / 送付15日 / 入金確認25日）。
+  const contractorSummary = (() => {
+    let pending = 0
+    let overdue = 0
+    for (const g of contractorGroups) {
+      const multi = g.items.length > 1
+      for (const r of g.items) {
+        if (!r.invoice_received_at) {
+          pending++
+          if (recordDueState(r, 'invoice_received_at', 10) === 'overdue') overdue++
+        }
+        if (!r.payment_reserved_at) {
+          pending++
+          if (recordDueState(r, 'payment_reserved_at', 15) === 'overdue') overdue++
+        }
+        if (!multi && !r.contractor_paid_at) {
+          pending++
+          if (recordDueState(r, 'contractor_paid_at', lastDay) === 'overdue') overdue++
+        }
+      }
+      if (multi && g.items.some((r) => !r.contractor_paid_at)) {
+        pending++
+        if (g.items.some((r) => recordDueState(r, 'contractor_paid_at', lastDay) === 'overdue')) overdue++
+      }
+    }
+    return { pending, overdue }
+  })()
+
+  const clientSummary = (() => {
+    let pending = 0
+    let overdue = 0
+    for (const g of clientGroups) {
+      const grouped = clientHasGroupHeader(g.clientId)
+      for (const cr of g.items) {
+        if (!cr.invoice_sent_at) {
+          pending++
+          if (clientDueState(cr, 'invoice_sent_at', 15) === 'overdue') overdue++
+        }
+        if (!grouped && !cr.payment_confirmed_at) {
+          pending++
+          if (clientDueState(cr, 'payment_confirmed_at', 25) === 'overdue') overdue++
+        }
+      }
+      if (grouped && g.items.some((cr) => !cr.payment_confirmed_at)) {
+        pending++
+        if (g.items.some((cr) => clientDueState(cr, 'payment_confirmed_at', 25) === 'overdue')) overdue++
+      }
+    }
+    return { pending, overdue }
+  })()
+
+  // 既定は閉じる。ただし放置すると困る状態（当月＝期限超過あり／過去月＝未完了が残っている）の
+  // セクションだけは開いた状態で出す。以後は手動の開閉を優先する（初期値なので再計算では変わらない）。
+  const [contractorOpen, setContractorOpen] = useState(
+    isCurrentMonth ? contractorSummary.overdue > 0 : contractorSummary.pending > 0
+  )
+  const [clientOpen, setClientOpen] = useState(
+    isCurrentMonth ? clientSummary.overdue > 0 : clientSummary.pending > 0
+  )
+
+  // 折りたたみを開いた直後に、行が描画されてからスクロールする。
+  useEffect(() => {
+    if (!scrollTarget) return
+    scrollToPendingRow(scrollTarget)
+    setScrollTarget(null)
+  }, [scrollTarget])
+
   // 単発タスクの期日判定（日付のみで比較）。'YYYY-MM-DD' 文字列は辞書順＝日付順なので直接比較できる。
   const pad2 = (n: number) => String(n).padStart(2, '0')
   const todayYmd = `${todayDate.getFullYear()}-${pad2(todayDate.getMonth() + 1)}-${pad2(todayDate.getDate())}`
@@ -1321,7 +1454,10 @@ export default function DashboardClient({
               <li key={t.label}>
                 <button
                   type="button"
-                  onClick={() => t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  onClick={() => {
+                    t.onOpen?.()
+                    t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
                   className="flex h-11 shrink-0 items-center whitespace-nowrap rounded px-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 md:h-8 md:px-3"
                 >
                   {t.label}
@@ -1433,14 +1569,24 @@ export default function DashboardClient({
 
       {/* 委託者 — 請求書受領・支払管理 */}
       <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-900">委託者 — 請求書受領・支払管理</h2>
-          {localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') && (
-            <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={runDeliveryCheck} disabled={deliveryLoading}>
-              {deliveryLoading ? '納品チェック中…' : `編集者の納品チェック（${deliveryTarget.month}月分）`}
-            </Button>
-          )}
-        </div>
+        <SectionHeader
+          title="委託者 — 請求書受領・支払管理"
+          open={contractorOpen}
+          onToggle={() => setContractorOpen((v) => !v)}
+          amountLabel="支払"
+          amount={contractorCost}
+          pending={contractorSummary.pending}
+          overdue={contractorSummary.overdue}
+          action={
+            localRecords.some((r) => r.assignments?.contractors?.contractor_type === 'video_editor') ? (
+              <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={runDeliveryCheck} disabled={deliveryLoading}>
+                {deliveryLoading ? '納品チェック中…' : `編集者の納品チェック（${deliveryTarget.month}月分）`}
+              </Button>
+            ) : null
+          }
+        />
+        {contractorOpen && (
+        <>
         {deliveryRows && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-gray-50 px-4 py-2 text-xs">
             <span className="text-gray-600">{deliveryTarget.year}年{deliveryTarget.month}月分の納品: {deliveryRows.length}件</span>
@@ -1769,13 +1915,23 @@ export default function DashboardClient({
             </div>
           </>
         )}
+        </>
+        )}
       </section>
 
       {/* クライアント — 請求・入金管理 */}
       <section ref={clientSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
-        <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-sm font-semibold text-gray-900">クライアント — 請求・入金管理</h2>
-        </div>
+        <SectionHeader
+          title="クライアント — 請求・入金管理"
+          open={clientOpen}
+          onToggle={() => setClientOpen((v) => !v)}
+          amountLabel="請求"
+          amount={revenue}
+          pending={clientSummary.pending}
+          overdue={clientSummary.overdue}
+        />
+        {clientOpen && (
+        <>
         {localClientRecords.length === 0 ? (
           <p className="text-sm text-gray-500 p-4">
             この月の請求記録はまだありません（毎月1日に自動で作成されます）。クライアントが未登録の場合は{' '}
@@ -2029,6 +2185,8 @@ export default function DashboardClient({
               })}
             </div>
           </>
+        )}
+        </>
         )}
       </section>
 
