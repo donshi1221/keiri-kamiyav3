@@ -43,6 +43,23 @@ function rowDueClass(state: DueState): string {
   return 'hover:bg-gray-50'
 }
 
+// 相手（委託者・クライアント）そのものを表す行の背景。
+// 黄色は「対応が必要な内訳」の色として使うため、相手の行はまとまりの目印としてグレーで固定する。
+// そうしないと、内訳が1件だけの相手が上の相手の内訳と地続きに見えて区切りが読めない。
+// 期限超過だけは見落とすと支払い・入金の遅れに直結するため、例外的に面でも塗る。
+function groupRowClass(state: DueState): string {
+  if (state === 'overdue') return 'bg-danger-subtle/70 hover:bg-danger-subtle/70'
+  return 'bg-gray-100 hover:bg-gray-100'
+}
+
+// 相手の行の左端に出す期限バー。背景を塗らない代わりの目印。
+// 期限が無い相手も透明の枠で同じ幅を取り、名前の開始位置がずれないようにする。
+function groupAccentClass(state: DueState): string {
+  if (state === 'overdue') return 'border-l-4 border-l-danger'
+  if (state === 'inWindow') return 'border-l-4 border-l-warning'
+  return 'border-l-4 border-l-transparent'
+}
+
 function DueBadge({ state }: { state: DueState }) {
   if (state === 'overdue') return <span className="block text-[10px] text-danger mt-1">期限超過</span>
   if (state === 'inWindow') return <span className="block text-[10px] text-warning mt-1">今週対応</span>
@@ -330,11 +347,14 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
 // この入力でしか直せない（マスタを直すと過去月まで遡って金額が変わってしまう）。
 // 空欄で保存すると控えが外れ、表示・請求書照合ともマスタの契約額を使う状態に戻る。
 // 見た目と操作は経費の追加フォーム（ExpenseBlock）に揃え、スマホでのタップ領域は44pxを確保する。
-function PayoutAmountCell({ amount, editable, edited, onSave }: {
+function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
   amount: number | null
   editable: boolean
   // 控えがマスタの契約額と食い違っている＝この月だけ手で直した状態。人が見て区別できるよう印を出す。
   edited: boolean
+  // その相手の合計額として出す場合は太字にする。金額列を縦に見たとき
+  // 「太字＝相手ごとの合計／細字＝その内訳」で階層が読めるようにするため。
+  strong?: boolean
   onSave: (value: string) => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
@@ -342,6 +362,7 @@ function PayoutAmountCell({ amount, editable, edited, onSave }: {
   const [saving, setSaving] = useState(false)
 
   const text = amount ? `¥${amount.toLocaleString()}` : '—'
+  const toneClass = strong ? 'font-semibold text-gray-900' : 'text-gray-600'
 
   async function submit() {
     setSaving(true)
@@ -351,7 +372,7 @@ function PayoutAmountCell({ amount, editable, edited, onSave }: {
   }
 
   // 編集者の報酬は納品チェックの「反映」で入るため、ここでは直接編集させない（二重の入口を作らない）。
-  if (!editable) return <span className="text-gray-600">{text}</span>
+  if (!editable) return <span className={toneClass}>{text}</span>
 
   if (editing) {
     return (
@@ -398,7 +419,7 @@ function PayoutAmountCell({ amount, editable, edited, onSave }: {
         type="button"
         onClick={() => { setValue(amount === null ? '' : String(amount)); setEditing(true) }}
         aria-label="この月の報酬額を編集"
-        className="flex h-11 items-center rounded px-1 text-gray-600 underline decoration-dotted underline-offset-4 hover:bg-gray-100 md:h-6"
+        className={`flex h-11 items-center rounded px-1 underline decoration-dotted underline-offset-4 hover:bg-gray-100 md:h-6 ${toneClass}`}
       >
         {text}
       </button>
@@ -1629,14 +1650,25 @@ export default function DashboardClient({
                     // 支払い確認はこの委託者の全アサインに一括で付ける（支払いはまとめて行うため）。
                     const paidIds = g.items.map((r) => r.id)
                     const allPaid = g.items.every((r) => !!r.contractor_paid_at)
+                    // 相手の行（見出し／1件だけの行）の見た目。期限はその委託者の全アサインぶんをまとめて判定し、
+                    // 背景ではなく左端のバーで出す（黄色い面は内訳の行だけに使う）。
+                    const groupState = rowDueState(
+                      g.items.flatMap((r) => [
+                        recordDueState(r, 'invoice_received_at', 10),
+                        recordDueState(r, 'payment_reserved_at', 15),
+                        recordDueState(r, 'contractor_paid_at', lastDay),
+                      ])
+                    )
+                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100 hover:bg-gray-100'
+                    const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
                     const headerRow = multi
                       ? [(
                           <tr
                             key={`chead-${g.contractorId}`}
                             data-pending-row={`cgroup-${g.contractorId}`}
-                            className={`border-y-2 border-gray-200 ${rowBg(`cgroup-${g.contractorId}`, 'bg-gray-100')}`}
+                            className={`border-y-2 border-gray-200 ${rowBg(`cgroup-${g.contractorId}`, groupCls)}`}
                           >
-                            <td className="py-2 px-4">
+                            <td className={`py-2 px-4 ${accentCls}`}>
                               <span className="font-semibold text-gray-900">{g.contractorName}</span>
                             </td>
                             <td className="py-2 px-3 text-right">
@@ -1652,6 +1684,7 @@ export default function DashboardClient({
                                 onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
+                                badge={<span className="block text-[10px] text-gray-500">まとめて</span>}
                               />
                             </td>
                           </tr>
@@ -1663,16 +1696,24 @@ export default function DashboardClient({
                       const receivedState = recordDueState(r, 'invoice_received_at', 10)
                       const reservedState = recordDueState(r, 'payment_reserved_at', 15)
                       const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-                      const rowClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50'
+                      // 1アサインだけの委託者は、この行が「相手の行」そのものなので見出しの見た目にする
+                      // （内訳の黄色と同じ色にすると、上の委託者の内訳と続いて見えて区切りが読めない）。
+                      const rowClass = multi
+                        ? (isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50')
+                        : groupCls
                       const payout = recordPayout(r)
                       return (
-                        <tr key={r.id} data-pending-row={`rec-${r.id}`} className={`border-b last:border-0 ${rowBg(`rec-${r.id}`, rowClass)}`}>
-                          <td className={multi ? 'py-3 pl-10 pr-4' : 'py-3 px-4'}>
+                        <tr
+                          key={r.id}
+                          data-pending-row={`rec-${r.id}`}
+                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-gray-200'} ${rowBg(`rec-${r.id}`, rowClass)}`}
+                        >
+                          <td className={multi ? 'py-3 pl-10 pr-4' : `py-3 px-4 ${accentCls}`}>
                             {multi ? (
                               <div className="text-gray-700">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                             ) : (
                               <>
-                                <div className="font-medium">{g.contractorName}</div>
+                                <div className="font-semibold text-gray-900">{g.contractorName}</div>
                                 <div className="text-xs text-gray-500">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                               </>
                             )}
@@ -1710,6 +1751,7 @@ export default function DashboardClient({
                               amount={payout}
                               editable={!isVideoEditor && !!asgn}
                               edited={r.payout_amount_snapshot !== null && r.payout_amount_snapshot !== asgn?.contractor_payout_amount}
+                              strong={!multi}
                               onSave={(value) => savePayoutSnapshot(r.id, value)}
                             />
                             {expenseTotalOf(asgn?.id) > 0 && (
@@ -1775,14 +1817,24 @@ export default function DashboardClient({
                 )
                 const paidIds = g.items.map((r) => r.id)
                 const allPaid = g.items.every((r) => !!r.contractor_paid_at)
+                // PC表と同じ考え方で、相手の名前の帯はグレー固定・期限は左端のバーで出す。
+                const groupState = rowDueState(
+                  g.items.flatMap((r) => [
+                    recordDueState(r, 'invoice_received_at', 10),
+                    recordDueState(r, 'payment_reserved_at', 15),
+                    recordDueState(r, 'contractor_paid_at', lastDay),
+                  ])
+                )
+                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100'
+                const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
                 return (
                   <div
                     key={g.contractorId}
                     data-pending-row={multi ? `cgroup-${g.contractorId}` : undefined}
                     className={`px-4 py-3 ${multi ? rowBg(`cgroup-${g.contractorId}`, '') : ''}`}
                   >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="font-medium">{g.contractorName}</span>
+                    <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cgroup-${g.contractorId}`, groupCls)} ${accentCls}`}>
+                      <span className="font-semibold text-gray-900">{g.contractorName}</span>
                       {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払い確認（まとめて）」を置く */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
@@ -1811,7 +1863,8 @@ export default function DashboardClient({
                         const receivedState = recordDueState(r, 'invoice_received_at', 10)
                         const reservedState = recordDueState(r, 'payment_reserved_at', 15)
                         const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
-                        const cardClass = isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : ''
+                        // 1アサインだけの委託者は上の名前の帯が期限を示すため、内訳側は塗らない。
+                        const cardClass = multi && isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : ''
                         const payout = recordPayout(r)
                         return (
                           <div key={r.id} data-pending-row={`rec-${r.id}`} className={`rounded-lg ${rowBg(`rec-${r.id}`, cardClass)}`}>
@@ -1852,6 +1905,7 @@ export default function DashboardClient({
                                   amount={payout}
                                   editable={!isVideoEditor && !!asgn}
                                   edited={r.payout_amount_snapshot !== null && r.payout_amount_snapshot !== asgn?.contractor_payout_amount}
+                                  strong={!multi}
                                   onSave={(value) => savePayoutSnapshot(r.id, value)}
                                 />
                                 {expenseTotalOf(asgn?.id) > 0 && (
@@ -1963,6 +2017,16 @@ export default function DashboardClient({
                     // 入金はクライアントからまとめて行われるため、入金確認は全内訳に一括で付ける。
                     const confirmIds = g.items.map((cr) => cr.id)
                     const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
+                    // 相手の行（見出し／1件だけの行）の見た目。期限はそのクライアントの全内訳ぶんをまとめて判定し、
+                    // 背景ではなく左端のバーで出す（黄色い面は内訳の行だけに使う）。
+                    const groupState = rowDueState(
+                      g.items.flatMap((cr) => [
+                        clientDueState(cr, 'invoice_sent_at', 15),
+                        clientDueState(cr, 'payment_confirmed_at', 25),
+                      ])
+                    )
+                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100 hover:bg-gray-100'
+                    const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
                     // 複数内訳のクライアントは「ヘッダー行（名前＋合計）＋内訳行（インデント）」でグループ表示する。
                     // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
                     const headerRow = multi
@@ -1970,9 +2034,9 @@ export default function DashboardClient({
                           <tr
                             key={`header-${g.clientId}`}
                             data-pending-row={`cligroup-${g.clientId}`}
-                            className={`border-y-2 border-gray-200 ${rowBg(`cligroup-${g.clientId}`, 'bg-gray-100')}`}
+                            className={`border-y-2 border-gray-200 ${rowBg(`cligroup-${g.clientId}`, groupCls)}`}
                           >
-                            <td className="py-2 px-4">
+                            <td className={`py-2 px-4 ${accentCls}`}>
                               <span className="font-semibold text-gray-900">{g.clientName}</span>
                             </td>
                             <td className="py-2 px-3 text-right">
@@ -1988,6 +2052,7 @@ export default function DashboardClient({
                                 onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
+                                badge={<span className="block text-[10px] text-gray-500">まとめて</span>}
                               />
                             </td>
                           </tr>
@@ -2000,19 +2065,30 @@ export default function DashboardClient({
                       const overBilled = contractMonths != null && billedCount >= contractMonths
                       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
                       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-                      const rowClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50'
-                      const labelPart = multi && label ? `（${label}）` : ''
+                      // 1内訳だけのクライアントは、この行が「相手の行」そのものなので見出しの見た目にする
+                      // （内訳の黄色と同じ色にすると、上のクライアントの内訳と続いて見えて区切りが読めない）。
+                      const rowClass = multi
+                        ? (isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50')
+                        : groupCls
+                      const labelPart = label ? `（${label}）` : ''
                       return (
-                        <tr key={cr.id} data-pending-row={`cli-${cr.id}`} className={`border-b last:border-0 ${rowBg(`cli-${cr.id}`, rowClass)}`}>
-                          <td className={multi ? 'py-3 pl-10 pr-4' : 'py-3 px-4'}>
+                        <tr
+                          key={cr.id}
+                          data-pending-row={`cli-${cr.id}`}
+                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-gray-200'} ${rowBg(`cli-${cr.id}`, rowClass)}`}
+                        >
+                          <td className={multi ? 'py-3 pl-10 pr-4' : `py-3 px-4 ${accentCls}`}>
                             {multi ? (
                               <span className="text-gray-700">{label || '（内訳名なし）'}</span>
                             ) : (
-                              <span className="font-medium">{g.clientName}</span>
+                              <>
+                                <div className="font-semibold text-gray-900">{g.clientName}</div>
+                                {label && <div className="text-xs text-gray-500">{label}</div>}
+                              </>
                             )}
                             {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
                           </td>
-                          <td className="py-3 px-3 text-right text-gray-600">
+                          <td className={`py-3 px-3 text-right ${multi ? 'text-gray-600' : 'font-semibold text-gray-900'}`}>
                             {(() => {
                               const billing = cr.billing_amount_snapshot
                               return billing ? `¥${billing.toLocaleString()}` : '—'
@@ -2079,14 +2155,23 @@ export default function DashboardClient({
                 const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal
                 const confirmIds = g.items.map((cr) => cr.id)
                 const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
+                // PC表と同じ考え方で、相手の名前の帯はグレー固定・期限は左端のバーで出す。
+                const groupState = rowDueState(
+                  g.items.flatMap((cr) => [
+                    clientDueState(cr, 'invoice_sent_at', 15),
+                    clientDueState(cr, 'payment_confirmed_at', 25),
+                  ])
+                )
+                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100'
+                const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
                 return (
                   <div
                     key={g.clientId}
                     data-pending-row={multi ? `cligroup-${g.clientId}` : undefined}
                     className={`px-4 py-3 ${multi ? rowBg(`cligroup-${g.clientId}`, '') : ''}`}
                   >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="font-medium">{g.clientName}</span>
+                    <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cligroup-${g.clientId}`, groupCls)} ${accentCls}`}>
+                      <span className="font-semibold text-gray-900">{g.clientName}</span>
                       {/* 複数内訳のクライアントは、ヘッダーに合計請求額と「入金確認（まとめて）」を置く */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
@@ -2111,24 +2196,23 @@ export default function DashboardClient({
                     <div className="space-y-2">
                       {g.items.map((cr) => {
                         const label = itemLabel(cr)
-                        const labelPart = multi && label ? `（${label}）` : ''
+                        const labelPart = label ? `（${label}）` : ''
                         const billedCount = billedCounts[cr.billing_item_id] ?? 0
                         const contractMonths = cr.billing_items?.contract_months
                         const overBilled = contractMonths != null && billedCount >= contractMonths
                         const sentState = clientDueState(cr, 'invoice_sent_at', 15)
                         const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
-                        const cardClass = isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
+                        // 1内訳だけのクライアントは上の名前の帯が期限を示すため、内訳側は塗らない。
+                        const cardClass = multi && isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : ''
                         const billing = cr.billing_amount_snapshot
                         return (
                           <div key={cr.id} data-pending-row={`cli-${cr.id}`} className={`rounded-lg ${rowBg(`cli-${cr.id}`, cardClass)}`}>
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
-                                {multi && (
-                                  <span className="text-sm text-gray-600">{label || '（内訳名なし）'}</span>
-                                )}
+                                <span className="text-sm text-gray-600">{label || '（内訳名なし）'}</span>
                                 {overBilled && <Badge variant="destructive" className="ml-1 text-xs">請求回数超過</Badge>}
                               </div>
-                              <span className="shrink-0 text-sm text-gray-600">
+                              <span className={`shrink-0 text-sm ${multi ? 'text-gray-600' : 'font-semibold text-gray-900'}`}>
                                 {billing ? `¥${billing.toLocaleString()}` : '—'}
                               </span>
                             </div>
