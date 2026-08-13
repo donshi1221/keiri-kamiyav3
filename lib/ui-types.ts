@@ -6,7 +6,12 @@ import type {
   Client,
   ClientBillingItem,
   InvoiceUpload,
+  ExpenseUpload,
+  ExpenseUploadItem,
 } from './schema'
+// 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
+// import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
+import type { EXPENSE_CATEGORIES, EXPENSE_ITEM_KINDS } from './config'
 
 // ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
 // 以前はコンポーネント側にコピペされ、実クエリと形が食い違ったまま `as any` で握りつぶされていた。
@@ -238,6 +243,56 @@ export interface InvoiceReminderSendResult {
   name: string
   status: InvoiceReminderSendStatus
   message: string | null
+}
+
+// ─── 経費アップロード（モバイルICOCA・特急券など）─────────────────────────────
+// 選択肢そのものは lib/config に置き、型はそこから導く。値と型を別々に書くと、
+// 選択肢を足したときに型だけ古いままになって「選べるのに型エラー」が起きるため。
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]
+
+// 明細1行の用途。金額の行き先が区分ごとに違う（client_billed だけが client_expenses に入る）。
+export type ExpenseItemKind = (typeof EXPENSE_ITEM_KINDS)[number]
+
+// AI読み取り（lib/expense-extract）が返す明細1行。列名（expense_upload_items）と1対1に対応させ、
+// AIに返させるJSONのキー・DBに入る形・画面で扱う形を揃える。
+// amount だけ必須なのは、金額が読めない行は経費として意味を成さないため（読めなければ0で人が直す）。
+export interface ExpenseExtractedItem {
+  item_date: string | null //   YYYY-MM-DD。年を補えなかった行は null
+  from_place: string | null //  利用区間の起点（領収書など区間の無い書類では null）
+  to_place: string | null //    利用区間の終点
+  description: string | null // 内容（「鉄道利用」「特急券」など）
+  amount: number //             正の整数（原本のマイナス表記は絶対値に直す）
+}
+
+// 読み取りは失敗しても例外にせず、理由を持ち回って expense_uploads.extract_error に保存する
+// （請求書の InvoiceExtractOutcome と同じ流儀）。
+export type ExpenseExtractOutcome = { items: ExpenseExtractedItem[] } | { error: string }
+
+// 一覧・受付APIが返す明細1行。client_id だけでは画面でクライアント名を出せないため名前を添える。
+export type ExpenseUploadItemRow = ExpenseUploadItem & { client_name: string | null }
+
+// 一覧・受付APIが返す受付1件。原本（file_data）は1件で数MBになりうるので列ごと外し、
+// 必要なときだけ /api/expense-uploads/[id]/file から取り出す。
+export type ExpenseUploadRow = Omit<ExpenseUpload, 'file_data'> & { items: ExpenseUploadItemRow[] }
+
+// 代表が送信するときの明細1行分の割り当て。検証の正本は lib/validation の expenseSubmitSchema で、
+// これは画面側が同じ形を組み立てるための型。
+export interface ExpenseItemAssignment {
+  id: string
+  kind: ExpenseItemKind
+  client_id: string | null
+  category: ExpenseCategory | null
+}
+
+// 受付API（POST /api/expense-inbox）の応答。読み取った明細をそのまま返すのは、
+// 代表が同じ画面で続けて割り当てられるようにするため（IDが無いと送信できない）。
+// 読み取りに失敗しても受付自体は成功扱いなので、理由は extract_error に入って返る。
+export interface ExpenseInboxResponse {
+  id: string
+  file_name: string
+  file_type: string
+  extract_error: string | null
+  items: ExpenseUploadItem[]
 }
 
 // ─── Googleドライブ保存（lib/google-drive）─────────────────────────────

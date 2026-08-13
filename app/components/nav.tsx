@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { nowJST } from '@/lib/dates'
-import { LayoutDashboard, CalendarClock, ReceiptText, Users, BookText, LogOut, Download } from 'lucide-react'
+import { LayoutDashboard, CalendarClock, ReceiptText, Wallet, Users, BookText, LogOut, Download } from 'lucide-react'
 
 // 「先月」の遷移先は表示時点の年月に依存するため、リンク一覧は描画のたびに組み立てる。
 // 基準時刻を JST 固定の nowJST にしているのは、サーバー描画（UTC）とクライアント描画で
@@ -21,6 +21,7 @@ function buildLinks(): { href: string; label: string; shortLabel?: string; icon:
       icon: CalendarClock,
     },
     { href: '/invoice-check', label: '請求書チェック', shortLabel: '請求書', icon: ReceiptText },
+    { href: '/expense-check', label: '経費チェック', shortLabel: '経費', icon: Wallet },
     { href: '/master', label: 'マスタ管理', shortLabel: 'マスタ', icon: Users },
     { href: '/tax', label: '税務メモ', icon: BookText },
   ]
@@ -42,8 +43,18 @@ export default function Nav() {
   }
 
   // 未ログイン時はどのリンクを押してもログイン画面へ戻されるだけなので、ナビ自体を出さない。
-  // 請求書アップロードは社外の人が開く画面なので、社内向けの導線を見せない。
-  if (pathname === '/login' || pathname === '/invoice' || pathname.startsWith('/invoice/')) return null
+  // 請求書・経費のアップロードは社外の人や代表が開く公開画面なので、社内向けの導線を見せない。
+  // 「/invoice」「/expense」だけを対象にするのは、前方一致にすると社内画面（/invoice-check・
+  // /expense-check）まで巻き込んでナビが消えてしまうため。
+  if (
+    pathname === '/login' ||
+    pathname === '/invoice' ||
+    pathname.startsWith('/invoice/') ||
+    pathname === '/expense' ||
+    pathname.startsWith('/expense/')
+  ) {
+    return null
+  }
 
   return (
     <>

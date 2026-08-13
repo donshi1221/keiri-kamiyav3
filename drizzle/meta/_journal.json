@@ -134,6 +134,20 @@
       "when": 1786343404240,
       "tag": "0018_clumsy_smiling_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786415398175,
+      "tag": "0019_clean_exiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786418480545,
+      "tag": "0020_late_nick_fury",
+      "breakpoints": true
     }
   ]
 }

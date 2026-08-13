@@ -14,6 +14,7 @@ import {
   taxChatSessions,
   taxChatMessages,
   moneyforwardExpenses,
+  clientExpenses,
 } from '@/lib/schema'
 import { nowJST } from '@/lib/dates'
 
@@ -39,6 +40,7 @@ export async function GET() {
       taxChatSessionsData,
       taxChatMessagesData,
       moneyforwardExpensesData,
+      clientExpensesData,
     ] = await Promise.all([
       db.select().from(contractors),
       db.select().from(clients),
@@ -53,6 +55,7 @@ export async function GET() {
       db.select().from(taxChatSessions),
       db.select().from(taxChatMessages),
       db.select().from(moneyforwardExpenses),
+      db.select().from(clientExpenses),
     ])
 
     const now = nowJST()
@@ -73,6 +76,7 @@ export async function GET() {
         tax_chat_sessions: taxChatSessionsData,
         tax_chat_messages: taxChatMessagesData,
         moneyforward_expenses: moneyforwardExpensesData,
+        client_expenses: clientExpensesData,
       },
     }
 

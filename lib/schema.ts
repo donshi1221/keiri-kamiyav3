@@ -216,6 +216,22 @@ export const expenses = pgTable('expenses', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// 自社が直接払った経費（素材購入費・広告費など）。委託者を経由せず自社が支払い、クライアントには請求する。
+// expenses（立替経費）と表を分けているのは、expenses が「委託者に払う」意味を必ず持つため。
+// 払わない経費を同じ表に混ぜると、委託者への支払い集計に紛れ込んで過払いを生む危険がある。
+// client_id に直接ぶら下げるのは、委託者が介在しない＝assignment（委託者×クライアント）で特定できないため。
+// year/month は「どの月の請求に乗せるか」。expense_date は記録用で月の判定には使わない（expenses と同じ扱い）。
+export const clientExpenses = pgTable('client_expenses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  client_id: uuid('client_id').notNull().references(() => clients.id),
+  year: integer('year').notNull(),
+  month: integer('month').notNull(),
+  expense_date: date('expense_date', { mode: 'string' }),
+  amount: integer('amount').notNull().default(0),
+  note: text('note'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 // アプリ全体で1つだけ持つ設定値のkey-valueストア。現在の用途は請求書受付URLのトークン。
 // 環境変数ではなくDBに置くのは、画面から再発行（値の書き換え）ができる必要があるため。
 export const appSettings = pgTable('app_settings', {
@@ -286,6 +302,56 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// 代表から届く経費ファイル（モバイルICOCAの利用履歴PDF・特急券の領収書画像）の受け皿。
+// 1ファイルに1か月分・10件前後の明細が入っているため、ファイル本体（この表）と
+// 明細1行（expense_upload_items）を分けて持つ。行ごとに帰属先クライアントと科目が変わるため。
+// file_type を残すのはPDFと画像の両方を受けるから。原本を返すときのContent-Typeに使う。
+export const expenseUploads = pgTable('expense_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  file_name: text('file_name').notNull(),
+  file_data: text('file_data').notNull(),
+  file_type: text('file_type').notNull(),
+  // 受付から登録までの進み具合。
+  //   draft     … 読み取り済み・代表が割当中
+  //   submitted … 代表が送信済み（経理の確認待ち）
+  //   registered / rejected … 経理が登録 / 却下
+  // enum ではなく text にしているのは、運用に合わせて区分を足すときにDBの型変更を伴わせないため。
+  status: text('status').notNull().default('draft'),
+  // AI読み取りに失敗した理由（人間向け）。読み取れなくてもファイルは預かる方針のため、
+  // 「受付は成功・読み取りだけ失敗」を区別できるようにここへ残す。
+  extract_error: text('extract_error'),
+  submitted_at: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),
+  reviewed_at: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// 経費ファイルの明細1行（ICOCAなら「07/30 神高阪急三宮→神鉄長田 鉄道利用 350円」の1行）。
+// 読み取れなかった項目は null にして人が直せるようにする（行ごと落とすと原本と対応が取れなくなる）。
+export const expenseUploadItems = pgTable('expense_upload_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  upload_id: uuid('upload_id').notNull().references(() => expenseUploads.id),
+  // 利用日。原本には年が無い（「07/30」）ため、対象年月やファイル名から補う。補えなければ null。
+  item_date: date('item_date', { mode: 'string' }),
+  from_place: text('from_place'),
+  to_place: text('to_place'),
+  description: text('description'),
+  // 原本はマイナス表記（-350 円）だが、経費としては正の数で扱うため読み取り時に絶対値へ直す。
+  amount: integer('amount').notNull().default(0),
+  // 代表が割り当てる帰属先。読み取り直後は未割当（null）。
+  client_id: uuid('client_id').references(() => clients.id),
+  // 経費科目（lib/config の EXPENSE_CATEGORIES）。選択肢は運用で変わるため列は text のままにする。
+  category: text('category'),
+  // 明細の用途（lib/config の EXPENSE_ITEM_KINDS）。金額の行き先が区分ごとに違う。
+  kind: text('kind'),
+  // 登録時に作った client_expenses の行のID。入っていること自体が「登録済み」の印になり、
+  // 二重登録の検出と、後から「この経費はどのファイルの何行目から来たか」を辿る手がかりになる。
+  // 外部キーにしていないのは、経費側の行を消したいときに控えが削除を邪魔しないようにするため。
+  registered_client_expense_id: uuid('registered_client_expense_id'),
+  // 原本（PDF）の並び順。日付が読めない行もあるため、日付でなく元の順序で並べられるようにする。
+  sort_order: integer('sort_order').notNull().default(0),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const contractorsRelations = relations(contractors, ({ many }) => ({
@@ -296,6 +362,8 @@ export const clientsRelations = relations(clients, ({ many }) => ({
   assignments: many(assignments),
   monthly_client_records: many(monthlyClientRecords),
   billing_items: many(clientBillingItems),
+  client_expenses: many(clientExpenses),
+  expense_upload_items: many(expenseUploadItems),
 }))
 
 export const clientBillingItemsRelations = relations(clientBillingItems, ({ one, many }) => ({
@@ -326,6 +394,13 @@ export const expensesRelations = relations(expenses, ({ one }) => ({
   }),
 }))
 
+export const clientExpensesRelations = relations(clientExpenses, ({ one }) => ({
+  clients: one(clients, {
+    fields: [clientExpenses.client_id],
+    references: [clients.id],
+  }),
+}))
+
 export const monthlyRecordsRelations = relations(monthlyRecords, ({ one }) => ({
   assignments: one(assignments, {
     fields: [monthlyRecords.assignment_id],
@@ -341,6 +416,21 @@ export const monthlyClientRecordsRelations = relations(monthlyClientRecords, ({ 
   billing_items: one(clientBillingItems, {
     fields: [monthlyClientRecords.billing_item_id],
     references: [clientBillingItems.id],
+  }),
+}))
+
+export const expenseUploadsRelations = relations(expenseUploads, ({ many }) => ({
+  items: many(expenseUploadItems),
+}))
+
+export const expenseUploadItemsRelations = relations(expenseUploadItems, ({ one }) => ({
+  expense_uploads: one(expenseUploads, {
+    fields: [expenseUploadItems.upload_id],
+    references: [expenseUploads.id],
+  }),
+  clients: one(clients, {
+    fields: [expenseUploadItems.client_id],
+    references: [clients.id],
   }),
 }))
 
@@ -371,6 +461,9 @@ export type TaxChatSession = typeof taxChatSessions.$inferSelect
 export type TaxChatMessage = typeof taxChatMessages.$inferSelect
 export type CronRun = typeof cronRuns.$inferSelect
 export type Expense = typeof expenses.$inferSelect
+export type ClientExpense = typeof clientExpenses.$inferSelect
 export type AppSetting = typeof appSettings.$inferSelect
 export type InvoiceUpload = typeof invoiceUploads.$inferSelect
+export type ExpenseUpload = typeof expenseUploads.$inferSelect
+export type ExpenseUploadItem = typeof expenseUploadItems.$inferSelect
 export type GoogleDriveToken = typeof googleDriveTokens.$inferSelect

@@ -122,8 +122,22 @@ export default function MasterPage() {
         </>
       )}
 
-      {/* 受付URLは委託者・クライアントのどちらにも属さない全体設定なので、タブの外に置く。 */}
-      <InvoiceUploadUrlSection onError={showError} />
+      {/* 受付URLは委託者・クライアントのどちらにも属さない全体設定なので、タブの外に置く。
+          請求書用と経費用は配る相手も再発行の影響範囲も別なので、取り違えないよう見出しと説明で書き分ける。 */}
+      <UploadUrlSection
+        title="請求書受付URL"
+        description="編集者・代行者にこのURLを渡すと、ログインなしで請求書PDFを送ってもらえます。"
+        endpoint="/api/master/invoice-token"
+        pathPrefix="/invoice"
+        onError={showError}
+      />
+      <UploadUrlSection
+        title="経費受付URL"
+        description="代表にこのURLを渡すと、ログインなしでモバイルICOCAの利用履歴や領収書を送ってもらえます。"
+        endpoint="/api/master/expense-token"
+        pathPrefix="/expense"
+        onError={showError}
+      />
       {/* ドライブ連携も受付URLと同じく請求書まわりの全体設定なので、続けて並べる。 */}
       <GoogleDriveSection onError={showError} />
     </div>
@@ -131,9 +145,18 @@ export default function MasterPage() {
 }
 
 // ─────────────────────────────────────────────
-// 請求書受付URL
+// 受付URL（請求書・経費）
 // ─────────────────────────────────────────────
-function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }) {
+// 請求書と経費で見た目・操作をそろえたいので、違うのは「どのトークンを見るか」と
+// 「どのパスのURLになるか」だけにして1つの部品にまとめる。
+// 片方だけ表示や再発行の注意書きが変わってしまうのを防ぐのが目的。
+function UploadUrlSection({ title, description, endpoint, pathPrefix, onError }: {
+  title: string
+  description: string
+  endpoint: string
+  pathPrefix: string
+  onError: (msg: string) => void
+}) {
   const [token, setToken] = useState<string | null>(null)
   // オリジン（https://ドメイン）はブラウザ側でしか分からない。サーバー描画時は空にしておき、
   // マウント後に入れることで hydration の不一致も避ける。
@@ -148,7 +171,7 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetch('/api/master/invoice-token')
+        const res = await fetch(endpoint)
         if (!res.ok) throw new Error(await readErrorMessage(res, '受付URLの取得に失敗しました。'))
         const data = await res.json()
         if (!cancelled) setToken(data.token ?? null)
@@ -157,9 +180,9 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
       }
     })()
     return () => { cancelled = true }
-  }, [onError])
+  }, [endpoint, onError])
 
-  const url = token && origin ? `${origin}/invoice/${token}` : ''
+  const url = token && origin ? `${origin}${pathPrefix}/${token}` : ''
 
   async function copy() {
     if (!url) return
@@ -176,7 +199,7 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
   async function reissue() {
     setReissuing(true)
     try {
-      const res = await fetch('/api/master/invoice-token', { method: 'POST' })
+      const res = await fetch(endpoint, { method: 'POST' })
       if (!res.ok) {
         onError(await readErrorMessage(res, '受付URLの再発行に失敗しました。'))
         return
@@ -193,10 +216,8 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
   return (
     <div className="rounded-lg border bg-white">
       <div className="border-b px-4 py-3">
-        <h2 className="font-medium">請求書受付URL</h2>
-        <p className="mt-1 text-xs text-gray-600">
-          編集者・代行者にこのURLを渡すと、ログインなしで請求書PDFを送ってもらえます。
-        </p>
+        <h2 className="font-medium">{title}</h2>
+        <p className="mt-1 text-xs text-gray-600">{description}</p>
       </div>
       <div className="space-y-3 px-4 py-3">
         {url ? (
@@ -217,9 +238,11 @@ function InvoiceUploadUrlSection({ onError }: { onError: (msg: string) => void }
       <AlertDialog open={reissueOpen} onOpenChange={(open) => { if (!open) setReissueOpen(false) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>受付URLを再発行しますか？</AlertDialogTitle>
+            {/* 受付URLが2種類あるため、どちらを再発行しようとしているのかを見出しに出す。 */}
+            <AlertDialogTitle>{title}を再発行しますか？</AlertDialogTitle>
             <AlertDialogDescription>
-              再発行すると、今までに配ったURLは使えなくなります。新しいURLを関係者に配り直してください。
+              再発行すると、今までに配った{title}は使えなくなります（もう一方の受付URLはそのまま使えます）。
+              新しいURLを関係者に配り直してください。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

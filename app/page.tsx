@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, invoiceUploads } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
 import type { InvoiceAlertCounts } from '@/lib/ui-types'
 import { nowJST } from '@/lib/dates'
@@ -32,6 +32,7 @@ export default async function DashboardPage({
     allClientRecordsForCarryOver,
     allGlobalTasksForCarryOver,
     monthExpenses,
+    monthClientExpenses,
     invoiceStatusCountRows,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
@@ -98,6 +99,11 @@ export default async function DashboardPage({
     db.query.expenses.findMany({
       where: and(eq(expenses.year, year), eq(expenses.month, month)),
       orderBy: [asc(expenses.created_at)],
+    }),
+    // 自社経費（自社が直接払う分）。委託者への支払いには乗らず、クライアントへの請求にだけ加算する。
+    db.query.clientExpenses.findMany({
+      where: and(eq(clientExpenses.year, year), eq(clientExpenses.month, month)),
+      orderBy: [asc(clientExpenses.created_at)],
     }),
     // 受け付けた請求書の状態別件数。請求書は月に紐づかない（対象月が読み取れない行もある）ため、
     // 表示中の月では絞らず全件を数える。
@@ -181,6 +187,7 @@ export default async function DashboardPage({
       paidCounts={paidCounts}
       assignmentPaymentCounts={assignmentPaymentCounts}
       expenses={monthExpenses}
+      clientExpenses={monthClientExpenses}
       mfExpense={mfExpense ? { amount: mfExpense.amount, syncedAt: mfExpense.synced_at } : null}
       mfConnected={mfConnected}
       mfExpired={mfExpired}

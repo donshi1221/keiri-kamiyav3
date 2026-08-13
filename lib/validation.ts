@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { EXPENSE_CATEGORIES, EXPENSE_ITEM_KINDS } from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -115,6 +116,20 @@ export const expenseCreateSchema = z.object({
   note: z.string().trim().nullish(),
 })
 
+// 自社が直接払った経費（素材購入費・広告費など）。委託者を経由しないためクライアントへ直接ぶら下げる。
+// 委託者への支払いには一切乗らず、クライアントへの請求にだけ加算される点が立替経費と異なる。
+export const clientExpenseCreateSchema = z.object({
+  client_id: z.uuid({ message: 'クライアントの指定が不正です' }),
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+  expense_date: z.preprocess(
+    (v) => (v === '' || v === undefined ? null : v),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: '日付はYYYY-MM-DD形式で入力してください' }).nullable()
+  ),
+  amount: moneyInt,
+  note: z.string().trim().nullish(),
+})
+
 // ─── 請求書チェック（読み取り結果の手動修正）─────────────────────────────
 // extracted_* は「読み取れなかった」を null で表す列。空欄を 0 や空文字に丸めると
 // 「請求書にそう書いてあった」と区別が付かなくなるため、未入力は必ず null に寄せる。
@@ -167,6 +182,42 @@ export const invoiceReminderSendSchema = z.object({
   month: z.coerce.number().int().min(1).max(12),
   contractorIds: z.array(z.uuid({ message: '委託者の指定が不正です' })).min(1, { message: '送信先を1人以上選んでください' }),
   template: z.string().trim().min(1, { message: '文面を入力してください' }),
+})
+
+// ─── 経費アップロード（代表の割り当て送信）─────────────────────────────
+// 明細1行ごとに「どのクライアントの分か（client_id）」「経費科目（category）」を代表が選ぶ。
+// 必須の条件が用途（kind）で変わるため、行単位で superRefine を掛ける:
+//   client_billed … クライアントへ請求するので、請求先と科目の両方が要る
+//   company       … 自社経費。科目は要るが、クライアントに紐づかないので client_id は任意
+//   excluded      … 対象外。どこにも計上しないため両方不要
+const expenseItemClientId = z.preprocess(
+  (v) => (v === '' || v === undefined ? null : v),
+  z.uuid({ message: 'クライアントの指定が不正です' }).nullable()
+)
+const expenseItemCategory = z.preprocess(
+  (v) => (v === '' || v === undefined ? null : v),
+  z.enum(EXPENSE_CATEGORIES, { message: '経費科目の指定が不正です' }).nullable()
+)
+
+const expenseItemAssignSchema = z
+  .object({
+    id: z.uuid({ message: '明細の指定が不正です' }),
+    kind: z.enum(EXPENSE_ITEM_KINDS, { message: '用途を選んでください' }),
+    client_id: expenseItemClientId,
+    category: expenseItemCategory,
+  })
+  .superRefine((item, ctx) => {
+    if (item.kind === 'client_billed' && !item.client_id) {
+      ctx.addIssue({ code: 'custom', path: ['client_id'], message: 'クライアントに請求する明細はクライアントを選んでください' })
+    }
+    if (item.kind !== 'excluded' && !item.category) {
+      ctx.addIssue({ code: 'custom', path: ['category'], message: '経費科目を選んでください' })
+    }
+  })
+
+// 明細が1件も無い送信は、読み取り前・読み取り失敗のまま送られた事故なので弾く。
+export const expenseSubmitSchema = z.object({
+  items: z.array(expenseItemAssignSchema).min(1, { message: '明細が1件もありません' }),
 })
 
 export const snapshotBackfillSchema = z.object({
