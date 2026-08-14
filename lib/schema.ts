@@ -213,6 +213,8 @@ export const expenses = pgTable('expenses', {
   expense_date: date('expense_date', { mode: 'string' }),
   amount: integer('amount').notNull().default(0),
   note: text('note'),
+  // 請求書送付チェック。内訳（monthly_client_records）の送付とは別に、経費分の請求漏れを追えるようにする。
+  invoice_sent_at: timestamp('invoice_sent_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
@@ -229,6 +231,8 @@ export const clientExpenses = pgTable('client_expenses', {
   expense_date: date('expense_date', { mode: 'string' }),
   amount: integer('amount').notNull().default(0),
   note: text('note'),
+  // 請求書送付チェック（expenses と同じ扱い）。
+  invoice_sent_at: timestamp('invoice_sent_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

@@ -555,6 +555,8 @@ export default function DashboardClient({
   // グループ一括（委託者の支払い確認／クライアントの入金確認）を外すときの確認待ち。
   const [pendingGroupUncheck, setPendingGroupUncheck] = useState<{ kind: 'contractor' | 'client'; ids: string[] } | null>(null)
   const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
+  // 経費行（立替経費・自社経費）の送付チェックを外すときの確認待ち。クライアント単位で持つ。
+  const [pendingExpenseUncheck, setPendingExpenseUncheck] = useState<{ kind: 'expense' | 'clientExpense'; clientId: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [mfExpense, setMfExpense] = useState(initialMfExpense)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -1253,6 +1255,69 @@ export default function DashboardClient({
     } catch (err) {
       showError(err instanceof Error ? err.message : '自社経費の追加に失敗しました。')
     }
+  }
+
+  // ─── 経費の請求書送付チェック ─────────────────────────────
+  // 請求書はクライアント単位で1通のため、操作は行（そのクライアントの経費一覧）単位でまとめて行う。
+  // 保存は経費1件ごとに持つ（後から経費を1件消しても、残りの送付記録が消えないようにするため）。
+  async function toggleExpensesSent(kind: 'expense' | 'clientExpense', ids: string[], nextChecked: boolean) {
+    const source: { id: string; invoice_sent_at: string | null }[] =
+      kind === 'expense' ? localExpenses : localClientExpenses
+    const prev = new Map(ids.map((id) => [id, source.find((e) => e.id === id)?.invoice_sent_at ?? null]))
+    const stamp = nextChecked ? new Date().toISOString() : null
+    const patch = <T extends { id: string; invoice_sent_at: string | null }>(list: T[], value: (id: string) => string | null): T[] =>
+      list.map((e) => (ids.includes(e.id) ? { ...e, invoice_sent_at: value(e.id) } : e))
+    if (kind === 'expense') setLocalExpenses((l) => patch(l, () => stamp))
+    else setLocalClientExpenses((l) => patch(l, () => stamp))
+    try {
+      const base = kind === 'expense' ? '/api/expenses' : '/api/client-expenses'
+      const results = await Promise.all(ids.map((id) =>
+        fetch(`${base}/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checked: nextChecked }),
+        })
+      ))
+      if (results.some((res) => !res.ok)) throw new Error('save failed')
+    } catch {
+      // どれか失敗したら、この行の分だけまとめて元へ戻す（他の行の変更は保持）。
+      if (kind === 'expense') setLocalExpenses((l) => patch(l, (id) => prev.get(id) ?? null))
+      else setLocalClientExpenses((l) => patch(l, (id) => prev.get(id) ?? null))
+      showError('保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  function requestExpensesSent(kind: 'expense' | 'clientExpense', clientId: string, ids: string[], currentlyAllChecked: boolean) {
+    if (currentlyAllChecked) setPendingExpenseUncheck({ kind, clientId })
+    else toggleExpensesSent(kind, ids, true)
+  }
+
+  // 経費行の送付チェック。内訳の送付と同じ見た目・作法（外すときだけ確認／未チェックは期限バッジ）に揃える。
+  const renderExpenseSentCheck = (
+    kind: 'expense' | 'clientExpense',
+    clientId: string,
+    clientName: string,
+    items: { id: string; invoice_sent_at: string | null }[]
+  ) => {
+    const ids = items.map((e) => e.id)
+    const allSent = items.length > 0 && items.every((e) => !!e.invoice_sent_at)
+    const sentAt = allSent
+      ? items.reduce<string | null>((max, e) => (!max || (e.invoice_sent_at && e.invoice_sent_at > max) ? e.invoice_sent_at : max), null)
+      : null
+    const state: DueState = isCurrentMonth ? getDueState(day, 15, sentAt) : (allSent ? 'done' : 'upcoming')
+    const rowLabel = kind === 'expense' ? '立替経費' : '自社経費'
+    return (
+      <MoneyCheckControl
+        checked={allSent}
+        checkedAt={sentAt}
+        pending={pendingExpenseUncheck?.kind === kind && pendingExpenseUncheck.clientId === clientId}
+        label={`${clientName}（${rowLabel}）の請求書送付`}
+        onRequest={() => requestExpensesSent(kind, clientId, ids, allSent)}
+        onConfirm={() => { setPendingExpenseUncheck(null); toggleExpensesSent(kind, ids, false) }}
+        onCancel={() => setPendingExpenseUncheck(null)}
+        badge={isCurrentMonth && !allSent && <DueBadge state={state} />}
+      />
+    )
   }
 
   async function deleteClientExpense(id: string) {
@@ -2195,7 +2260,10 @@ export default function DashboardClient({
                               </span>
                             </td>
                             <td className="py-3 px-3 text-right text-gray-600">¥{expenseTotal.toLocaleString()}</td>
-                            <td colSpan={2} />
+                            <td className="text-center py-3 px-3">
+                              {renderExpenseSentCheck('expense', g.clientId, g.clientName, passThroughExpenses)}
+                            </td>
+                            <td />
                           </tr>
                         )]
                       : []
@@ -2220,7 +2288,11 @@ export default function DashboardClient({
                         <td className="py-3 px-3 text-right align-top text-gray-600">
                           {selfExpenseTotal > 0 ? `¥${selfExpenseTotal.toLocaleString()}` : '—'}
                         </td>
-                        <td colSpan={2} />
+                        <td className="text-center py-3 px-3 align-top">
+                          {/* 経費が無い月はチェックする対象が無いため出さない。 */}
+                          {selfExpenses.length > 0 && renderExpenseSentCheck('clientExpense', g.clientId, g.clientName, selfExpenses)}
+                        </td>
+                        <td />
                       </tr>
                     )]
                     return [...headerRow, ...itemRows, ...expenseRow, ...selfExpenseRow]
@@ -2338,14 +2410,20 @@ export default function DashboardClient({
                         )
                       })}
                       {expenseTotal > 0 && (
-                        <div className="flex items-start justify-between gap-2 text-sm">
-                          <span className="min-w-0 text-gray-600">
-                            立替経費
-                            <span className="ml-1 text-xs text-gray-500">
-                              （{passThroughExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
+                        <div className="text-sm">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 text-gray-600">
+                              立替経費
+                              <span className="ml-1 text-xs text-gray-500">
+                                （{passThroughExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
+                              </span>
                             </span>
-                          </span>
-                          <span className="shrink-0 text-gray-600">¥{expenseTotal.toLocaleString()}</span>
+                            <span className="shrink-0 text-gray-600">¥{expenseTotal.toLocaleString()}</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-end gap-2">
+                            <span className="text-xs text-gray-500">送付</span>
+                            {renderExpenseSentCheck('expense', g.clientId, g.clientName, passThroughExpenses)}
+                          </div>
                         </div>
                       )}
                       {/* 自社経費。委託者に払う立替経費と取り違えないよう、別の見出しで並べる。 */}
@@ -2356,6 +2434,12 @@ export default function DashboardClient({
                             {selfExpenseTotal > 0 ? `¥${selfExpenseTotal.toLocaleString()}` : '—'}
                           </span>
                         </div>
+                        {selfExpenses.length > 0 && (
+                          <div className="mt-1 flex items-center justify-end gap-2">
+                            <span className="text-xs text-gray-500">送付</span>
+                            {renderExpenseSentCheck('clientExpense', g.clientId, g.clientName, selfExpenses)}
+                          </div>
+                        )}
                         <ExpenseBlock
                           items={selfExpenses}
                           formOpen={clientExpenseFormFor === g.clientId}
