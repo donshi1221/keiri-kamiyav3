@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EXPENSE_CATEGORIES, EXPENSE_ITEM_KINDS } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS } from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -185,18 +185,14 @@ export const invoiceReminderSendSchema = z.object({
 })
 
 // ─── 経費アップロード（代表の割り当て送信）─────────────────────────────
-// 明細1行ごとに「どのクライアントの分か（client_id）」「経費科目（category）」を代表が選ぶ。
-// 必須の条件が用途（kind）で変わるため、行単位で superRefine を掛ける:
-//   client_billed … クライアントへ請求するので、請求先と科目の両方が要る
-//   company       … 自社経費。科目は要るが、クライアントに紐づかないので client_id は任意
-//   excluded      … 対象外。どこにも計上しないため両方不要
+// 明細1行ごとに「用途（kind）」と「どのクライアントの分か（client_id）」を代表が選ぶ。
+// 必須の条件が用途で変わるため、行単位で superRefine を掛ける:
+//   client_billed … クライアントへ請求するので請求先が要る
+//   company       … 自社経費。クライアントに紐づかないので client_id は任意
+//   excluded      … 対象外。どこにも計上しないため不要
 const expenseItemClientId = z.preprocess(
   (v) => (v === '' || v === undefined ? null : v),
   z.uuid({ message: 'クライアントの指定が不正です' }).nullable()
-)
-const expenseItemCategory = z.preprocess(
-  (v) => (v === '' || v === undefined ? null : v),
-  z.enum(EXPENSE_CATEGORIES, { message: '経費科目の指定が不正です' }).nullable()
 )
 
 const expenseItemAssignSchema = z
@@ -204,14 +200,10 @@ const expenseItemAssignSchema = z
     id: z.uuid({ message: '明細の指定が不正です' }),
     kind: z.enum(EXPENSE_ITEM_KINDS, { message: '用途を選んでください' }),
     client_id: expenseItemClientId,
-    category: expenseItemCategory,
   })
   .superRefine((item, ctx) => {
     if (item.kind === 'client_billed' && !item.client_id) {
       ctx.addIssue({ code: 'custom', path: ['client_id'], message: 'クライアントに請求する明細はクライアントを選んでください' })
-    }
-    if (item.kind !== 'excluded' && !item.category) {
-      ctx.addIssue({ code: 'custom', path: ['category'], message: '経費科目を選んでください' })
     }
   })
 

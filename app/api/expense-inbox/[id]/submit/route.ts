@@ -54,10 +54,9 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
         .update(expenseUploadItems)
         .set({
           kind: item.kind,
-          // 対象外の行にクライアント・科目が残っていると、後から見て「請求するのか」が読めなくなる。
+          // 対象外の行にクライアントが残っていると、後から見て「請求するのか」が読めなくなる。
           // 検証では任意にしているため、意味の無い値はここで消してから保存する。
           client_id: item.kind === 'excluded' ? null : item.client_id,
-          category: item.kind === 'excluded' ? null : item.category,
         })
         .where(eq(expenseUploadItems.id, item.id))
     }

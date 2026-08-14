@@ -140,7 +140,7 @@ export default function ExpenseCheckClient() {
       } else {
         setNotice(
           `「${row.file_name}」を読み取り直しました。この受付は代表の割当待ち（割当中）に戻ります。` +
-            '代表に受付URLからクライアント・経費科目の割り当てと送信をご依頼ください。' +
+            '代表に受付URLから区分・クライアントの割り当てと送信をご依頼ください。' +
             '（この一覧には「登録済み・却下も表示する」で確認できます）'
         )
       }
@@ -275,7 +275,6 @@ export default function ExpenseCheckClient() {
                     <th className="w-[7rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">金額</th>
                     <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">区分</th>
                     <th className="w-[10rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">クライアント</th>
-                    <th className="w-[11rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">経費科目</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -295,7 +294,6 @@ export default function ExpenseCheckClient() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-gray-700">{item.client_name ?? '—'}</td>
-                      <td className="px-3 py-2 text-gray-700">{item.category ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -326,10 +324,6 @@ export default function ExpenseCheckClient() {
                     <div className="flex justify-between gap-3">
                       <span className="shrink-0 text-gray-500">クライアント</span>
                       <span className="text-right text-gray-700">{item.client_name ?? '—'}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="shrink-0 text-gray-500">経費科目</span>
-                      <span className="text-right text-gray-700">{item.category ?? '—'}</span>
                     </div>
                     {item.description && formatExpenseRoute(item.from_place, item.to_place) && (
                       <div className="flex justify-between gap-3">

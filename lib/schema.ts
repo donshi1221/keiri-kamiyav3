@@ -339,7 +339,9 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   amount: integer('amount').notNull().default(0),
   // 代表が割り当てる帰属先。読み取り直後は未割当（null）。
   client_id: uuid('client_id').references(() => clients.id),
-  // 経費科目（lib/config の EXPENSE_CATEGORIES）。選択肢は運用で変わるため列は text のままにする。
+  // 経費科目。現在は使っていない（代表に選ばせるのをやめたため常に null が入る）。
+  // 列を消すには別のマイグレーションが要るうえ、残しても実害が無く、科目を復活させたくなったときに
+  // そのまま使えるため、適用済みの 0020 のまま据え置く。
   category: text('category'),
   // 明細の用途（lib/config の EXPENSE_ITEM_KINDS）。金額の行き先が区分ごとに違う。
   kind: text('kind'),

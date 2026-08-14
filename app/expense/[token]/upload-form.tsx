@@ -3,10 +3,9 @@
 import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { EXPENSE_CATEGORIES, EXPENSE_ITEM_KINDS } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS } from '@/lib/config'
 import type { Client, ExpenseUploadItem } from '@/lib/schema'
 import type {
-  ExpenseCategory,
   ExpenseInboxResponse,
   ExpenseItemAssignment,
   ExpenseItemKind,
@@ -23,17 +22,14 @@ import {
 type ItemDraft = {
   kind: ExpenseItemKind | ''
   clientId: string
-  category: ExpenseCategory | ''
 }
 
-const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '', category: '' }
+const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '' }
 
 // 送信できる状態か。サーバー側の検証（lib/validation の expenseItemAssignSchema）と同じ条件にして、
 // 画面では通るのに送信で弾かれる、という食い違いを避ける。
 function isComplete(draft: ItemDraft): boolean {
   if (draft.kind === '') return false
-  if (draft.kind === 'excluded') return true
-  if (draft.category === '') return false
   return draft.kind !== 'client_billed' || draft.clientId !== ''
 }
 
@@ -42,9 +38,9 @@ async function readErrorMessage(res: Response, fallback: string) {
   return typeof data?.error === 'string' ? data.error : fallback
 }
 
-// 区分・クライアント・経費科目の3つを選ぶ部品。1行ごとの割り当てと「まとめて設定」で同じものを使う。
-// クライアントは「クライアントに請求」のときだけ、経費科目は「対象外」以外のときだけ出す。
-// 区分が未選択のうちに後続の欄を出すと、スマホの狭い画面で意味のない欄が場所を取るため出さない。
+// 区分・クライアントの2つを選ぶ部品。明細1行ごとの割り当てに使う。
+// クライアントは「クライアントに請求」のときだけ出す。区分が未選択のうちに後続の欄を出すと、
+// スマホの狭い画面で意味のない欄が場所を取るため出さない。
 function AssignFields({
   draft,
   clients,
@@ -100,27 +96,6 @@ function AssignFields({
           </select>
         </div>
       )}
-
-      {(draft.kind === 'client_billed' || draft.kind === 'company') && (
-        <div>
-          <label htmlFor={`${idPrefix}-category`} className="mb-1 block text-xs font-medium text-gray-600">
-            経費科目
-          </label>
-          <select
-            id={`${idPrefix}-category`}
-            value={draft.category}
-            onChange={(e) => onChange({ ...draft, category: e.target.value as ItemDraft['category'] })}
-            className={selectClass}
-          >
-            <option value="">選択してください</option>
-            {EXPENSE_CATEGORIES.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
     </div>
   )
 }
@@ -137,7 +112,6 @@ export default function ExpenseUploadForm({
   const [error, setError] = useState('')
   const [inbox, setInbox] = useState<ExpenseInboxResponse | null>(null)
   const [drafts, setDrafts] = useState<Record<string, ItemDraft>>({})
-  const [bulk, setBulk] = useState<ItemDraft>(EMPTY_DRAFT)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -161,11 +135,6 @@ export default function ExpenseUploadForm({
 
   function updateDraft(id: string, next: ItemDraft) {
     setDrafts((prev) => ({ ...prev, [id]: next }))
-  }
-
-  // 同じ出張のファイルは全行が同じ割り当てになることが多いため、1回の操作で全行を埋められるようにする。
-  function applyToAll(draft: ItemDraft) {
-    setDrafts(Object.fromEntries(items.map((item) => [item.id, { ...draft }])))
   }
 
   // ある行の選択を同じ日の行へ配る。往復2行を1件ずつ選ぶ手間をなくすのが目的。
@@ -199,7 +168,6 @@ export default function ExpenseUploadForm({
       const data = (await res.json()) as ExpenseInboxResponse
       setInbox(data)
       setDrafts(Object.fromEntries(data.items.map((item) => [item.id, EMPTY_DRAFT])))
-      setBulk(EMPTY_DRAFT)
     } catch {
       // 通信断でも fetch は例外になる。戻さないと「読み取っています…」でボタンが固着する。
       setUploading(false)
@@ -212,7 +180,7 @@ export default function ExpenseUploadForm({
     setSubmitting(true)
     setError('')
 
-    // 「対象外」の行にクライアント・科目を付けたまま送らない。選び直しの途中経過が
+    // 「対象外」の行にクライアントを付けたまま送らない。選び直しの途中経過が
     // そのまま経理に見えると、請求するのかどうかが読めなくなるため。
     const payload: ExpenseItemAssignment[] = inbox.items.map((item) => {
       const draft = drafts[item.id] ?? EMPTY_DRAFT
@@ -220,7 +188,6 @@ export default function ExpenseUploadForm({
         id: item.id,
         kind: draft.kind as ExpenseItemKind,
         client_id: draft.kind === 'client_billed' ? draft.clientId : null,
-        category: draft.kind === 'excluded' || draft.category === '' ? null : draft.category,
       }
     })
 
@@ -246,7 +213,6 @@ export default function ExpenseUploadForm({
     setFile(null)
     setInbox(null)
     setDrafts({})
-    setBulk(EMPTY_DRAFT)
     setDone(false)
     setError('')
     if (inputRef.current) inputRef.current.value = ''
@@ -335,23 +301,6 @@ export default function ExpenseUploadForm({
         </p>
       </div>
 
-      {/* 1ファイルが同じクライアントの出張で埋まることが多いため、全行を一度に埋める入口を先頭に置く。 */}
-      <div className="rounded-lg border border-info-subtle bg-info-subtle px-4 py-3">
-        <p className="text-sm font-medium text-info">まとめて設定</p>
-        <p className="mt-1 mb-2 text-xs text-info">
-          全部の行が同じ内容なら、ここで選んで一括で当てはめられます。あとから行ごとに直せます。
-        </p>
-        <AssignFields draft={bulk} clients={clients} onChange={setBulk} idPrefix="bulk" />
-        <Button
-          type="button"
-          className="mt-3 h-11 w-full md:h-9"
-          onClick={() => applyToAll(bulk)}
-          disabled={!isComplete(bulk)}
-        >
-          全{items.length}件に適用
-        </Button>
-      </div>
-
       {groups.map((group) => (
         <div key={group.date || 'no-date'} className="space-y-2">
           <div className="flex items-baseline justify-between gap-2 px-1">
@@ -403,7 +352,7 @@ export default function ExpenseUploadForm({
                     onClick={() => applyToDate(group.date, draft)}
                     disabled={!complete}
                   >
-                    この日の{group.rows.length}件に適用
+                    同日の明細に適用
                   </Button>
                 )}
               </div>

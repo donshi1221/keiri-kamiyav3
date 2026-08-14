@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems, clientExpenses } from '@/lib/schema'
+import { nextMonthOf } from '@/lib/dates'
 
 // 経理の最終判断（登録）。代表が割り当てた明細のうち、クライアントに請求する分だけを
 // client_expenses（自社が直接払い、クライアントへ請求する経費）へ登録する。
@@ -34,10 +35,10 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
 
     // 1行でも欠けていれば何も登録しない。一部だけ入った状態は「どこまで登録したか」が
     // 画面から分からず、続きを人が手で埋める羽目になるため。
-    const invalid = billed.find((item) => !item.item_date || !item.client_id || !item.category)
+    const invalid = billed.find((item) => !item.item_date || !item.client_id)
     if (invalid) {
       const line = invalid.sort_order + 1
-      const reason = !invalid.item_date ? '利用日' : !invalid.client_id ? 'クライアント' : '経費科目'
+      const reason = !invalid.item_date ? '利用日' : 'クライアント'
       return Response.json(
         { error: `${line}行目の${reason}が未入力のため登録できません。` },
         { status: 400 }
@@ -50,15 +51,16 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
     for (const item of billed) {
       if (item.registered_client_expense_id) continue
 
-      // year / month は「どの月の請求に乗せるか」。利用日そのものから導く（date列は YYYY-MM-DD 固定）。
+      // year / month は「どの月の請求に乗せるか」。7月に使った交通費は8月の請求に乗る運用なので、
+      // 利用日の月そのものではなく翌月にする（委託者への支払いが翌月なのと同じ考え方）。
+      // expense_date には利用日をそのまま残す。いつ移動したのかは請求月とは別に追えるようにするため。
       const itemDate = item.item_date!
-      const year = Number(itemDate.slice(0, 4))
-      const month = Number(itemDate.slice(5, 7))
+      const { year, month } = nextMonthOf(Number(itemDate.slice(0, 4)), Number(itemDate.slice(5, 7)))
 
-      // client_expenses には科目の列が無いため、科目と区間・内容をまとめて摘要（note）に残す。
+      // client_expenses には区間・内容の列が無いため、まとめて摘要（note）に残す。
       // 後から「何の経費か」を追えるようにするのが目的。
       const route = [item.from_place, item.to_place].filter(Boolean).join('→')
-      const note = [item.category, route, item.description].filter(Boolean).join(' ')
+      const note = [route, item.description].filter(Boolean).join(' ')
 
       const [inserted] = await db
         .insert(clientExpenses)

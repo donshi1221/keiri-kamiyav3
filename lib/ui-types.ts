@@ -11,7 +11,7 @@ import type {
 } from './schema'
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
 // import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
-import type { EXPENSE_CATEGORIES, EXPENSE_ITEM_KINDS } from './config'
+import type { EXPENSE_ITEM_KINDS } from './config'
 
 // ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
 // 以前はコンポーネント側にコピペされ、実クエリと形が食い違ったまま `as any` で握りつぶされていた。
@@ -246,11 +246,9 @@ export interface InvoiceReminderSendResult {
 }
 
 // ─── 経費アップロード（モバイルICOCA・特急券など）─────────────────────────────
+// 明細1行の用途。金額の行き先が区分ごとに違う（client_billed だけが client_expenses に入る）。
 // 選択肢そのものは lib/config に置き、型はそこから導く。値と型を別々に書くと、
 // 選択肢を足したときに型だけ古いままになって「選べるのに型エラー」が起きるため。
-export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]
-
-// 明細1行の用途。金額の行き先が区分ごとに違う（client_billed だけが client_expenses に入る）。
 export type ExpenseItemKind = (typeof EXPENSE_ITEM_KINDS)[number]
 
 // AI読み取り（lib/expense-extract）が返す明細1行。列名（expense_upload_items）と1対1に対応させ、
@@ -281,7 +279,6 @@ export interface ExpenseItemAssignment {
   id: string
   kind: ExpenseItemKind
   client_id: string | null
-  category: ExpenseCategory | null
 }
 
 // 受付API（POST /api/expense-inbox）の応答。読み取った明細をそのまま返すのは、

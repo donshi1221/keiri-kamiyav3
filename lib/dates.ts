@@ -13,6 +13,14 @@ export function getLastDayOfMonth(year: number, month: number): number {
   return getDaysInMonth(new Date(year, month - 1))
 }
 
+// 翌月の年月。12月→翌年1月の繰り上がりを自前の +1 で書くと年をまたげないため Date に委ねる。
+// 「その月に発生した分を翌月に請求・精算する」という運用がこのアプリの各所にあり
+// （委託者への支払い・クライアントへの請求）、その月ずらしをここに集約する。
+export function nextMonthOf(year: number, month: number): { year: number; month: number } {
+  const d = new Date(year, month, 1)
+  return { year: d.getFullYear(), month: d.getMonth() + 1 }
+}
+
 export function isInReminderWindow(today: number, deadlineDay: number): boolean {
   return today >= deadlineDay - 3
 }

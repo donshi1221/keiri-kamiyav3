@@ -28,7 +28,7 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
     if (!row) return Response.json({ error: 'Not found' }, { status: 404 })
 
     // 読み取り直すと明細（expense_upload_items）を作り直すため、代表が行ごとに割り当てた
-    // クライアント・経費科目、および登録済みの控えがすべて消えてしまう。
+    // 区分・クライアント、および登録済みの控えがすべて消えてしまう。
     // まだ誰も割り当てていない draft のときだけ許し、それ以外は入口で止める。
     if (row.status !== 'draft') {
       return Response.json(
