@@ -9,9 +9,77 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
-// 税務AIチャットと請求書読み取りで使う Gemini のモデル名。
+// Gemini のモデル名（税務AIチャットが直接使い、下の切り替え一覧の先頭にもなる）。
 // 固定バージョン名は提供終了で 429/404 になった実績があるため、常に最新を指す別名を既定にする。
 export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest'
+
+// 書類の読み取り（lib/expense-extract・lib/invoice-extract）が使う、上から順に試すモデル名の一覧。
+// 実測で、同時刻・同じプロンプトでもモデルごとに可用性が違った:
+//   gemini-flash-latest → 503（混雑） / gemini-flash-lite-latest → 200 / gemini-pro-latest → 429（クォータ超過）
+// つまり混雑しているモデルを待って粘るより、別のモデルへ移ったほうが速く読める。
+// 税務AIチャットは対話的で利用者がその場でやり直せるため切り替えの対象にしておらず、
+// GEMINI_MODEL を直接参照し続ける。そちらの挙動を変えないよう一覧はここに別途持つ。
+const GEMINI_MODEL_FALLBACKS_RAW =
+  process.env.GEMINI_MODEL_FALLBACKS?.trim() || `${GEMINI_MODEL},gemini-flash-lite-latest`
+// 重複を取り除くのは、GEMINI_MODEL を lite に切り替えたときに同じモデルを2回試して
+// 締め切りを無駄に食いつぶすのを避けるため。
+export const GEMINI_MODEL_FALLBACKS = Array.from(
+  new Set(
+    GEMINI_MODEL_FALLBACKS_RAW.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )
+)
+
+// ─── AI呼び出しの自動リトライ（lib/ai-retry）─────────────────────────────
+// Gemini は混雑（503）やレート制限（429）で一時的に落ちることがある。数秒おいて叩き直せば
+// たいてい通るのに、そのまま失敗として残すと利用者が自力で復旧できない状態が積み上がるため、
+// サーバー側で黙って数回やり直す。
+// 初回を含めた最大試行回数。増やすほど成功率は上がるが、その分利用者を待たせることになる。
+export const AI_RETRY_MAX_ATTEMPTS = intFromEnv('AI_RETRY_MAX_ATTEMPTS', 3)
+
+// 失敗してから次の試行までの待ち時間（ミリ秒）を、2回目・3回目…の順に並べたもの。
+// 段階的に延ばすのは、混雑がすぐ収まらなかったときに間隔を空けたほうが空きを拾いやすいため。
+// 待ち時間を短く抑えても、これだけでは時間を制御できない。実測では 503（混雑）の応答が
+// 返ってくるまでに 32.8秒 / 11.5秒 / 0.9秒（3回計測）かかり、最長で約33秒だった。
+// つまり支配的なのは待ち時間ではなく「1回の呼び出しが返るまでの時間」で、最悪の場合
+// 33 + 2 + 33 + 5 + 33 = 約106秒となり、呼び出し元ルートの maxDuration = 60 秒を大きく超える。
+// 超えると関数ごと強制終了され、失敗の記録すら残らない。そのため回数と待ち時間だけに頼らず、
+// 下の AI_RETRY_BUDGET_MS による締め切りで必ず打ち切る。
+export const AI_RETRY_DELAYS_MS = (process.env.AI_RETRY_DELAYS_MS ?? '2000,5000')
+  .split(',')
+  .map((s) => Number(s.trim()))
+  .filter((n) => Number.isFinite(n) && n >= 0)
+
+// AI呼び出し全体（再試行・モデル切り替えを含めた通算）に使ってよい時間の上限（ミリ秒）。
+// 呼び出し元のルートは maxDuration = 60 秒で強制終了されるが、そこまで使い切ってしまうと
+// 読み取りの後続処理まで到達できず、利用者の画面には理由が何も残らない。
+// 40秒にしているのは、請求書の受付（app/api/invoice-inbox）が1リクエストの中で
+// 「読み取り → 照合」まで続けて行い、照合が外部のGoogleスプレッドシートを
+// アサインの数だけ読むため（実測4〜5秒。ドライブ保存が走る回はさらに数秒）。
+// 50秒だと読み取りだけで使い切り、照合込みで60秒に届いてしまう。
+export const AI_RETRY_BUDGET_MS = intFromEnv('AI_RETRY_BUDGET_MS', 40_000)
+
+// AI呼び出し1回あたりの制限時間（ミリ秒）。この時間内に応答が返らなければ自分から打ち切る。
+// 上の AI_RETRY_BUDGET_MS（全体の締め切り）は「失敗を受け取ったとき」にしか判定が走らないため、
+// 相手が何も返さないまま黙り込むケースには一切効かない。実測でも gemini-flash-latest に
+// PDFを渡した呼び出しが 113秒以上まったく応答を返さない状態が3回とも再現し、その間ずっと
+// 締め切り判定は一度も動かなかった。放っておくと呼び出し元ルートの maxDuration（60秒）に達して
+// 関数ごと強制終了され、失敗の記録すら残らない（利用者の画面には理由が何も出ない）という実害が出る。
+// 既定を20秒にしているのは、全体予算40秒を2つのモデルで等分するため。
+// 1つ目が無応答で20秒使い切っても、2つ目にちょうど20秒残る。
+// 実測で gemini-flash-lite-latest は同じPDFを約15秒で読めているので、20秒あれば間に合う。
+// 25秒にすると2つ目に15秒しか残らず、その15秒とほぼ同じ時間がかかる2つ目まで
+// 打ち切ってしまい、「どちらのモデルでも読めない」結果になりかねない。
+// なお実際に使う値は、残り予算で頭打ちにする（lib/ai-retry の effectiveRequestTimeoutMs）。
+// この値をそのまま毎回使うと、モデルを切り替えるたびに満額の25秒が新しく与えられ、
+// 1つ目25秒＋2つ目25秒＝読み取りだけで50秒となって AI_RETRY_BUDGET_MS が骨抜きになる。
+export const AI_REQUEST_TIMEOUT_MS = intFromEnv('AI_REQUEST_TIMEOUT_MS', 20_000)
+
+// 残り予算で頭打ちにした結果、これを下回るならもう呼び出さない（ミリ秒）。
+// 数秒しか残っていない状態で叩いても応答が返る前に打ち切られるだけで、待たせるだけ無駄になる。
+// それより早く失敗理由をDBに書き戻したほうが、利用者は原因を追って再読み取りできる。
+export const AI_REQUEST_MIN_TIMEOUT_MS = intFromEnv('AI_REQUEST_MIN_TIMEOUT_MS', 3_000)
 
 // 税務アドバイスのファイルアップロード上限（バイト）。既定 5MB。
 export const UPLOAD_MAX_BYTES = intFromEnv('UPLOAD_MAX_BYTES', 5 * 1024 * 1024)

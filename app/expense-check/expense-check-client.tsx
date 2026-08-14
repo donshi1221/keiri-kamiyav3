@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import type { ExpenseUploadRow, ExpenseUploadItemRow } from '@/lib/ui-types'
+import type { ExpenseUploadRow, ExpenseUploadItemRow, ExpenseExtractOutcome } from '@/lib/ui-types'
 import {
   EXPENSE_KIND_LABEL,
   formatExpenseAmount,
@@ -25,20 +25,33 @@ import {
 
 // 状態は text 列（enum ではない）なので、未知の値が入っていても画面が壊れないよう
 // 対応表に無いときは値そのものを出す作りにする。
+// extract_failed はDBには無い、画面だけの区分（draft かつ読み取りエラーあり）。
+// 同じ draft でも「代表が割当中」と「AIが読めずに止まっている」では経理のすべきことが正反対なので、
+// 一覧で見分けられるように分けている。
+const EXTRACT_FAILED = 'extract_failed'
+
 const STATUS_LABEL: Record<string, string> = {
   draft: '割当中',
   submitted: '送信済み',
   registered: '登録済み',
   rejected: '却下',
+  [EXTRACT_FAILED]: '読み取り失敗',
 }
 
 // 送信済み＝これから経理が判断するもの。登録済み・却下は処理済みなので、
 // 「今どれを見るべきか」が色でわかるようにする。
+// 読み取り失敗は放置すると誰も先へ進めない行き止まりなので、却下と同じ危険色で目立たせる。
 const STATUS_CLASS: Record<string, string> = {
   draft: 'bg-muted text-muted-foreground',
   submitted: 'bg-info-subtle text-info',
   registered: 'bg-success-subtle text-success',
   rejected: 'bg-danger-subtle text-danger',
+  [EXTRACT_FAILED]: 'bg-danger-subtle text-danger',
+}
+
+// 読み取りに失敗して止まっている受付か。バッジ・説明文・操作ボタンの出し分けを1か所で決める。
+function isExtractFailed(row: ExpenseUploadRow): boolean {
+  return row.status === 'draft' && !!row.extract_error
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -82,7 +95,12 @@ export default function ExpenseCheckClient() {
   const [rows, setRows] = useState<ExpenseUploadRow[] | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 再読み取りに成功した受付は「代表の割当待ち（draft）」に戻り、既定の一覧から消える。
+  // 消えた理由と次に誰が何をするのかを伝えないと「操作が効かなかった」ように見えるため、
+  // エラーとは別枠の案内として出す。
+  const [notice, setNotice] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [extractingId, setExtractingId] = useState<string | null>(null)
   // 登録は client_expenses を作る取り消せない操作、却下も状態を変える操作なので、
   // 一覧のボタンを押しただけでは実行せず、確認を挟む。
   const [confirmTarget, setConfirmTarget] = useState<{ row: ExpenseUploadRow; action: 'approve' | 'reject' } | null>(null)
@@ -103,9 +121,41 @@ export default function ExpenseCheckClient() {
 
   // 409（登録済み・却下できない）や400（必須未入力の行）は、経理が次に何をすべきかを
   // サーバーの文言がそのまま説明している。言い換えず、そのまま画面に出す。
+  // 読み取りのやり直し。Gemini の混雑など一時的な失敗はサーバー側でも自動で数回試すが、
+  // それでも駄目だった分をここから人の判断で叩き直せるようにする。
+  async function reExtract(row: ExpenseUploadRow) {
+    setExtractingId(row.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(`/api/expense-uploads/${row.id}/extract`, { method: 'POST' })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '再読み取りに失敗しました。'))
+        return
+      }
+      // 読み取り失敗は200＋error で返る（HTTPエラーだと理由が「通信に失敗しました」に丸められるため）。
+      const outcome = (await res.json().catch(() => null)) as ExpenseExtractOutcome | null
+      if (outcome && 'error' in outcome) {
+        setError(`「${row.file_name}」の再読み取りに失敗しました。${outcome.error}`)
+      } else {
+        setNotice(
+          `「${row.file_name}」を読み取り直しました。この受付は代表の割当待ち（割当中）に戻ります。` +
+            '代表に受付URLからクライアント・経費科目の割り当てと送信をご依頼ください。' +
+            '（この一覧には「登録済み・却下も表示する」で確認できます）'
+        )
+      }
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setExtractingId(null)
+    }
+  }
+
   async function review(id: string, action: 'approve' | 'reject') {
     setBusyId(id)
     setError(null)
+    setNotice(null)
     try {
       const res = await fetch(`/api/expense-uploads/${id}/${action}`, { method: 'POST' })
       if (!res.ok) {
@@ -151,6 +201,12 @@ export default function ExpenseCheckClient() {
         </div>
       )}
 
+      {notice && (
+        <div className="rounded-lg border border-info-subtle bg-info-subtle px-4 py-3 text-sm leading-relaxed text-info">
+          {notice}
+        </div>
+      )}
+
       {!rows && (
         <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
           読み込み中…
@@ -166,7 +222,10 @@ export default function ExpenseCheckClient() {
       {rows?.map((row) => {
         const total = billedTotal(row.items)
         const billedCount = row.items.filter((item) => item.kind === 'client_billed').length
-        const busy = busyId === row.id
+        const failed = isExtractFailed(row)
+        const extracting = extractingId === row.id
+        // 再読み取り中も却下を押せてしまうと、消える予定の明細に対して判断を下すことになるため一緒に止める。
+        const busy = busyId === row.id || extracting
         return (
           <div key={row.id} className="rounded-lg border bg-white">
             <div className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
@@ -177,17 +236,32 @@ export default function ExpenseCheckClient() {
                   {row.reviewed_at && `／${formatDateTime(row.reviewed_at)} 処理`}
                 </p>
               </div>
-              <StatusBadge status={row.status} />
+              <StatusBadge status={failed ? EXTRACT_FAILED : row.status} />
             </div>
 
+            {/* 失敗の理由はAIやネットワークが返した原文のまま出す。言い換えると
+                「もう一度試せば直るのか」「ファイルを差し替えるべきか」の判断材料が失われるため。 */}
             {row.extract_error && (
-              <p className="border-b px-4 py-2 text-xs text-danger">{row.extract_error}</p>
+              <p className="border-b px-4 py-2 text-xs break-words text-danger">{row.extract_error}</p>
             )}
 
             {/* 読み取りに失敗した受付は明細が1行も無い。表の枠だけが残ると壊れて見えるので、
-                表・カードのどちらも出さずに理由だけを出す。 */}
+                表・カードのどちらも出さずに、次にすべきことの説明を出す。 */}
             {row.items.length === 0 && (
-              <p className="px-4 py-3 text-sm text-gray-500">明細はありません。</p>
+              <div className="px-4 py-3 text-sm text-gray-500">
+                {failed ? (
+                  <div className="space-y-1">
+                    <p className="text-gray-700">AIが原本を読み取れなかったため、明細がありません。</p>
+                    <p className="text-xs leading-relaxed">
+                      AI側の一時的な混雑が原因のことが多いので、まず「再読み取り」をお試しください。
+                      成功するとこの受付は代表の割当待ちに戻り、代表が受付URLから割り当て・送信し直します。
+                      経費以外の書類など、そもそも読み取れないファイルは「却下」で片付けてください。
+                    </p>
+                  </div>
+                ) : (
+                  <p>明細はありません。</p>
+                )}
+              </div>
             )}
 
             {/* 明細テーブル（PC・タブレット） */}
@@ -269,11 +343,17 @@ export default function ExpenseCheckClient() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-              <div className="text-sm">
-                <span className="text-gray-500">クライアントに請求</span>
-                <span className="ml-2 font-medium text-info">{formatExpenseAmount(total)}</span>
-                <span className="ml-1 text-xs text-gray-500">（{billedCount}件）</span>
-              </div>
+              {/* 読み取り失敗の受付は必ず0円0件になる。判断材料にならない数字を出すと
+                  「請求が0円で確定した」と読み違えられるため、失敗時は合計を出さない。 */}
+              {failed ? (
+                <div className="text-xs text-gray-500">明細を読み取れていません</div>
+              ) : (
+                <div className="text-sm">
+                  <span className="text-gray-500">クライアントに請求</span>
+                  <span className="ml-2 font-medium text-info">{formatExpenseAmount(total)}</span>
+                  <span className="ml-1 text-xs text-gray-500">（{billedCount}件）</span>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
@@ -306,7 +386,32 @@ export default function ExpenseCheckClient() {
                     </Button>
                   </>
                 )}
-                {row.status === 'draft' && <span className="text-xs text-gray-500">代表が割当中です</span>}
+                {/* 読み取りに失敗した受付は、代表が先へ進めないまま止まっている。
+                    経理がやり直すか片付けるかを決められるよう、この2つだけを出す。 */}
+                {failed && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11 text-danger md:h-7"
+                      onClick={() => setConfirmTarget({ row, action: 'reject' })}
+                      disabled={busy}
+                    >
+                      却下
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-11 md:h-7"
+                      onClick={() => reExtract(row)}
+                      disabled={busy}
+                    >
+                      {extracting ? '読み取り中…' : '再読み取り'}
+                    </Button>
+                  </>
+                )}
+                {row.status === 'draft' && !failed && (
+                  <span className="text-xs text-gray-500">代表が割当中です</span>
+                )}
               </div>
             </div>
           </div>
