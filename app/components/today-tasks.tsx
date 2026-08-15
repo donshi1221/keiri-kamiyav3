@@ -62,20 +62,20 @@ function ChipList({ chips, onJump }: {
   chips: Chip[]
   onJump?: (targets: string[]) => void
 }) {
-  const base = 'inline-flex min-h-11 items-center rounded border border-gray-200 bg-white px-2 py-1 text-xs md:min-h-8'
+  const base = 'inline-flex min-h-11 items-center rounded-md border bg-card px-2 py-1 text-xs md:min-h-8'
   return (
     <ul className="flex flex-wrap gap-1.5">
       {chips.map((chip) => (
         <li key={chip.label}>
           {chip.targets.length > 0 && onJump ? (
-            <button type="button" onClick={() => onJump(chip.targets)} className={`${base} hover:bg-gray-50`}>
+            <button type="button" onClick={() => onJump(chip.targets)} className={`${base} hover:bg-accent`}>
               {chip.label}
-              {chip.count > 1 && <span className="ml-1 text-gray-500">（{chip.count}）</span>}
+              {chip.count > 1 && <span className="ml-1 text-muted-foreground">（{chip.count}）</span>}
             </button>
           ) : (
             <span className={base}>
               {chip.label}
-              {chip.count > 1 && <span className="ml-1 text-gray-500">（{chip.count}）</span>}
+              {chip.count > 1 && <span className="ml-1 text-muted-foreground">（{chip.count}）</span>}
             </span>
           )}
         </li>
@@ -169,7 +169,7 @@ function TaskSection({ heading, items, tone, onJump }: {
 function Heading({ action }: { action?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-sm font-semibold text-gray-900">今日やること</h2>
+      <h2 className="text-sm font-semibold text-foreground">今日やること</h2>
       {action}
     </div>
   )
@@ -178,15 +178,15 @@ function Heading({ action }: { action?: React.ReactNode }) {
 export default function TodayTasks({ overdueItems, inWindowItems, onJump, action }: Props) {
   if (overdueItems.length === 0 && inWindowItems.length === 0) {
     return (
-      <section className="rounded-lg border bg-white p-4">
+      <section className="rounded-lg border bg-card p-4">
         <Heading action={action} />
-        <p className="mt-1 text-sm text-gray-600">未対応のタスクはありません。</p>
+        <p className="mt-1 text-sm text-muted-foreground">未対応のタスクはありません。</p>
       </section>
     )
   }
 
   return (
-    <section className="rounded-lg border bg-white p-4 space-y-3">
+    <section className="rounded-lg border bg-card p-4 space-y-3">
       <Heading action={action} />
       {overdueItems.length > 0 && (
         <TaskSection heading="期限超過" items={overdueItems} tone="danger" onJump={onJump} />

@@ -87,7 +87,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
   return (
     <FormDialog open={open} onClose={onClose} title="請求書の未提出リマインド" maxWidth="max-w-lg">
       <div className="space-y-4">
-        {loading && <p className="text-sm text-gray-600">対象者を確認しています…</p>}
+        {loading && <p className="text-sm text-muted-foreground">対象者を確認しています…</p>}
         {error && (
           <p className="rounded border border-danger/40 bg-danger-subtle px-3 py-2 text-sm text-danger">{error}</p>
         )}
@@ -103,7 +103,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
                   ) : (
                     <span className="text-danger">
                       ✗ {r.name}
-                      <span className="ml-1 text-gray-600">{r.message}</span>
+                      <span className="ml-1 text-muted-foreground">{r.message}</span>
                     </span>
                   )}
                 </li>
@@ -115,12 +115,12 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
           </>
         ) : plan && (
           <>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-muted-foreground">
               {plan.invoiceYear}年{plan.invoiceMonth}月分の請求書がまだ受領できていない委託者です。
             </p>
 
             {targets.length === 0 ? (
-              <p className="text-sm text-gray-600">未提出の委託者はいません。</p>
+              <p className="text-sm text-muted-foreground">未提出の委託者はいません。</p>
             ) : (
               <ul className="space-y-1">
                 {targets.map((t) => {
@@ -135,7 +135,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
                         onClick={() => toggle(t.contractorId)}
                         aria-pressed={checked}
                         className={`flex min-h-11 w-full items-center gap-3 rounded px-2 text-left text-sm md:min-h-9 ${
-                          t.hasRoomId ? 'text-gray-900 hover:bg-gray-50' : 'cursor-not-allowed text-gray-400'
+                          t.hasRoomId ? 'text-foreground hover:bg-accent' : 'cursor-not-allowed text-muted-foreground'
                         }`}
                       >
                         <Checkbox
@@ -146,7 +146,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
                         />
                         <span>{t.name}</span>
                         {!t.hasRoomId && (
-                          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                          <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
                             ルームID未登録
                           </span>
                         )}
@@ -167,7 +167,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
                   onChange={(e) => setTemplate(e.target.value)}
                   className="w-full rounded border px-3 py-2 text-sm"
                 />
-                <p className="mt-1 text-xs text-gray-600">
+                <p className="mt-1 text-xs text-muted-foreground">
                   {'{name}'} は名前、{'{month}'} は対象月、{'{url}'} は受付URLに置き換わります。
                 </p>
               </div>

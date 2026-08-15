@@ -59,9 +59,9 @@ export default function Nav() {
   return (
     <>
       {/* PC・タブレット表示（md以上）: 上部の横並びナビ */}
-      <nav className="hidden border-b bg-white sticky top-0 z-10 md:block">
+      <nav className="hidden border-b bg-card sticky top-0 z-10 md:block">
         <div className="max-w-6xl mx-auto px-4 flex items-center gap-6 h-14">
-          <span className="font-bold text-sm text-gray-800">keiri-v3</span>
+          <span className="font-bold text-sm text-foreground">keiri-v3</span>
           <div className="flex gap-1">
             {links.map(({ href, label }) => {
               const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
@@ -70,8 +70,8 @@ export default function Nav() {
                   key={href}
                   href={href}
                   className={cn(
-                    'px-3 py-1.5 rounded text-sm transition-colors',
-                    active ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                    'px-3 py-1.5 rounded-full text-sm transition-colors',
+                    active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'
                   )}
                 >
                   {label}
@@ -82,7 +82,7 @@ export default function Nav() {
           <a
             href="/api/backup/export"
             download
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm text-muted-foreground hover:bg-accent"
           >
             <Download size={16} />
             バックアップ
@@ -90,7 +90,7 @@ export default function Nav() {
           <button
             type="button"
             onClick={handleLogout}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-gray-500 hover:bg-gray-100"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm text-muted-foreground hover:bg-accent"
           >
             <LogOut size={16} />
             ログアウト
@@ -99,14 +99,14 @@ export default function Nav() {
       </nav>
 
       {/* スマホ表示（md未満）: 画面上部にタイトルとログアウト */}
-      <header className="border-b bg-white sticky top-0 z-10 md:hidden">
+      <header className="border-b bg-card sticky top-0 z-10 md:hidden">
         <div className="px-4 flex items-center h-12">
-          <span className="font-bold text-sm text-gray-800">keiri-v3</span>
+          <span className="font-bold text-sm text-foreground">keiri-v3</span>
           <a
             href="/api/backup/export"
             download
             aria-label="バックアップをダウンロード"
-            className="ml-auto flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+            className="ml-auto flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent"
           >
             <Download size={18} />
           </a>
@@ -114,7 +114,7 @@ export default function Nav() {
             type="button"
             onClick={handleLogout}
             aria-label="ログアウト"
-            className="flex h-11 w-11 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground hover:bg-accent"
           >
             <LogOut size={18} />
           </button>
@@ -123,7 +123,7 @@ export default function Nav() {
 
       {/* スマホ表示（md未満）: 画面下部固定のタブバー */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-20 border-t bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
         aria-label="メインナビゲーション"
       >
         <div className="flex">
@@ -135,7 +135,7 @@ export default function Nav() {
                 href={href}
                 className={cn(
                   'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] whitespace-nowrap',
-                  active ? 'text-gray-900' : 'text-gray-400'
+                  active ? 'text-primary' : 'text-muted-foreground'
                 )}
               >
                 <Icon size={20} />

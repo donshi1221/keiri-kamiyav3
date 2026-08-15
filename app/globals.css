@@ -37,6 +37,12 @@
   --color-danger-subtle: var(--danger-subtle);
   --color-info: var(--info);
   --color-info-subtle: var(--info-subtle);
+  /* 進行度バーの右端など「進んでいる／勢いがある」ことを見せる強調色。
+     warning（対応が必要）と色相が近いため、意味が混ざらないよう用途を進行度の表現に限る。 */
+  --color-energy: var(--energy);
+  --color-energy-subtle: var(--energy-subtle);
+  /* primary からグラデーションを引くときの終点。単独の面色としては使わない。 */
+  --color-primary-deep: var(--primary-deep);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -58,94 +64,105 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* 「クエスト・ボード」パレット（ライト）。
+   無彩色のグレーをやめて青系で統一しているのは、毎月同じチェックを消し込む画面を
+   「事務書類」ではなく「進める盤面」として見せるため。 */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --background: oklch(0.965 0.015 255);
+  --foreground: oklch(0.28 0.07 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.28 0.07 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.28 0.07 265);
+  --primary: oklch(0.55 0.20 262);
+  --primary-foreground: oklch(0.985 0.005 255);
+  --primary-deep: oklch(0.51 0.21 275);
+  --secondary: oklch(0.945 0.02 255);
+  --secondary-foreground: oklch(0.28 0.07 265);
+  --muted: oklch(0.945 0.02 255);
+  --muted-foreground: oklch(0.55 0.03 255);
+  --accent: oklch(0.945 0.02 255);
+  --accent-foreground: oklch(0.28 0.07 265);
   --destructive: oklch(0.577 0.245 27.325);
   /* ステータス色（ライト）: 無印=読みやすい濃色、-subtle=淡い背景色 */
   --success: oklch(0.60 0.16 150);
   --success-subtle: oklch(0.96 0.04 150);
-  --warning: oklch(0.52 0.11 70);
-  --warning-subtle: oklch(0.96 0.05 85);
+  --warning: oklch(0.60 0.15 55);
+  --warning-subtle: oklch(0.96 0.04 75);
   --danger: oklch(0.577 0.22 27);
   --danger-subtle: oklch(0.96 0.04 22);
   --info: oklch(0.55 0.20 262);
   --info-subtle: oklch(0.96 0.03 255);
+  --energy: oklch(0.72 0.17 55);
+  --energy-subtle: oklch(0.96 0.05 75);
   /* 境界線はカード・表・入力欄の区切りに使う。薄すぎると要素のまとまりが見えないため、
-     「見えるが主張しすぎない」濃さ（L≈0.86）にする。入力欄は操作対象なのでさらに一段濃く。 */
-  --border: oklch(0.86 0 0);
-  --input: oklch(0.83 0 0);
-  --ring: oklch(0.708 0 0);
+     背景（L≈0.965）より一段濃くする。入力欄は操作対象なのでさらに一段濃く。 */
+  --border: oklch(0.91 0.03 255);
+  --input: oklch(0.87 0.04 255);
+  --ring: oklch(0.55 0.20 262);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.875rem;
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.28 0.07 265);
+  --sidebar-primary: oklch(0.55 0.20 262);
+  --sidebar-primary-foreground: oklch(0.985 0.005 255);
+  --sidebar-accent: oklch(0.945 0.02 255);
+  --sidebar-accent-foreground: oklch(0.28 0.07 265);
+  --sidebar-border: oklch(0.91 0.03 255);
+  --sidebar-ring: oklch(0.55 0.20 262);
 }
 
+/* ダークモードの切替UIは今のところ無いが、ライト側と同じ色相（青系）で組んでおかないと
+   将来の切替時にトークンの意味がバラつくため、対応する値をここでも揃えておく。 */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: oklch(0.22 0.04 265);
+  --foreground: oklch(0.97 0.01 255);
+  --card: oklch(0.27 0.05 265);
+  --card-foreground: oklch(0.97 0.01 255);
+  --popover: oklch(0.27 0.05 265);
+  --popover-foreground: oklch(0.97 0.01 255);
+  --primary: oklch(0.65 0.18 262);
+  --primary-foreground: oklch(0.20 0.04 265);
+  --primary-deep: oklch(0.58 0.19 275);
+  --secondary: oklch(0.32 0.05 265);
+  --secondary-foreground: oklch(0.97 0.01 255);
+  --muted: oklch(0.32 0.05 265);
+  --muted-foreground: oklch(0.72 0.03 255);
+  --accent: oklch(0.32 0.05 265);
+  --accent-foreground: oklch(0.97 0.01 255);
   --destructive: oklch(0.704 0.191 22.216);
   /* ステータス色（ダーク）: 無印=明るい発色、-subtle=暗い地に馴染む背景色 */
   --success: oklch(0.75 0.16 152);
   --success-subtle: oklch(0.30 0.06 152);
-  --warning: oklch(0.82 0.13 80);
-  --warning-subtle: oklch(0.30 0.06 75);
+  --warning: oklch(0.78 0.15 60);
+  --warning-subtle: oklch(0.32 0.07 60);
   --danger: oklch(0.70 0.19 25);
   --danger-subtle: oklch(0.30 0.08 25);
   --info: oklch(0.72 0.16 258);
   --info-subtle: oklch(0.30 0.07 258);
+  --energy: oklch(0.80 0.16 60);
+  --energy-subtle: oklch(0.33 0.08 60);
   /* 暗い地でも区切りが見えるよう、白の透過率を上げる（10%→18% / 15%→22%）。 */
   --border: oklch(1 0 0 / 18%);
   --input: oklch(1 0 0 / 22%);
-  --ring: oklch(0.556 0 0);
+  --ring: oklch(0.65 0.18 262);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.27 0.05 265);
+  --sidebar-foreground: oklch(0.97 0.01 255);
+  --sidebar-primary: oklch(0.65 0.18 262);
+  --sidebar-primary-foreground: oklch(0.20 0.04 265);
+  --sidebar-accent: oklch(0.32 0.05 265);
+  --sidebar-accent-foreground: oklch(0.97 0.01 255);
+  --sidebar-border: oklch(1 0 0 / 18%);
+  --sidebar-ring: oklch(0.65 0.18 262);
 }
 
 @layer base {

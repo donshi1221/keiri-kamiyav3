@@ -19,7 +19,7 @@ export function FormDialog({ open, onClose, title, maxWidth = 'max-w-md', childr
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`bg-white rounded-xl shadow-xl w-full ${maxWidth} mx-4 p-6 max-h-[85dvh] overflow-y-auto`}>
+      <div className={`bg-popover text-popover-foreground rounded-xl shadow-xl w-full ${maxWidth} mx-4 p-6 max-h-[85dvh] overflow-y-auto`}>
         <h2 className="text-base font-semibold mb-4">{title}</h2>
         {children}
       </div>

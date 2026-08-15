@@ -40,16 +40,17 @@ function rowDueState(states: DueState[]): DueState {
 function rowDueClass(state: DueState): string {
   if (state === 'overdue') return 'bg-danger-subtle/70 hover:bg-danger-subtle/70'
   if (state === 'inWindow') return 'bg-warning-subtle/70 hover:bg-warning-subtle/70'
-  return 'hover:bg-gray-50'
+  return 'hover:bg-accent'
 }
 
 // 相手（委託者・クライアント）そのものを表す行の背景。
-// 黄色は「対応が必要な内訳」の色として使うため、相手の行はまとまりの目印としてグレーで固定する。
+// 対応色（オレンジ）は「対応が必要な内訳」の色として使うため、相手の行はまとまりの目印として
+// 淡いブルー（secondary）で固定する。
 // そうしないと、内訳が1件だけの相手が上の相手の内訳と地続きに見えて区切りが読めない。
 // 期限超過だけは見落とすと支払い・入金の遅れに直結するため、例外的に面でも塗る。
 function groupRowClass(state: DueState): string {
   if (state === 'overdue') return 'bg-danger-subtle/70 hover:bg-danger-subtle/70'
-  return 'bg-gray-100 hover:bg-gray-100'
+  return 'bg-secondary hover:bg-secondary'
 }
 
 // 相手の行の左端に出す期限バー。背景を塗らない代わりの目印。
@@ -66,6 +67,19 @@ function DueBadge({ state }: { state: DueState }) {
   return null
 }
 
+// 相手（委託者・クライアント）1件分の進み具合を、名前のすぐ近くで見せる点の並び。
+// チェック欄は表の右端に離れて並ぶため、名前の列を上から追うだけでは進み具合が読み取れない。
+// 状態そのものはチェックボックスが読み上げるので、ここは装飾として読み上げから外す（同じことを二度言わせない）。
+function ProgressPips({ states, className = '' }: { states: boolean[]; className?: string }) {
+  return (
+    <span aria-hidden="true" className={`flex gap-1 ${className}`}>
+      {states.map((done, i) => (
+        <span key={i} className={`h-1.5 w-4 rounded-full ${done ? 'bg-primary' : 'bg-primary/20'}`} />
+      ))}
+    </span>
+  )
+}
+
 // 回数契約（payment_count あり）のアサインだけ、契約更新の伺いが要るタイミングで出すバッジ。
 // 継続契約（payment_count が null）は上限が無いので何も出さない。
 function PaymentCountBadge({ paymentCount, paid }: { paymentCount: number | null; paid: number }) {
@@ -74,7 +88,7 @@ function PaymentCountBadge({ paymentCount, paid }: { paymentCount: number | null
     return <span className="inline-block rounded bg-danger-subtle px-1.5 py-0.5 text-xs text-danger">契約回数 {paymentCount}回を超過</span>
   }
   if (paid === paymentCount) {
-    return <span className="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">契約回数 {paymentCount}回に到達</span>
+    return <span className="inline-block rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">契約回数 {paymentCount}回に到達</span>
   }
   if (paid === paymentCount - 1) {
     return <span className="inline-block rounded bg-warning-subtle px-1.5 py-0.5 text-xs text-warning">あと1回で契約回数 {paymentCount}回</span>
@@ -126,17 +140,17 @@ function SectionHeader({ title, open, onToggle, amountLabel, amount, pending, ov
   return (
     // 閉じているときはヘッダーだけの箱になるため、余白を詰めて1行のバーに見えるようにする。
     <div className={`flex flex-wrap items-center justify-between gap-2 px-3 ${open ? 'border-b px-4 pt-3 pb-2' : 'py-1'}`}>
-      <h2 className="min-w-0 flex-1 text-sm font-semibold text-gray-900">
+      <h2 className="min-w-0 flex-1 text-sm font-semibold text-foreground">
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex min-h-11 w-full items-center gap-2 rounded text-left hover:bg-gray-50 md:min-h-7"
+          className="flex min-h-11 w-full items-center gap-2 rounded text-left hover:bg-accent md:min-h-7"
         >
           <ChevronRight size={16} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
           <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span>{title}</span>
-            <span className="text-xs font-normal text-gray-500">
+            <span className="text-xs font-normal text-muted-foreground">
               {amountLabel} ¥{amount.toLocaleString()} ・ {pending > 0 ? `未完了 ${pending}件` : 'すべて完了'}
             </span>
             {overdue > 0 && (
@@ -184,21 +198,21 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
       {items.length > 0 && (
         <div className="space-y-0.5">
           {items.map((e) => (
-            <div key={e.id} className="flex flex-wrap items-center gap-x-1.5 text-gray-600">
-              <span className="text-gray-500">{e.expense_date ? formatShortDate(e.expense_date) : '日付なし'}</span>
+            <div key={e.id} className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
+              <span className="text-muted-foreground">{e.expense_date ? formatShortDate(e.expense_date) : '日付なし'}</span>
               <span className="font-medium">¥{e.amount.toLocaleString()}</span>
-              {e.note && <span className="text-gray-500">{e.note}</span>}
+              {e.note && <span className="text-muted-foreground">{e.note}</span>}
               <button
                 type="button"
                 onClick={() => onDelete(e.id)}
                 aria-label="この経費を削除"
-                className="flex h-11 items-center px-1 text-gray-400 hover:text-danger md:h-5"
+                className="flex h-11 items-center px-1 text-muted-foreground hover:text-danger md:h-5"
               >
                 削除
               </button>
             </div>
           ))}
-          <div className="text-gray-500">{totalLabel} ¥{total.toLocaleString()}{totalNote}</div>
+          <div className="text-muted-foreground">{totalLabel} ¥{total.toLocaleString()}{totalNote}</div>
         </div>
       )}
       {formOpen ? (
@@ -208,7 +222,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
             value={date}
             onChange={(e) => setDate(e.target.value)}
             aria-label="経費の日付"
-            className="rounded border border-gray-200 px-1 py-1 text-xs"
+            className="rounded border border-border px-1 py-1 text-xs"
           />
           <input
             type="number"
@@ -218,7 +232,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder="金額"
             aria-label="経費の金額"
-            className="w-20 rounded border border-gray-200 px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
+            className="w-20 rounded border border-border px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
           />
           <input
             type="text"
@@ -227,7 +241,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder="内容（例: 打合せ往復）"
             aria-label="経費の内容"
-            className="min-w-[8rem] flex-1 rounded border border-gray-200 px-1 py-1 text-xs"
+            className="min-w-[8rem] flex-1 rounded border border-border px-1 py-1 text-xs"
           />
           <button
             type="button"
@@ -240,7 +254,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
           <button
             type="button"
             onClick={() => { setDate(''); setAmount(''); setNote(''); onCloseForm() }}
-            className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+            className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
           >
             やめる
           </button>
@@ -326,7 +340,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
       )}
       {amount !== null && confirming && (
         <span className="flex flex-wrap items-center gap-x-1">
-          <span className="text-gray-500">¥{(currentAmount ?? 0).toLocaleString()} → ¥{amount.toLocaleString()} に上書き？</span>
+          <span className="text-muted-foreground">¥{(currentAmount ?? 0).toLocaleString()} → ¥{amount.toLocaleString()} に上書き？</span>
           <button
             type="button"
             onClick={() => { onApply(amount, row.delivered ?? 0); setConfirming(false) }}
@@ -337,7 +351,7 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
           <button
             type="button"
             onClick={() => setConfirming(false)}
-            className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+            className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
           >
             戻る
           </button>
@@ -367,7 +381,7 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
   const [saving, setSaving] = useState(false)
 
   const text = amount ? `¥${amount.toLocaleString()}` : '—'
-  const toneClass = strong ? 'font-semibold text-gray-900' : 'text-gray-600'
+  const toneClass = strong ? 'font-semibold text-foreground' : 'text-muted-foreground'
 
   async function submit() {
     setSaving(true)
@@ -396,7 +410,7 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
           }}
           placeholder="空欄でマスタ額"
           aria-label="この月の報酬額"
-          className="w-28 rounded border border-gray-200 px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
+          className="w-28 rounded border border-border px-1 py-1 text-right text-xs [appearance:textfield] [-moz-appearance:textfield]"
         />
         <button
           type="button"
@@ -410,7 +424,7 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
           type="button"
           onClick={() => setEditing(false)}
           disabled={saving}
-          className="flex h-11 items-center rounded px-2 text-gray-400 hover:bg-gray-100 md:h-6"
+          className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
         >
           やめる
         </button>
@@ -424,14 +438,14 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
         type="button"
         onClick={() => { setValue(amount === null ? '' : String(amount)); setEditing(true) }}
         aria-label="この月の報酬額を編集"
-        className={`flex h-11 items-center rounded px-1 underline decoration-dotted underline-offset-4 hover:bg-gray-100 md:h-6 ${toneClass}`}
+        className={`flex h-11 items-center rounded px-1 underline decoration-dotted underline-offset-4 hover:bg-accent md:h-6 ${toneClass}`}
       >
         {text}
       </button>
       {edited && (
         <span
           title="この月だけ金額を直した控えです（マスタの契約額とは異なります）"
-          className="rounded bg-gray-100 px-1 py-0.5 text-[10px] text-gray-500"
+          className="rounded bg-secondary px-1 py-0.5 text-[10px] text-muted-foreground"
         >
           控え
         </span>
@@ -455,7 +469,7 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
   if (pending) {
     return (
       <div className="flex flex-col items-center gap-1">
-        <span className="whitespace-nowrap text-[10px] text-gray-500">外しますか？</span>
+        <span className="whitespace-nowrap text-[10px] text-muted-foreground">外しますか？</span>
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -467,7 +481,7 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
           <button
             type="button"
             onClick={onCancel}
-            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs text-gray-400 hover:bg-gray-100 md:h-6 md:min-w-0"
+            className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs text-muted-foreground hover:bg-accent md:h-6 md:min-w-0"
           >
             戻る
           </button>
@@ -486,7 +500,7 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
       >
         <Checkbox checked={checked} className="pointer-events-none" tabIndex={-1} />
       </button>
-      {checked && checkedAt && <span className="text-[10px] text-gray-500">{formatShortDate(checkedAt)}</span>}
+      {checked && checkedAt && <span className="text-[10px] text-muted-foreground">{formatShortDate(checkedAt)}</span>}
       {badge}
     </div>
   )
@@ -618,7 +632,7 @@ export default function DashboardClient({
     highlightTimerRef.current = setTimeout(() => setHighlightKeys([]), 1800)
   }
 
-  // ハイライトは既存の行背景（期限色・グループ見出しのグレー）と衝突するため、背景クラスごと差し替える。
+  // ハイライトは既存の行背景（期限色・グループ見出しの淡いブルー）と衝突するため、背景クラスごと差し替える。
   const rowBg = (target: string, base: string) =>
     highlightKeys.includes(target) ? 'bg-warning-subtle' : base
 
@@ -1510,51 +1524,66 @@ export default function DashboardClient({
     }
   }
 
-  // 過去月では「今日やること」が出ないため、未完了の行をここから直接たどれるようにする。
-  // 判定はローカル状態から行い、チェックを付けた瞬間に項目が消えるようにする。
-  const monthPending: { key: string; target: string; label: string }[] = []
-  if (isPastMonth) {
-    for (const g of contractorGroups) {
-      const multi = g.items.length > 1
-      for (const r of g.items) {
-        const who = `${g.contractorName}（${r.assignments?.clients?.name ?? '?'}）`
-        if (!r.invoice_received_at) monthPending.push({ key: `received-${r.id}`, target: `rec-${r.id}`, label: `請求書受領：${who}` })
-        if (!r.payment_reserved_at) monthPending.push({ key: `reserved-${r.id}`, target: `rec-${r.id}`, label: `支払い予約：${who}` })
-        // 支払い確認は複数アサインの委託者だとグループ見出しのチェックに集約されているため、行単位では出さない。
-        if (!multi && !r.contractor_paid_at) monthPending.push({ key: `paid-${r.id}`, target: `rec-${r.id}`, label: `支払い確認：${who}` })
-      }
-      if (multi && g.items.some((r) => !r.contractor_paid_at)) {
-        monthPending.push({ key: `paid-group-${g.contractorId}`, target: `cgroup-${g.contractorId}`, label: `支払い確認：${g.contractorName}` })
-      }
+  // この月にチェックすべき項目を、完了・未完了をまとめて1つの並びとして組み立てる。
+  // 「この月の未完了」パネルと「進行度 X/Y」で数え方がずれると、同じ画面の2箇所が違うことを言い出すため、
+  // 数える規則はここ1箇所に置く。
+  // 支払い確認・入金確認は、複数アサイン／複数内訳ではチェックが見出しに集約されて操作が1回で済むので、
+  // まとめて1件として数える。判定はローカル状態から行い、チェックを付けた瞬間に反映されるようにする。
+  const monthChecks: { key: string; target: string; label: string; done: boolean }[] = []
+  for (const g of contractorGroups) {
+    const multi = g.items.length > 1
+    for (const r of g.items) {
+      const who = `${g.contractorName}（${r.assignments?.clients?.name ?? '?'}）`
+      monthChecks.push({ key: `received-${r.id}`, target: `rec-${r.id}`, label: `請求書受領：${who}`, done: !!r.invoice_received_at })
+      monthChecks.push({ key: `reserved-${r.id}`, target: `rec-${r.id}`, label: `支払い予約：${who}`, done: !!r.payment_reserved_at })
+      // 支払い確認は複数アサインの委託者だとグループ見出しのチェックに集約されているため、行単位では出さない。
+      if (!multi) monthChecks.push({ key: `paid-${r.id}`, target: `rec-${r.id}`, label: `支払い確認：${who}`, done: !!r.contractor_paid_at })
     }
-    for (const g of clientGroups) {
-      const multi = clientHasGroupHeader(g.clientId)
-      for (const cr of g.items) {
-        const label = itemLabel(cr)
-        const who = multi && label ? `${g.clientName} / ${label}` : g.clientName
-        if (!cr.invoice_sent_at) monthPending.push({ key: `sent-${cr.id}`, target: `cli-${cr.id}`, label: `請求書送付：${who}` })
-        if (!multi && !cr.payment_confirmed_at) monthPending.push({ key: `confirmed-${cr.id}`, target: `cli-${cr.id}`, label: `入金確認：${g.clientName}` })
-      }
-      if (multi && g.items.some((cr) => !cr.payment_confirmed_at)) {
-        monthPending.push({ key: `confirmed-group-${g.clientId}`, target: `cligroup-${g.clientId}`, label: `入金確認：${g.clientName}` })
-      }
-    }
-    if (localGlobal) {
-      for (const t of globalTaskDefs) {
-        if (!localGlobal[t.field]) {
-          monthPending.push({ key: `global-${t.field}`, target: 'global-tasks', label: t.label })
-        }
-      }
-    }
-    for (const t of customTasks) {
-      // 作成前の月まで遡って未完了扱いにしない（months による絞り込みは props 側で済んでいる）。
-      const createdDate = new Date(t.created_at)
-      const createdYearMonth = createdDate.getFullYear() * 100 + (createdDate.getMonth() + 1)
-      if (createdYearMonth > yearMonth) continue
-      if (t.completed_months.includes(yearMonth)) continue
-      monthPending.push({ key: `custom-${t.id}`, target: 'global-tasks', label: t.title })
+    if (multi) {
+      monthChecks.push({
+        key: `paid-group-${g.contractorId}`,
+        target: `cgroup-${g.contractorId}`,
+        label: `支払い確認：${g.contractorName}`,
+        done: g.items.every((r) => !!r.contractor_paid_at),
+      })
     }
   }
+  for (const g of clientGroups) {
+    const multi = clientHasGroupHeader(g.clientId)
+    for (const cr of g.items) {
+      const label = itemLabel(cr)
+      const who = multi && label ? `${g.clientName} / ${label}` : g.clientName
+      monthChecks.push({ key: `sent-${cr.id}`, target: `cli-${cr.id}`, label: `請求書送付：${who}`, done: !!cr.invoice_sent_at })
+      if (!multi) monthChecks.push({ key: `confirmed-${cr.id}`, target: `cli-${cr.id}`, label: `入金確認：${g.clientName}`, done: !!cr.payment_confirmed_at })
+    }
+    if (multi) {
+      monthChecks.push({
+        key: `confirmed-group-${g.clientId}`,
+        target: `cligroup-${g.clientId}`,
+        label: `入金確認：${g.clientName}`,
+        done: g.items.every((cr) => !!cr.payment_confirmed_at),
+      })
+    }
+  }
+  if (localGlobal) {
+    for (const t of globalTaskDefs) {
+      monthChecks.push({ key: `global-${t.field}`, target: 'global-tasks', label: t.label, done: !!localGlobal[t.field] })
+    }
+  }
+  for (const t of customTasks) {
+    // 作成前の月まで遡って未完了扱いにしない（months による絞り込みは props 側で済んでいる）。
+    const createdDate = new Date(t.created_at)
+    const createdYearMonth = createdDate.getFullYear() * 100 + (createdDate.getMonth() + 1)
+    if (createdYearMonth > yearMonth) continue
+    monthChecks.push({ key: `custom-${t.id}`, target: 'global-tasks', label: t.title, done: t.completed_months.includes(yearMonth) })
+  }
+
+  // 進行度パネル。過去月でも「その月をどこまで消し込めたか」が見えるよう、当月と同じ条件で出す。
+  const monthDoneCount = monthChecks.filter((c) => c.done).length
+  const monthProgressRate = monthChecks.length > 0 ? Math.round((monthDoneCount / monthChecks.length) * 100) : 0
+
+  // 過去月では「今日やること」が出ないため、未完了の行をここから直接たどれるようにする。
+  const monthPending = isPastMonth ? monthChecks.filter((c) => !c.done) : []
 
   // 表示中の月の未完了は「この月の未完了」パネルが担当するため、繰越バナーからは除く。
   const otherMonthCarryOver = carryOver.filter((g) => !(g.year === year && g.month === month))
@@ -1586,7 +1615,7 @@ export default function DashboardClient({
       {/* 過去月は編集できてしまうため、常に見えているこのバーごと警告色にして当月と取り違えないようにする。 */}
       <nav
         className={`sticky top-12 z-10 -mx-4 px-4 md:top-14 ${
-          isPastMonth ? 'border-b border-warning/40 bg-warning-subtle' : 'border-b bg-white'
+          isPastMonth ? 'border-b border-warning/40 bg-warning-subtle' : 'border-b bg-card'
         }`}
       >
         <div className="flex items-center gap-1">
@@ -1600,7 +1629,7 @@ export default function DashboardClient({
                     t.onOpen?.()
                     t.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                   }}
-                  className="flex h-11 shrink-0 items-center whitespace-nowrap rounded px-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 md:h-8 md:px-3"
+                  className="flex h-11 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground md:h-8 md:px-3"
                 >
                   {t.label}
                 </button>
@@ -1618,6 +1647,27 @@ export default function DashboardClient({
           )}
         </div>
       </nav>
+
+      {/* この月の進行度。件数だけだと「あと何件か」は分かっても「どこまで来たか」が分からないため、
+          残り件数ではなく完了／全体の割合をバーで見せる。 */}
+      {monthChecks.length > 0 && (
+        <section className="rounded-lg border bg-card p-4">
+          <h2 className="text-sm font-bold text-foreground">
+            {month}月の進行度 {monthDoneCount}/{monthChecks.length}
+          </h2>
+          <div className="mt-2 flex items-center gap-3">
+            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full rounded-full bg-linear-to-r from-primary to-energy transition-[width] duration-500 motion-reduce:transition-none"
+                style={{ width: `${monthProgressRate}%` }}
+              />
+            </div>
+            {monthDoneCount === monthChecks.length && (
+              <span className="shrink-0 text-xs font-medium text-energy">今月分クリア！</span>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* 繰越未完了バナー */}
       {otherMonthCarryOver.length > 0 && (
@@ -1651,7 +1701,7 @@ export default function DashboardClient({
                 <button
                   type="button"
                   onClick={() => focusPendingRow(item.target)}
-                  className="flex h-11 items-center rounded border border-warning/40 bg-white px-3 text-sm text-warning hover:bg-warning-subtle md:h-8"
+                  className="flex h-11 items-center rounded border border-warning/40 bg-card px-3 text-sm text-warning hover:bg-warning-subtle md:h-8"
                 >
                   {item.label}
                 </button>
@@ -1710,7 +1760,7 @@ export default function DashboardClient({
       )}
 
       {/* 委託者 — 請求書受領・支払管理 */}
-      <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
+      <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-card">
         <SectionHeader
           title="委託者 — 請求書受領・支払管理"
           open={contractorOpen}
@@ -1730,8 +1780,8 @@ export default function DashboardClient({
         {contractorOpen && (
         <>
         {deliveryRows && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-gray-50 px-4 py-2 text-xs">
-            <span className="text-gray-600">{deliveryTarget.year}年{deliveryTarget.month}月分の納品: {deliveryRows.length}件</span>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-secondary px-4 py-2 text-xs">
+            <span className="text-muted-foreground">{deliveryTarget.year}年{deliveryTarget.month}月分の納品: {deliveryRows.length}件</span>
             <span className="text-success">揃った {deliveryRows.filter((r) => deliveryTone(r) === 'done').length}件</span>
             <span className="text-warning">未達 {deliveryRows.filter((r) => deliveryTone(r) === 'short').length}件</span>
             <span className="text-muted-foreground">対象なし {deliveryRows.filter((r) => deliveryTone(r) === 'none').length}件</span>
@@ -1739,7 +1789,7 @@ export default function DashboardClient({
           </div>
         )}
         {localRecords.length === 0 ? (
-          <p className="text-sm text-gray-500 p-4">
+          <p className="text-sm text-muted-foreground p-4">
             この月の支払記録はまだありません（毎月1日に自動で作成されます）。委託者やアサインが未登録の場合は{' '}
             <Link href="/master" className="text-info underline">マスタ管理</Link>
             {' '}から登録してください。
@@ -1749,13 +1799,13 @@ export default function DashboardClient({
             {/* PC・タブレット表示（md以上）: 表形式 */}
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
-                <thead className="border-b bg-gray-50">
+                <thead className="border-b bg-secondary">
                   <tr>
-                    <th className="text-left py-2 px-4 font-medium text-gray-600">委託者 / クライアント</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-600">報酬</th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">受領<br /><span className="text-xs text-gray-500 font-normal">10日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払い予約<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">支払い確認<br /><span className="text-xs text-gray-500 font-normal">末日</span></th>
+                    <th className="text-left py-2 px-4 font-medium text-muted-foreground">委託者 / クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">報酬</th>
+                    <th className="text-center py-2 px-3 font-medium text-muted-foreground">受領<br /><span className="text-xs text-muted-foreground font-normal">10日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-muted-foreground">支払い予約<br /><span className="text-xs text-muted-foreground font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-muted-foreground">支払い確認<br /><span className="text-xs text-muted-foreground font-normal">末日</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1772,7 +1822,7 @@ export default function DashboardClient({
                     const paidIds = g.items.map((r) => r.id)
                     const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                     // 相手の行（見出し／1件だけの行）の見た目。期限はその委託者の全アサインぶんをまとめて判定し、
-                    // 背景ではなく左端のバーで出す（黄色い面は内訳の行だけに使う）。
+                    // 背景ではなく左端のバーで出す（対応色の面は内訳の行だけに使う）。
                     const groupState = rowDueState(
                       g.items.flatMap((r) => [
                         recordDueState(r, 'invoice_received_at', 10),
@@ -1780,21 +1830,29 @@ export default function DashboardClient({
                         recordDueState(r, 'contractor_paid_at', lastDay),
                       ])
                     )
-                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100 hover:bg-gray-100'
+                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-secondary hover:bg-secondary'
                     const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
+                    // 受領・支払い予約・支払い確認の3点。複数アサインの委託者は「全アサイン分が済んだか」で灯す
+                    // （相手単位で見たときに、1件でも残っていれば未完了として見えるようにするため）。
+                    const groupPips = [
+                      g.items.every((r) => !!r.invoice_received_at),
+                      g.items.every((r) => !!r.payment_reserved_at),
+                      g.items.every((r) => !!r.contractor_paid_at),
+                    ]
                     const headerRow = multi
                       ? [(
                           <tr
                             key={`chead-${g.contractorId}`}
                             data-pending-row={`cgroup-${g.contractorId}`}
-                            className={`border-y-2 border-gray-200 ${rowBg(`cgroup-${g.contractorId}`, groupCls)}`}
+                            className={`border-y-2 border-border ${rowBg(`cgroup-${g.contractorId}`, groupCls)}`}
                           >
                             <td className={`py-2 px-4 ${accentCls}`}>
-                              <span className="font-semibold text-gray-900">{g.contractorName}</span>
+                              <span className="font-semibold text-foreground">{g.contractorName}</span>
+                              <ProgressPips states={groupPips} className="mt-1" />
                             </td>
                             <td className="py-2 px-3 text-right">
-                              <span className="text-xs text-gray-500 mr-1">合計</span>
-                              <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
+                              <span className="text-xs text-muted-foreground mr-1">合計</span>
+                              <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                             </td>
                             <td colSpan={2} />
                             <td className="text-center py-2 px-3">
@@ -1805,7 +1863,7 @@ export default function DashboardClient({
                                 onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
-                                badge={<span className="block text-[10px] text-gray-500">まとめて</span>}
+                                badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
                               />
                             </td>
                           </tr>
@@ -1818,24 +1876,25 @@ export default function DashboardClient({
                       const reservedState = recordDueState(r, 'payment_reserved_at', 15)
                       const paidState = recordDueState(r, 'contractor_paid_at', lastDay)
                       // 1アサインだけの委託者は、この行が「相手の行」そのものなので見出しの見た目にする
-                      // （内訳の黄色と同じ色にすると、上の委託者の内訳と続いて見えて区切りが読めない）。
+                      // （内訳の対応色と同じ色にすると、上の委託者の内訳と続いて見えて区切りが読めない）。
                       const rowClass = multi
-                        ? (isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-gray-50')
+                        ? (isCurrentMonth ? rowDueClass(rowDueState([receivedState, reservedState, paidState])) : 'hover:bg-accent')
                         : groupCls
                       const payout = recordPayout(r)
                       return (
                         <tr
                           key={r.id}
                           data-pending-row={`rec-${r.id}`}
-                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-gray-200'} ${rowBg(`rec-${r.id}`, rowClass)}`}
+                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-border'} ${rowBg(`rec-${r.id}`, rowClass)}`}
                         >
                           <td className={multi ? 'py-3 pl-10 pr-4' : `py-3 px-4 ${accentCls}`}>
                             {multi ? (
-                              <div className="text-gray-700">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                              <div className="text-foreground">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                             ) : (
                               <>
-                                <div className="font-semibold text-gray-900">{g.contractorName}</div>
-                                <div className="text-xs text-gray-500">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                                <div className="font-semibold text-foreground">{g.contractorName}</div>
+                                <div className="text-xs text-muted-foreground">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                                <ProgressPips states={groupPips} className="mt-1" />
                               </>
                             )}
                             {asgn && (
@@ -1876,7 +1935,7 @@ export default function DashboardClient({
                               onSave={(value) => savePayoutSnapshot(r.id, value)}
                             />
                             {expenseTotalOf(asgn?.id) > 0 && (
-                              <div className="text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</div>
+                              <div className="text-xs text-muted-foreground">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</div>
                             )}
                           </td>
                           <td className="text-center py-3 px-3">
@@ -1938,7 +1997,7 @@ export default function DashboardClient({
                 )
                 const paidIds = g.items.map((r) => r.id)
                 const allPaid = g.items.every((r) => !!r.contractor_paid_at)
-                // PC表と同じ考え方で、相手の名前の帯はグレー固定・期限は左端のバーで出す。
+                // PC表と同じ考え方で、相手の名前の帯は淡いブルー固定・期限は左端のバーで出す。
                 const groupState = rowDueState(
                   g.items.flatMap((r) => [
                     recordDueState(r, 'invoice_received_at', 10),
@@ -1946,8 +2005,13 @@ export default function DashboardClient({
                     recordDueState(r, 'contractor_paid_at', lastDay),
                   ])
                 )
-                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100'
+                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-secondary'
                 const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
+                const groupPips = [
+                  g.items.every((r) => !!r.invoice_received_at),
+                  g.items.every((r) => !!r.payment_reserved_at),
+                  g.items.every((r) => !!r.contractor_paid_at),
+                ]
                 return (
                   <div
                     key={g.contractorId}
@@ -1955,16 +2019,19 @@ export default function DashboardClient({
                     className={`px-4 py-3 ${multi ? rowBg(`cgroup-${g.contractorId}`, '') : ''}`}
                   >
                     <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cgroup-${g.contractorId}`, groupCls)} ${accentCls}`}>
-                      <span className="font-semibold text-gray-900">{g.contractorName}</span>
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="font-semibold text-foreground">{g.contractorName}</span>
+                        <ProgressPips states={groupPips} />
+                      </span>
                       {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払い確認（まとめて）」を置く */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
                           <span>
-                            <span className="text-xs text-gray-500 mr-1">合計</span>
-                            <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
+                            <span className="text-xs text-muted-foreground mr-1">合計</span>
+                            <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                           </span>
                           <span className="flex flex-col items-center gap-0.5">
-                            <span className="text-xs text-gray-500">支払い確認</span>
+                            <span className="text-xs text-muted-foreground">支払い確認</span>
                             <MoneyCheckControl
                               checked={allPaid}
                               pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
@@ -1991,7 +2058,7 @@ export default function DashboardClient({
                           <div key={r.id} data-pending-row={`rec-${r.id}`} className={`rounded-lg ${rowBg(`rec-${r.id}`, cardClass)}`}>
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="text-sm text-gray-600">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                                <div className="text-sm text-muted-foreground">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
                                 {asgn && (
                                   <PaymentCountBadge
                                     paymentCount={asgn.payment_count}
@@ -2021,7 +2088,7 @@ export default function DashboardClient({
                                   />
                                 )}
                               </div>
-                              <span className="shrink-0 text-right text-sm text-gray-600">
+                              <span className="shrink-0 text-right text-sm text-muted-foreground">
                                 <PayoutAmountCell
                                   amount={payout}
                                   editable={!isVideoEditor && !!asgn}
@@ -2030,13 +2097,13 @@ export default function DashboardClient({
                                   onSave={(value) => savePayoutSnapshot(r.id, value)}
                                 />
                                 {expenseTotalOf(asgn?.id) > 0 && (
-                                  <span className="block text-xs text-gray-500">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</span>
+                                  <span className="block text-xs text-muted-foreground">＋経費 ¥{expenseTotalOf(asgn?.id).toLocaleString()}</span>
                                 )}
                               </span>
                             </div>
-                            <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-50 py-2">
+                            <div className="grid grid-cols-3 gap-1 rounded-lg bg-secondary py-2">
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">受領<span className="ml-1 text-gray-500">10日</span></span>
+                                <span className="text-xs text-muted-foreground">受領<span className="ml-1 text-muted-foreground">10日</span></span>
                                 <MoneyCheckControl
                                   checked={!!r.invoice_received_at}
                                   checkedAt={r.invoice_received_at}
@@ -2049,7 +2116,7 @@ export default function DashboardClient({
                                 />
                               </div>
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">支払い予約<span className="ml-1 text-gray-500">15日</span></span>
+                                <span className="text-xs text-muted-foreground">支払い予約<span className="ml-1 text-muted-foreground">15日</span></span>
                                 <MoneyCheckControl
                                   checked={!!r.payment_reserved_at}
                                   checkedAt={r.payment_reserved_at}
@@ -2063,9 +2130,9 @@ export default function DashboardClient({
                               </div>
                               {/* 複数アサインの委託者はカード上部の「支払い確認（まとめて）」に集約するため行内は出さない。 */}
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">支払い確認<span className="ml-1 text-gray-500">末日</span></span>
+                                <span className="text-xs text-muted-foreground">支払い確認<span className="ml-1 text-muted-foreground">末日</span></span>
                                 {multi ? (
-                                  <span className="text-xs text-gray-400">上でまとめて</span>
+                                  <span className="text-xs text-muted-foreground">上でまとめて</span>
                                 ) : (
                                   <MoneyCheckControl
                                     checked={!!r.contractor_paid_at}
@@ -2095,7 +2162,7 @@ export default function DashboardClient({
       </section>
 
       {/* クライアント — 請求・入金管理 */}
-      <section ref={clientSectionRef} className="scroll-mt-24 rounded-lg border bg-white">
+      <section ref={clientSectionRef} className="scroll-mt-24 rounded-lg border bg-card">
         <SectionHeader
           title="クライアント — 請求・入金管理"
           open={clientOpen}
@@ -2108,7 +2175,7 @@ export default function DashboardClient({
         {clientOpen && (
         <>
         {localClientRecords.length === 0 ? (
-          <p className="text-sm text-gray-500 p-4">
+          <p className="text-sm text-muted-foreground p-4">
             この月の請求記録はまだありません（毎月1日に自動で作成されます）。クライアントが未登録の場合は{' '}
             <Link href="/master" className="text-info underline">マスタ管理</Link>
             {' '}から登録してください。
@@ -2118,12 +2185,12 @@ export default function DashboardClient({
             {/* PC・タブレット表示（md以上）: 表形式 */}
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-sm">
-                <thead className="border-b bg-gray-50">
+                <thead className="border-b bg-secondary">
                   <tr>
-                    <th className="text-left py-2 px-4 font-medium text-gray-600">クライアント</th>
-                    <th className="text-right py-2 px-3 font-medium text-gray-600">請求額</th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">送付<br /><span className="text-xs text-gray-500 font-normal">15日</span></th>
-                    <th className="text-center py-2 px-3 font-medium text-gray-600">入金確認<br /><span className="text-xs text-gray-500 font-normal">25日</span></th>
+                    <th className="text-left py-2 px-4 font-medium text-muted-foreground">クライアント</th>
+                    <th className="text-right py-2 px-3 font-medium text-muted-foreground">請求額</th>
+                    <th className="text-center py-2 px-3 font-medium text-muted-foreground">送付<br /><span className="text-xs text-muted-foreground font-normal">15日</span></th>
+                    <th className="text-center py-2 px-3 font-medium text-muted-foreground">入金確認<br /><span className="text-xs text-muted-foreground font-normal">25日</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2142,15 +2209,20 @@ export default function DashboardClient({
                     const confirmIds = g.items.map((cr) => cr.id)
                     const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
                     // 相手の行（見出し／1件だけの行）の見た目。期限はそのクライアントの全内訳ぶんをまとめて判定し、
-                    // 背景ではなく左端のバーで出す（黄色い面は内訳の行だけに使う）。
+                    // 背景ではなく左端のバーで出す（対応色の面は内訳の行だけに使う）。
                     const groupState = rowDueState(
                       g.items.flatMap((cr) => [
                         clientDueState(cr, 'invoice_sent_at', 15),
                         clientDueState(cr, 'payment_confirmed_at', 25),
                       ])
                     )
-                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100 hover:bg-gray-100'
+                    const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-secondary hover:bg-secondary'
                     const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
+                    // 請求書送付・入金確認の2点。経費行はチェックの体系が違うため、内訳だけで判定する。
+                    const groupPips = [
+                      g.items.every((cr) => !!cr.invoice_sent_at),
+                      g.items.every((cr) => !!cr.payment_confirmed_at),
+                    ]
                     // 複数内訳のクライアントは「ヘッダー行（名前＋合計）＋内訳行（インデント）」でグループ表示する。
                     // 内訳が1つだけのクライアントは従来どおり1行（名前＋金額＋チェック）で表示し、冗長な行を増やさない。
                     const headerRow = multi
@@ -2158,14 +2230,15 @@ export default function DashboardClient({
                           <tr
                             key={`header-${g.clientId}`}
                             data-pending-row={`cligroup-${g.clientId}`}
-                            className={`border-y-2 border-gray-200 ${rowBg(`cligroup-${g.clientId}`, groupCls)}`}
+                            className={`border-y-2 border-border ${rowBg(`cligroup-${g.clientId}`, groupCls)}`}
                           >
                             <td className={`py-2 px-4 ${accentCls}`}>
-                              <span className="font-semibold text-gray-900">{g.clientName}</span>
+                              <span className="font-semibold text-foreground">{g.clientName}</span>
+                              <ProgressPips states={groupPips} className="mt-1" />
                             </td>
                             <td className="py-2 px-3 text-right">
-                              <span className="text-xs text-gray-500 mr-1">合計</span>
-                              <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
+                              <span className="text-xs text-muted-foreground mr-1">合計</span>
+                              <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                             </td>
                             <td />
                             <td className="text-center py-2 px-3">
@@ -2176,7 +2249,7 @@ export default function DashboardClient({
                                 onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
-                                badge={<span className="block text-[10px] text-gray-500">まとめて</span>}
+                                badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
                               />
                             </td>
                           </tr>
@@ -2190,29 +2263,30 @@ export default function DashboardClient({
                       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
                       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
                       // 1内訳だけのクライアントは、この行が「相手の行」そのものなので見出しの見た目にする
-                      // （内訳の黄色と同じ色にすると、上のクライアントの内訳と続いて見えて区切りが読めない）。
+                      // （内訳の対応色と同じ色にすると、上のクライアントの内訳と続いて見えて区切りが読めない）。
                       const rowClass = multi
-                        ? (isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-gray-50')
+                        ? (isCurrentMonth ? rowDueClass(rowDueState([sentState, confirmedState])) : 'hover:bg-accent')
                         : groupCls
                       const labelPart = label ? `（${label}）` : ''
                       return (
                         <tr
                           key={cr.id}
                           data-pending-row={`cli-${cr.id}`}
-                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-gray-200'} ${rowBg(`cli-${cr.id}`, rowClass)}`}
+                          className={`${multi ? 'border-b last:border-0' : 'border-y-2 border-border'} ${rowBg(`cli-${cr.id}`, rowClass)}`}
                         >
                           <td className={multi ? 'py-3 pl-10 pr-4' : `py-3 px-4 ${accentCls}`}>
                             {multi ? (
-                              <span className="text-gray-700">{label || '（内訳名なし）'}</span>
+                              <span className="text-foreground">{label || '（内訳名なし）'}</span>
                             ) : (
                               <>
-                                <div className="font-semibold text-gray-900">{g.clientName}</div>
-                                {label && <div className="text-xs text-gray-500">{label}</div>}
+                                <div className="font-semibold text-foreground">{g.clientName}</div>
+                                {label && <div className="text-xs text-muted-foreground">{label}</div>}
+                                <ProgressPips states={groupPips} className="mt-1" />
                               </>
                             )}
                             {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
                           </td>
-                          <td className={`py-3 px-3 text-right ${multi ? 'text-gray-600' : 'font-semibold text-gray-900'}`}>
+                          <td className={`py-3 px-3 text-right ${multi ? 'text-muted-foreground' : 'font-semibold text-foreground'}`}>
                             {(() => {
                               const billing = cr.billing_amount_snapshot
                               return billing ? `¥${billing.toLocaleString()}` : '—'
@@ -2253,13 +2327,13 @@ export default function DashboardClient({
                     const expenseRow = expenseTotal > 0
                       ? [(
                           <tr key={`cexp-${g.clientId}`} className="border-b last:border-0">
-                            <td className="py-3 pl-10 pr-4 text-gray-700">
+                            <td className="py-3 pl-10 pr-4 text-foreground">
                               立替経費
-                              <span className="ml-1 text-xs text-gray-500">
+                              <span className="ml-1 text-xs text-muted-foreground">
                                 （{passThroughExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
                               </span>
                             </td>
-                            <td className="py-3 px-3 text-right text-gray-600">¥{expenseTotal.toLocaleString()}</td>
+                            <td className="py-3 px-3 text-right text-muted-foreground">¥{expenseTotal.toLocaleString()}</td>
                             <td className="text-center py-3 px-3">
                               {renderExpenseSentCheck('expense', g.clientId, g.clientName, passThroughExpenses)}
                             </td>
@@ -2271,7 +2345,7 @@ export default function DashboardClient({
                     // 取り違えると委託者への支払額を誤るため。登録もこの行から行う（常時表示）。
                     const selfExpenseRow = [(
                       <tr key={`cself-${g.clientId}`} className="border-b last:border-0">
-                        <td className="py-3 pl-10 pr-4 align-top text-gray-700">
+                        <td className="py-3 pl-10 pr-4 align-top text-foreground">
                           自社経費
                           <ExpenseBlock
                             items={selfExpenses}
@@ -2285,7 +2359,7 @@ export default function DashboardClient({
                             addLabel="＋自社経費"
                           />
                         </td>
-                        <td className="py-3 px-3 text-right align-top text-gray-600">
+                        <td className="py-3 px-3 text-right align-top text-muted-foreground">
                           {selfExpenseTotal > 0 ? `¥${selfExpenseTotal.toLocaleString()}` : '—'}
                         </td>
                         <td className="text-center py-3 px-3 align-top">
@@ -2312,15 +2386,19 @@ export default function DashboardClient({
                 const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal + selfExpenseTotal
                 const confirmIds = g.items.map((cr) => cr.id)
                 const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
-                // PC表と同じ考え方で、相手の名前の帯はグレー固定・期限は左端のバーで出す。
+                // PC表と同じ考え方で、相手の名前の帯は淡いブルー固定・期限は左端のバーで出す。
                 const groupState = rowDueState(
                   g.items.flatMap((cr) => [
                     clientDueState(cr, 'invoice_sent_at', 15),
                     clientDueState(cr, 'payment_confirmed_at', 25),
                   ])
                 )
-                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-gray-100'
+                const groupCls = isCurrentMonth ? groupRowClass(groupState) : 'bg-secondary'
                 const accentCls = isCurrentMonth ? groupAccentClass(groupState) : 'border-l-4 border-l-transparent'
+                const groupPips = [
+                  g.items.every((cr) => !!cr.invoice_sent_at),
+                  g.items.every((cr) => !!cr.payment_confirmed_at),
+                ]
                 return (
                   <div
                     key={g.clientId}
@@ -2328,16 +2406,19 @@ export default function DashboardClient({
                     className={`px-4 py-3 ${multi ? rowBg(`cligroup-${g.clientId}`, '') : ''}`}
                   >
                     <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cligroup-${g.clientId}`, groupCls)} ${accentCls}`}>
-                      <span className="font-semibold text-gray-900">{g.clientName}</span>
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="font-semibold text-foreground">{g.clientName}</span>
+                        <ProgressPips states={groupPips} />
+                      </span>
                       {/* 複数内訳のクライアントは、ヘッダーに合計請求額と「入金確認（まとめて）」を置く */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
                           <span>
-                            <span className="text-xs text-gray-500 mr-1">合計</span>
-                            <span className="font-semibold text-gray-900">¥{total.toLocaleString()}</span>
+                            <span className="text-xs text-muted-foreground mr-1">合計</span>
+                            <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                           </span>
                           <span className="flex flex-col items-center gap-0.5">
-                            <span className="text-xs text-gray-500">入金確認</span>
+                            <span className="text-xs text-muted-foreground">入金確認</span>
                             <MoneyCheckControl
                               checked={allConfirmed}
                               pending={pendingGroupUncheck?.kind === 'client' && pendingGroupUncheck.ids.join(',') === confirmIds.join(',')}
@@ -2366,16 +2447,16 @@ export default function DashboardClient({
                           <div key={cr.id} data-pending-row={`cli-${cr.id}`} className={`rounded-lg ${rowBg(`cli-${cr.id}`, cardClass)}`}>
                             <div className="mb-1 flex items-start justify-between gap-2">
                               <div className="min-w-0">
-                                <span className="text-sm text-gray-600">{label || '（内訳名なし）'}</span>
+                                <span className="text-sm text-muted-foreground">{label || '（内訳名なし）'}</span>
                                 {overBilled && <Badge variant="destructive" className="ml-1 text-xs">請求回数超過</Badge>}
                               </div>
-                              <span className={`shrink-0 text-sm ${multi ? 'text-gray-600' : 'font-semibold text-gray-900'}`}>
+                              <span className={`shrink-0 text-sm ${multi ? 'text-muted-foreground' : 'font-semibold text-foreground'}`}>
                                 {billing ? `¥${billing.toLocaleString()}` : '—'}
                               </span>
                             </div>
-                            <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 py-2">
+                            <div className="grid grid-cols-2 gap-1 rounded-lg bg-secondary py-2">
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">送付<span className="ml-1 text-gray-500">15日</span></span>
+                                <span className="text-xs text-muted-foreground">送付<span className="ml-1 text-muted-foreground">15日</span></span>
                                 <MoneyCheckControl
                                   checked={!!cr.invoice_sent_at}
                                   checkedAt={cr.invoice_sent_at}
@@ -2389,9 +2470,9 @@ export default function DashboardClient({
                               </div>
                               {/* 複数内訳のクライアントはカード上部の「入金確認（まとめて）」に集約するため内訳側は出さない。 */}
                               <div className="flex flex-col items-center gap-1">
-                                <span className="text-xs text-gray-500">入金確認<span className="ml-1 text-gray-500">25日</span></span>
+                                <span className="text-xs text-muted-foreground">入金確認<span className="ml-1 text-muted-foreground">25日</span></span>
                                 {multi ? (
-                                  <span className="text-xs text-gray-400">上でまとめて</span>
+                                  <span className="text-xs text-muted-foreground">上でまとめて</span>
                                 ) : (
                                   <MoneyCheckControl
                                     checked={!!cr.payment_confirmed_at}
@@ -2412,16 +2493,16 @@ export default function DashboardClient({
                       {expenseTotal > 0 && (
                         <div className="text-sm">
                           <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 text-gray-600">
+                            <span className="min-w-0 text-muted-foreground">
                               立替経費
-                              <span className="ml-1 text-xs text-gray-500">
+                              <span className="ml-1 text-xs text-muted-foreground">
                                 （{passThroughExpenses.map((e) => e.note?.trim() || '内容なし').join('、')}）
                               </span>
                             </span>
-                            <span className="shrink-0 text-gray-600">¥{expenseTotal.toLocaleString()}</span>
+                            <span className="shrink-0 text-muted-foreground">¥{expenseTotal.toLocaleString()}</span>
                           </div>
                           <div className="mt-1 flex items-center justify-end gap-2">
-                            <span className="text-xs text-gray-500">送付</span>
+                            <span className="text-xs text-muted-foreground">送付</span>
                             {renderExpenseSentCheck('expense', g.clientId, g.clientName, passThroughExpenses)}
                           </div>
                         </div>
@@ -2429,14 +2510,14 @@ export default function DashboardClient({
                       {/* 自社経費。委託者に払う立替経費と取り違えないよう、別の見出しで並べる。 */}
                       <div className="text-sm">
                         <div className="flex items-start justify-between gap-2">
-                          <span className="min-w-0 text-gray-600">自社経費</span>
-                          <span className="shrink-0 text-gray-600">
+                          <span className="min-w-0 text-muted-foreground">自社経費</span>
+                          <span className="shrink-0 text-muted-foreground">
                             {selfExpenseTotal > 0 ? `¥${selfExpenseTotal.toLocaleString()}` : '—'}
                           </span>
                         </div>
                         {selfExpenses.length > 0 && (
                           <div className="mt-1 flex items-center justify-end gap-2">
-                            <span className="text-xs text-gray-500">送付</span>
+                            <span className="text-xs text-muted-foreground">送付</span>
                             {renderExpenseSentCheck('clientExpense', g.clientId, g.clientName, selfExpenses)}
                           </div>
                         )}
@@ -2464,35 +2545,35 @@ export default function DashboardClient({
       </section>
 
       {/* グローバルタスク（常時表示） */}
-      <section ref={globalTaskSectionRef} data-pending-row="global-tasks" className={`scroll-mt-24 rounded-lg border p-4 ${rowBg('global-tasks', 'bg-white')}`}>
+      <section ref={globalTaskSectionRef} data-pending-row="global-tasks" className={`scroll-mt-24 rounded-lg border p-4 ${rowBg('global-tasks', 'bg-card')}`}>
         <div className="flex items-center gap-2 mb-3">
-          <h2 className="text-sm font-semibold text-gray-900">グローバルタスク</h2>
+          <h2 className="text-sm font-semibold text-foreground">グローバルタスク</h2>
           <button
             type="button"
             onClick={() => setShowAddForm((v) => !v)}
             aria-label="タスクを追加"
             aria-expanded={showAddForm}
-            className={`flex items-center justify-center w-8 h-8 rounded-full bg-gray-700 hover:bg-gray-800 text-white ${TAP_ROUND_BUTTON}`}
+            className={`flex items-center justify-center w-8 h-8 rounded-full bg-primary hover:bg-primary/85 text-primary-foreground ${TAP_ROUND_BUTTON}`}
           >
             <Plus size={14} />
           </button>
         </div>
 
         {showAddForm && (
-          <div className="mb-4 p-3 border rounded-lg bg-gray-50 space-y-2">
+          <div className="mb-4 p-3 border rounded-lg bg-secondary space-y-2">
             <input
               type="text"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
               placeholder="タスク名を入力..."
-              className="w-full text-sm border border-gray-200 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              className="w-full text-sm border border-border rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
               autoFocus
             />
             {/* 日付（任意）: 表示・メモ用。繰り返し（毎月・特定月）のときだけ入力できる。単発は下の期日を使う。 */}
             {monthMode !== 'single' && (
               <div className="flex items-center gap-2 text-sm">
-                <label htmlFor="task-day" className="text-gray-600">日付（任意）</label>
+                <label htmlFor="task-day" className="text-muted-foreground">日付（任意）</label>
                 <input
                   id="task-day"
                   type="number"
@@ -2503,9 +2584,9 @@ export default function DashboardClient({
                   onChange={(e) => setNewDay(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
                   placeholder="—"
-                  className="w-16 text-sm border border-gray-200 rounded px-2 py-1.5 text-right focus:outline-none focus:ring-1 focus:ring-gray-400 [appearance:textfield] [-moz-appearance:textfield]"
+                  className="w-16 text-sm border border-border rounded px-2 py-1.5 text-right focus:outline-none focus:ring-1 focus:ring-ring [appearance:textfield] [-moz-appearance:textfield]"
                 />
-                <span className="text-gray-500">日</span>
+                <span className="text-muted-foreground">日</span>
               </div>
             )}
             <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -2524,14 +2605,14 @@ export default function DashboardClient({
             </div>
             {monthMode === 'single' && (
               <div className="flex items-center gap-2 text-sm">
-                <label htmlFor="task-due-date" className="text-gray-600">期日</label>
+                <label htmlFor="task-due-date" className="text-muted-foreground">期日</label>
                 <input
                   id="task-due-date"
                   type="date"
                   value={newDueDate}
                   onChange={(e) => setNewDueDate(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addCustomTask()}
-                  className="text-sm border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400"
+                  className="text-sm border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>
             )}
@@ -2543,7 +2624,7 @@ export default function DashboardClient({
                       type="button"
                       key={m}
                       onClick={() => setSelectedMonths((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m])}
-                      className={`inline-flex min-h-11 items-center justify-center px-3 py-1.5 text-xs rounded border md:min-h-0 ${selectedMonths.includes(m) ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                      className={`inline-flex min-h-11 items-center justify-center px-3 py-1.5 text-xs rounded-full border md:min-h-0 ${selectedMonths.includes(m) ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-muted-foreground hover:bg-accent'}`}
                     >
                       {m}月
                     </button>
@@ -2564,7 +2645,7 @@ export default function DashboardClient({
         )}
 
         {!localGlobal ? (
-          <p className="text-sm text-gray-600">今月のデータはまだ作成されていません。翌月1日に自動で生成されます。</p>
+          <p className="text-sm text-muted-foreground">今月のデータはまだ作成されていません。翌月1日に自動で生成されます。</p>
         ) : (
           <div className="space-y-2">
             {visibleGlobalTasks.map((t) => {
@@ -2573,10 +2654,10 @@ export default function DashboardClient({
               return (
                 <div key={t.field} className={`flex min-h-11 items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                   <Checkbox checked={done} onCheckedChange={() => requestToggleGlobal(t.field, done)} className={TAP_CHECKBOX} />
-                  <span className={`flex-1 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{t.label}</span>
+                  <span className={`flex-1 text-sm ${done ? 'line-through text-muted-foreground' : ''}`}>{t.label}</span>
                   {isPendingUncheck ? (
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="whitespace-nowrap text-xs text-gray-500">外しますか？</span>
+                      <span className="whitespace-nowrap text-xs text-muted-foreground">外しますか？</span>
                       <button
                         type="button"
                         onClick={() => { setPendingGlobalUncheck(null); toggleGlobal(t.field) }}
@@ -2587,19 +2668,19 @@ export default function DashboardClient({
                       <button
                         type="button"
                         onClick={() => setPendingGlobalUncheck(null)}
-                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 md:h-auto md:min-w-0 md:py-0.5"
+                        className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-muted-foreground hover:bg-accent md:h-auto md:min-w-0 md:py-0.5"
                       >
                         戻る
                       </button>
                     </div>
                   ) : (
                     <>
-                      <span className="text-xs text-gray-500">{t.dueLabel}</span>
+                      <span className="text-xs text-muted-foreground">{t.dueLabel}</span>
                       {t.state === 'overdue' && (
                         <span className="text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
                       )}
                       {t.state === 'upcoming' && (
-                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">対応期間前</span>
+                        <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">対応期間前</span>
                       )}
                     </>
                   )}
@@ -2616,17 +2697,17 @@ export default function DashboardClient({
                   return (
                     <div key={t.id} className={`flex min-h-11 flex-wrap items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} className={TAP_CHECKBOX} />
-                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{renderTaskTitle(t.title)}</span>
+                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-muted-foreground' : ''}`}>{renderTaskTitle(t.title)}</span>
                       {t.day != null && (
-                        <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{t.day}日</span>
+                        <span className="shrink-0 text-xs text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">{t.day}日</span>
                       )}
                       {t.months.length > 0 && (
                         <div className="flex flex-wrap gap-1 shrink-0">
                           {t.months.length <= 4
                             ? t.months.map((m) => (
-                                <span key={m} className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{m}月</span>
+                                <span key={m} className="text-xs bg-secondary text-muted-foreground px-1.5 py-0.5 rounded">{m}月</span>
                               ))
-                            : <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{t.months.length}か月限定</span>
+                            : <span className="text-xs bg-secondary text-muted-foreground px-1.5 py-0.5 rounded">{t.months.length}か月限定</span>
                           }
                         </div>
                       )}
@@ -2648,7 +2729,7 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => setPendingDeleteId(null)}
-                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 md:h-auto md:min-w-0 md:py-0.5"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground md:h-auto md:min-w-0 md:py-0.5"
                           >
                             戻る
                           </button>
@@ -2658,7 +2739,7 @@ export default function DashboardClient({
                           type="button"
                           onClick={() => setPendingDeleteId(t.id)}
                           aria-label={`${t.title}を削除`}
-                          className={`text-gray-300 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
+                          className={`text-muted-foreground/60 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -2671,7 +2752,7 @@ export default function DashboardClient({
             {oneTimeTasks.length > 0 && (
               <>
                 <div className="border-t my-2" />
-                <p className="text-xs font-medium text-gray-500">単発</p>
+                <p className="text-xs font-medium text-muted-foreground">単発</p>
                 {oneTimeTasks.map((t) => {
                   const done = !!t.completed_at
                   const isPendingDelete = pendingDeleteId === t.id
@@ -2679,8 +2760,8 @@ export default function DashboardClient({
                   return (
                     <div key={t.id} className={`flex min-h-11 flex-wrap items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleOneTimeTask(t.id)} className={TAP_CHECKBOX} />
-                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-gray-400' : ''}`}>{renderTaskTitle(t.title)}</span>
-                      <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{formatDueMd(t.due_date)}</span>
+                      <span className={`flex-1 min-w-0 text-sm ${done ? 'line-through text-muted-foreground' : ''}`}>{renderTaskTitle(t.title)}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">{formatDueMd(t.due_date)}</span>
                       {overdue && (
                         <span className="shrink-0 text-xs bg-danger-subtle text-danger px-2 py-0.5 rounded">期限超過</span>
                       )}
@@ -2696,7 +2777,7 @@ export default function DashboardClient({
                           <button
                             type="button"
                             onClick={() => setPendingDeleteId(null)}
-                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 md:h-auto md:min-w-0 md:py-0.5"
+                            className="flex h-11 min-w-11 items-center justify-center rounded px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground md:h-auto md:min-w-0 md:py-0.5"
                           >
                             戻る
                           </button>
@@ -2706,7 +2787,7 @@ export default function DashboardClient({
                           type="button"
                           onClick={() => setPendingDeleteId(t.id)}
                           aria-label={`${t.title}を削除`}
-                          className={`text-gray-300 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
+                          className={`text-muted-foreground/60 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -2721,39 +2802,42 @@ export default function DashboardClient({
       </section>
 
       {/* 売上・経費・利益サマリー */}
-      <section ref={summarySectionRef} className="scroll-mt-24 rounded-lg border bg-white p-4">
+      <section ref={summarySectionRef} className="scroll-mt-24 rounded-lg border bg-card p-4">
         <div className="grid grid-cols-2 gap-3 mb-3">
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">売上</p>
-            <p className="text-xl font-medium text-gray-900">¥{revenue.toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
+          <div className="bg-secondary rounded-lg p-3">
+            <p className="text-xs text-muted-foreground mb-1">売上</p>
+            <p className="text-xl font-medium text-foreground">¥{revenue.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
           </div>
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">外注費</p>
-            <p className="text-xl font-medium text-gray-600">¥{contractorCost.toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-0.5">委託者 {localRecords.length}件</p>
+          <div className="bg-secondary rounded-lg p-3">
+            <p className="text-xs text-muted-foreground mb-1">外注費</p>
+            <p className="text-xl font-medium text-muted-foreground">¥{contractorCost.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">委託者 {localRecords.length}件</p>
           </div>
-          <div className="bg-gray-50 rounded-lg p-3">
+          <div className="bg-secondary rounded-lg p-3">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-xs text-gray-500">その他経費</p>
+              <p className="text-xs text-muted-foreground">その他経費</p>
               <span className="text-xs bg-info-subtle text-info px-1.5 py-0.5 rounded">MF連携</span>
             </div>
-            <p className="text-xl font-medium text-gray-600">
+            <p className="text-xl font-medium text-muted-foreground">
               {mfExpense ? `¥${mfExpense.amount.toLocaleString()}` : '—'}
             </p>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {mfExpense
                 ? `${new Date(mfExpense.syncedAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })} 同期済`
                 : '未同期'}
             </p>
           </div>
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-500 mb-1">利益</p>
-            <p className={`text-xl font-medium ${profit >= 0 ? 'text-success' : 'text-danger'}`}>
+          {/* 利益は「その月の成果」なので、他のタイルより一段目立つヒーロー表示にする。
+              ただし赤字の月まで華やかに見せると事の重大さが伝わらないため、
+              マイナスのときだけ従来の警告色のタイルに戻す。 */}
+          <div className={`rounded-lg p-3 ${profit >= 0 ? 'bg-linear-to-br from-primary to-primary-deep text-primary-foreground' : 'bg-danger-subtle text-danger'}`}>
+            <p className={`text-xs mb-1 ${profit >= 0 ? 'text-primary-foreground/80' : 'text-danger'}`}>利益</p>
+            <p className="text-xl font-medium">
               ¥{profit.toLocaleString()}
             </p>
             {revenue > 0 && (
-              <p className="text-xs text-gray-500 mt-0.5">
+              <p className={`text-xs mt-0.5 ${profit >= 0 ? 'text-primary-foreground/80' : 'text-danger'}`}>
                 利益率 {Math.round((profit / revenue) * 100)}%
               </p>
             )}
@@ -2762,7 +2846,7 @@ export default function DashboardClient({
         <div className="flex items-center justify-between border-t pt-3">
           <div>
             {mfConnected ? (
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 マネーフォワード クラウド会計 連携中
               </p>
             ) : mfExpired ? (
@@ -2770,7 +2854,7 @@ export default function DashboardClient({
                 マネーフォワード連携の有効期限が切れました。再連携してください。
               </p>
             ) : (
-              <p className="text-xs text-gray-500">マネーフォワード 未連携</p>
+              <p className="text-xs text-muted-foreground">マネーフォワード 未連携</p>
             )}
           </div>
           <div className="flex gap-2">
@@ -2797,24 +2881,24 @@ export default function DashboardClient({
 
         {/* スナップショット補完（欠損のみ）: 生成漏れ等でnullの金額を現マスタ値で埋める安全操作 */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-          <p className="text-xs text-gray-600">
+          <p className="text-xs text-muted-foreground">
             金額スナップショットの欠損を、現在のマスタ値で補完します（既存の値は変更しません）。
           </p>
           {snapshotConfirm ? (
             <div className="flex items-center gap-1">
-              <span className="text-xs text-gray-500">補完しますか？</span>
+              <span className="text-xs text-muted-foreground">補完しますか？</span>
               <button
                 type="button"
                 onClick={backfillSnapshots}
                 disabled={snapshotBusy}
-                className="inline-flex min-h-11 items-center rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50 md:min-h-0"
+                className="inline-flex min-h-11 items-center rounded border border-border px-3 py-1.5 text-xs text-foreground hover:bg-accent disabled:opacity-50 md:min-h-0"
               >
                 {snapshotBusy ? '実行中…' : '実行する'}
               </button>
               <button
                 type="button"
                 onClick={() => setSnapshotConfirm(false)}
-                className="inline-flex min-h-11 items-center rounded px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-100 md:min-h-0"
+                className="inline-flex min-h-11 items-center rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent md:min-h-0"
               >
                 戻る
               </button>
@@ -2823,7 +2907,7 @@ export default function DashboardClient({
             <button
               type="button"
               onClick={() => setSnapshotConfirm(true)}
-              className="inline-flex min-h-11 shrink-0 items-center rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 md:min-h-0"
+              className="inline-flex min-h-11 shrink-0 items-center rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent md:min-h-0"
             >
               スナップショット補完
             </button>
