@@ -70,9 +70,9 @@ function StatusBadge({ status }: { status: string }) {
 // 区分は「登録するとどこへ行く金額か」を表す。クライアントに請求する行だけが請求額に乗るので、
 // その行だけ色を付けて、自社経費・対象外と一目で見分けられるようにする。
 function KindLabel({ kind }: { kind: string | null }) {
-  if (kind === null) return <span className="text-gray-400">未割当</span>
+  if (kind === null) return <span className="text-muted-foreground">未割当</span>
   const label = EXPENSE_KIND_LABEL[kind as keyof typeof EXPENSE_KIND_LABEL] ?? kind
-  return <span className={cn('whitespace-nowrap', kind === 'client_billed' ? 'text-info' : 'text-gray-600')}>{label}</span>
+  return <span className={cn('whitespace-nowrap', kind === 'client_billed' ? 'text-info' : 'text-muted-foreground')}>{label}</span>
 }
 
 // 受付・送信日時はサーバー保存の UTC 文字列。閲覧端末のタイムゾーンに左右されないよう JST 固定で表示する。
@@ -174,14 +174,14 @@ export default function ExpenseCheckClient() {
     <div className="space-y-6">
       <div className="space-y-2">
         <h1 className="text-xl font-bold">経費チェック</h1>
-        <p className="text-xs leading-relaxed text-gray-500">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           代表から届いた経費ファイルの明細です。「クライアントに請求」の行だけが、登録すると
           そのクライアントへの請求経費になります。自社経費・対象外の行は記録だけが残ります。
         </p>
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <label className="flex min-h-11 items-center gap-2 text-sm text-gray-600 md:min-h-0">
+        <label className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground md:min-h-0">
           <input
             type="checkbox"
             checked={showAll}
@@ -208,13 +208,13 @@ export default function ExpenseCheckClient() {
       )}
 
       {!rows && (
-        <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
+        <div className="rounded-lg border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
           読み込み中…
         </div>
       )}
 
       {rows && rows.length === 0 && !error && (
-        <div className="rounded-lg border border-dashed bg-white px-4 py-10 text-center text-sm text-gray-500">
+        <div className="rounded-lg border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
           {showAll ? '受け付けた経費ファイルはまだありません。' : '確認待ちの経費ファイルはありません。'}
         </div>
       )}
@@ -227,11 +227,11 @@ export default function ExpenseCheckClient() {
         // 再読み取り中も却下を押せてしまうと、消える予定の明細に対して判断を下すことになるため一緒に止める。
         const busy = busyId === row.id || extracting
         return (
-          <div key={row.id} className="rounded-lg border bg-white">
+          <div key={row.id} className="rounded-lg border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium break-all">{row.file_name}</p>
-                <p className="mt-0.5 text-xs text-gray-500">
+                <p className="mt-0.5 text-xs text-muted-foreground">
                   {row.submitted_at ? `${formatDateTime(row.submitted_at)} 送信` : `${formatDateTime(row.created_at)} 受付`}
                   {row.reviewed_at && `／${formatDateTime(row.reviewed_at)} 処理`}
                 </p>
@@ -248,10 +248,10 @@ export default function ExpenseCheckClient() {
             {/* 読み取りに失敗した受付は明細が1行も無い。表の枠だけが残ると壊れて見えるので、
                 表・カードのどちらも出さずに、次にすべきことの説明を出す。 */}
             {row.items.length === 0 && (
-              <div className="px-4 py-3 text-sm text-gray-500">
+              <div className="px-4 py-3 text-sm text-muted-foreground">
                 {failed ? (
                   <div className="space-y-1">
-                    <p className="text-gray-700">AIが原本を読み取れなかったため、明細がありません。</p>
+                    <p className="text-foreground">AIが原本を読み取れなかったため、明細がありません。</p>
                     <p className="text-xs leading-relaxed">
                       AI側の一時的な混雑が原因のことが多いので、まず「再読み取り」をお試しください。
                       成功するとこの受付は代表の割当待ちに戻り、代表が受付URLから割り当て・送信し直します。
@@ -267,23 +267,23 @@ export default function ExpenseCheckClient() {
             {/* 明細テーブル（PC・タブレット） */}
             <div className={cn('hidden overflow-x-auto', row.items.length > 0 && 'md:block')}>
               <table className="w-full min-w-[48rem] text-sm">
-                <thead className="border-b bg-gray-50">
+                <thead className="border-b bg-secondary">
                   <tr>
-                    <th className="w-[5rem] px-4 py-2 text-left font-medium whitespace-nowrap text-gray-600">利用日</th>
-                    <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">区間</th>
-                    <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">内容</th>
-                    <th className="w-[7rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">金額</th>
-                    <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">区分</th>
-                    <th className="w-[10rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">クライアント</th>
+                    <th className="w-[5rem] px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">利用日</th>
+                    <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">区間</th>
+                    <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">内容</th>
+                    <th className="w-[7rem] px-3 py-2 text-right font-medium whitespace-nowrap text-muted-foreground">金額</th>
+                    <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">区分</th>
+                    <th className="w-[10rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">クライアント</th>
                   </tr>
                 </thead>
                 <tbody>
                   {row.items.map((item) => (
                     <tr key={item.id} className="border-b align-top last:border-0">
-                      <td className="px-4 py-2 whitespace-nowrap text-gray-600">{formatExpenseDate(item.item_date)}</td>
-                      <td className="px-3 py-2 text-gray-700">{formatExpenseRoute(item.from_place, item.to_place) || '—'}</td>
-                      <td className="px-3 py-2 text-gray-700">{item.description ?? '—'}</td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap text-gray-900">
+                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatExpenseDate(item.item_date)}</td>
+                      <td className="px-3 py-2 text-foreground">{formatExpenseRoute(item.from_place, item.to_place) || '—'}</td>
+                      <td className="px-3 py-2 text-foreground">{item.description ?? '—'}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap text-foreground">
                         {formatExpenseAmount(item.amount)}
                       </td>
                       <td className="px-3 py-2">
@@ -293,7 +293,7 @@ export default function ExpenseCheckClient() {
                           <span className="ml-1 text-xs whitespace-nowrap text-success">登録済み</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-gray-700">{item.client_name ?? '—'}</td>
+                      <td className="px-3 py-2 text-foreground">{item.client_name ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -307,28 +307,28 @@ export default function ExpenseCheckClient() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{formatExpenseDate(item.item_date)}</p>
-                      <p className="text-xs break-words text-gray-600">
+                      <p className="text-xs break-words text-muted-foreground">
                         {formatExpenseRoute(item.from_place, item.to_place) || item.description || '—'}
                       </p>
                     </div>
                     <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(item.amount)}</p>
                   </div>
-                  <div className="mt-2 space-y-1 rounded-lg bg-gray-50 px-3 py-2 text-xs">
+                  <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
                     <div className="flex justify-between gap-3">
-                      <span className="text-gray-500">区分</span>
+                      <span className="text-muted-foreground">区分</span>
                       <span className="text-right">
                         <KindLabel kind={item.kind} />
                         {item.registered_client_expense_id && <span className="ml-1 text-success">登録済み</span>}
                       </span>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <span className="shrink-0 text-gray-500">クライアント</span>
-                      <span className="text-right text-gray-700">{item.client_name ?? '—'}</span>
+                      <span className="shrink-0 text-muted-foreground">クライアント</span>
+                      <span className="text-right text-foreground">{item.client_name ?? '—'}</span>
                     </div>
                     {item.description && formatExpenseRoute(item.from_place, item.to_place) && (
                       <div className="flex justify-between gap-3">
-                        <span className="shrink-0 text-gray-500">内容</span>
-                        <span className="text-right text-gray-700">{item.description}</span>
+                        <span className="shrink-0 text-muted-foreground">内容</span>
+                        <span className="text-right text-foreground">{item.description}</span>
                       </div>
                     )}
                   </div>
@@ -340,12 +340,12 @@ export default function ExpenseCheckClient() {
               {/* 読み取り失敗の受付は必ず0円0件になる。判断材料にならない数字を出すと
                   「請求が0円で確定した」と読み違えられるため、失敗時は合計を出さない。 */}
               {failed ? (
-                <div className="text-xs text-gray-500">明細を読み取れていません</div>
+                <div className="text-xs text-muted-foreground">明細を読み取れていません</div>
               ) : (
                 <div className="text-sm">
-                  <span className="text-gray-500">クライアントに請求</span>
+                  <span className="text-muted-foreground">クライアントに請求</span>
                   <span className="ml-2 font-medium text-info">{formatExpenseAmount(total)}</span>
-                  <span className="ml-1 text-xs text-gray-500">（{billedCount}件）</span>
+                  <span className="ml-1 text-xs text-muted-foreground">（{billedCount}件）</span>
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
@@ -404,7 +404,7 @@ export default function ExpenseCheckClient() {
                   </>
                 )}
                 {row.status === 'draft' && !failed && (
-                  <span className="text-xs text-gray-500">代表が割当中です</span>
+                  <span className="text-xs text-muted-foreground">代表が割当中です</span>
                 )}
               </div>
             </div>

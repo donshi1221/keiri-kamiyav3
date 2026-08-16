@@ -53,12 +53,12 @@ function AssignFields({
   idPrefix: string
 }) {
   // スマホでの取りこぼしを防ぐため、選択欄の高さは44px以上を確保する（PCは詰めた高さに戻す）。
-  const selectClass = 'min-h-11 w-full rounded border bg-white px-3 py-2 text-sm md:min-h-9'
+  const selectClass = 'min-h-11 w-full rounded border bg-card px-3 py-2 text-sm md:min-h-9'
 
   return (
     <div className="space-y-2">
       <div>
-        <label htmlFor={`${idPrefix}-kind`} className="mb-1 block text-xs font-medium text-gray-600">
+        <label htmlFor={`${idPrefix}-kind`} className="mb-1 block text-xs font-medium text-muted-foreground">
           区分
         </label>
         <select
@@ -78,7 +78,7 @@ function AssignFields({
 
       {draft.kind === 'client_billed' && (
         <div>
-          <label htmlFor={`${idPrefix}-client`} className="mb-1 block text-xs font-medium text-gray-600">
+          <label htmlFor={`${idPrefix}-client`} className="mb-1 block text-xs font-medium text-muted-foreground">
             クライアント
           </label>
           <select
@@ -235,7 +235,7 @@ export default function ExpenseUploadForm({
   if (!inbox) {
     return (
       <form onSubmit={sendFile} className="space-y-4">
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           モバイルICOCAの利用履歴（PDF）や領収書の写真を1つ選んで送信してください。
           送信すると明細を読み取るので、続けて行ごとの割り当てをお願いします。
         </p>
@@ -266,7 +266,7 @@ export default function ExpenseUploadForm({
         {/* AIの読み取りには十数秒かかることがある。何も出ないと固まったように見えて
             画面を閉じられてしまうため、待ち時間であることを明示する。 */}
         {uploading && (
-          <p className="text-center text-xs text-gray-500">
+          <p className="text-center text-xs text-muted-foreground">
             明細を読み取っています。1分ほどかかることがあります。このまま画面を開いたままお待ちください。
           </p>
         )}
@@ -286,7 +286,7 @@ export default function ExpenseUploadForm({
             ファイル（{inbox.file_name}）はお預かりしました。お手数ですが担当者にご連絡ください。
           </p>
         </div>
-        {inbox.extract_error && <p className="text-xs text-gray-500">{inbox.extract_error}</p>}
+        {inbox.extract_error && <p className="text-xs text-muted-foreground">{inbox.extract_error}</p>}
       </div>
     )
   }
@@ -294,9 +294,9 @@ export default function ExpenseUploadForm({
   // ─── 第2段階: 読み取った明細に割り当てる ───────────────────────────────
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border bg-white px-4 py-3">
+      <div className="rounded-lg border bg-card px-4 py-3">
         <p className="text-sm font-medium break-all">{inbox.file_name}</p>
-        <p className="mt-1 text-xs text-gray-500">
+        <p className="mt-1 text-xs text-muted-foreground">
           {items.length}件の明細を読み取りました。行ごとに区分などを選んで送信してください。
         </p>
       </div>
@@ -305,7 +305,7 @@ export default function ExpenseUploadForm({
         <div key={group.date || 'no-date'} className="space-y-2">
           <div className="flex items-baseline justify-between gap-2 px-1">
             <h2 className="text-sm font-bold">{formatExpenseDate(group.date || null)}</h2>
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted-foreground">
               {group.rows.length}件 / {formatExpenseAmount(group.rows.reduce((sum, r) => sum + r.amount, 0))}
             </span>
           </div>
@@ -318,7 +318,7 @@ export default function ExpenseUploadForm({
               <div
                 key={item.id}
                 className={cn(
-                  'rounded-lg border bg-white px-4 py-3',
+                  'rounded-lg border bg-card px-4 py-3',
                   // 未入力の行は「これから埋めるもの」なので、エラーの赤ではなく注意の色で目立たせる。
                   !complete && 'border-warning/40 bg-warning-subtle'
                 )}
@@ -326,7 +326,7 @@ export default function ExpenseUploadForm({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     {route && <p className="text-sm font-medium break-words">{route}</p>}
-                    <p className={cn('text-xs text-gray-600', !route && 'text-sm font-medium text-gray-900')}>
+                    <p className={cn('text-xs text-muted-foreground', !route && 'text-sm font-medium text-foreground')}>
                       {item.description ?? '内容なし'}
                     </p>
                   </div>
@@ -369,7 +369,7 @@ export default function ExpenseUploadForm({
 
       {/* 明細が10件前後あると送信ボタンが画面外に出てしまう。残り件数と一緒に手元へ固定して、
           「あと何行埋めればよいか」を見ながら送信できるようにする。 */}
-      <div className="sticky bottom-4 rounded-lg border bg-white px-4 py-3 shadow-lg">
+      <div className="sticky bottom-4 rounded-lg border bg-card px-4 py-3 shadow-lg">
         {incomplete.length > 0 && (
           <p className="mb-2 text-center text-xs text-warning">未入力があと{incomplete.length}件あります</p>
         )}

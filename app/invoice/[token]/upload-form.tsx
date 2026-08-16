@@ -58,7 +58,7 @@ export default function InvoiceUploadForm({ token }: { token: string }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <p className="text-sm text-gray-600">請求書のPDFファイルを選んで送信してください。</p>
+      <p className="text-sm text-muted-foreground">請求書のPDFファイルを選んで送信してください。</p>
 
       <div className="rounded-lg border border-warning/40 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">ご確認ください</p>

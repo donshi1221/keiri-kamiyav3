@@ -102,7 +102,7 @@ export default function MasterPage() {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`inline-flex min-h-11 items-end justify-center pb-2 px-3 text-sm border-b-2 transition-colors md:min-h-0 md:px-1 ${tab === t ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            className={`inline-flex min-h-11 items-end justify-center pb-2 px-3 text-sm border-b-2 transition-colors md:min-h-0 md:px-1 ${tab === t ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
           >
             {t === 'contractor' ? '委託者' : 'クライアント'}
           </button>
@@ -110,7 +110,7 @@ export default function MasterPage() {
       </div>
 
       {loading ? (
-        <p className="text-sm text-gray-500">読み込み中…</p>
+        <p className="text-sm text-muted-foreground">読み込み中…</p>
       ) : (
         <>
           {tab === 'contractor' && (
@@ -214,16 +214,16 @@ function UploadUrlSection({ title, description, endpoint, pathPrefix, onError }:
   }
 
   return (
-    <div className="rounded-lg border bg-white">
+    <div className="rounded-lg border bg-card">
       <div className="border-b px-4 py-3">
         <h2 className="font-medium">{title}</h2>
-        <p className="mt-1 text-xs text-gray-600">{description}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
       </div>
       <div className="space-y-3 px-4 py-3">
         {url ? (
-          <p className="rounded border bg-gray-50 px-3 py-2 text-xs break-all">{url}</p>
+          <p className="rounded border bg-secondary px-3 py-2 text-xs break-all">{url}</p>
         ) : (
-          <p className="text-sm text-gray-500">読み込み中…</p>
+          <p className="text-sm text-muted-foreground">読み込み中…</p>
         )}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" className="h-11 md:h-7" onClick={copy} disabled={!url}>
@@ -308,24 +308,24 @@ function GoogleDriveSection({ onError }: { onError: (msg: string) => void }) {
   const connected = status?.connected ?? false
 
   return (
-    <div className="rounded-lg border bg-white">
+    <div className="rounded-lg border bg-card">
       <div className="border-b px-4 py-3">
         <h2 className="font-medium">Googleドライブ連携</h2>
-        <p className="mt-1 text-xs text-gray-600">
+        <p className="mt-1 text-xs text-muted-foreground">
           照合OKになった請求書PDFを、連携したGoogleアカウントのドライブへ自動保存します（対象月のフォルダに振り分け）。
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-[12rem] flex-1">
           {status === null ? (
-            <p className="text-xs text-gray-500">{statusFailed ? '連携状態を取得できませんでした' : '読み込み中…'}</p>
+            <p className="text-xs text-muted-foreground">{statusFailed ? '連携状態を取得できませんでした' : '読み込み中…'}</p>
           ) : connected ? (
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-muted-foreground">
               連携中
               {status.updatedAt && `（${new Date(status.updatedAt).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric' })} 更新）`}
             </p>
           ) : (
-            <p className="text-xs text-gray-500">未連携</p>
+            <p className="text-xs text-muted-foreground">未連携</p>
           )}
           {status && !status.configured && (
             <p className="mt-1 text-xs text-danger">
@@ -424,27 +424,27 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
       </div>
 
       {contractors.length === 0 ? (
-        <p className="text-sm text-gray-600">委託者が登録されていません</p>
+        <p className="text-sm text-muted-foreground">委託者が登録されていません</p>
       ) : (
         contractors.map((c) => {
           const myAssignments = assignments.filter((a) => a.contractor_id === c.id)
           return (
-            <div key={c.id} className="rounded-lg border bg-white">
+            <div key={c.id} className="rounded-lg border bg-card">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
                 <span className="font-medium flex-1 min-w-[8rem]">{c.name}</span>
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">
                   {c.contractor_type === 'daiko' ? '代行者' : '動画編集者'}
                 </span>
                 {c.contractor_type === 'video_editor' && c.unit_price > 0 && (
-                  <span className="text-xs text-gray-500">単価 ¥{c.unit_price.toLocaleString()}/本</span>
+                  <span className="text-xs text-muted-foreground">単価 ¥{c.unit_price.toLocaleString()}/本</span>
                 )}
-                {c.email && <span className="text-xs text-gray-500">{c.email}</span>}
+                {c.email && <span className="text-xs text-muted-foreground">{c.email}</span>}
                 <button onClick={() => setEditContractor(c)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
                 <button onClick={() => setDeleteTarget(c)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
               </div>
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500 font-medium">アサイン</span>
+                  <span className="text-xs text-muted-foreground font-medium">アサイン</span>
                   <button
                     onClick={() => setAddAssignOpen(c.id)}
                     className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}
@@ -453,7 +453,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                   </button>
                 </div>
                 {myAssignments.length === 0 ? (
-                  <p className="text-xs text-gray-600 py-1">なし</p>
+                  <p className="text-xs text-muted-foreground py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
                     {myAssignments.map((a) => {
@@ -467,22 +467,22 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                           : null
                       return (
                         <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-gray-400 line-through' : ''}`}>
+                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-muted-foreground line-through' : ''}`}>
                             {a.clients?.name} — {a.role_name}
                             {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                             {fullDelivery !== null && (
-                              <span className="text-xs text-gray-500">
+                              <span className="text-xs text-muted-foreground">
                                 {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{c.unit_price.toLocaleString()}×{videoCount}本）
                               </span>
                             )}
                             {c.contractor_type === 'video_editor' ? (
                               // 編集者は「支払い期間」ではなく、支払い確認済みの実績（回数・本数）を積み上げ表示する。
-                              <span className="block text-xs text-gray-500">
+                              <span className="block text-xs text-muted-foreground">
                                 支払い回数: {a.paid_count ?? 0}回 / 支払った本数: {a.paid_video_count ?? 0}本
                               </span>
                             ) : (
                               (a.payment_start_month || a.payment_count) && (
-                                <span className="block text-xs text-gray-500">
+                                <span className="block text-xs text-muted-foreground">
                                   支払期間: {a.payment_start_month ? a.payment_start_month.slice(0, 7) : '設定なし'}から {a.payment_count ? `${a.payment_count}回` : '継続'}
                                 </span>
                               )
@@ -687,7 +687,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
       </div>
 
       {clients.length === 0 ? (
-        <p className="text-sm text-gray-600">クライアントが登録されていません</p>
+        <p className="text-sm text-muted-foreground">クライアントが登録されていません</p>
       ) : (
         clients.map((cl) => {
           const myAssignments = assignments.filter((a) => a.client_id === cl.id)
@@ -695,38 +695,38 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
           const activeItems = items.filter((it) => it.active)
           const totalBilling = activeItems.reduce((sum, it) => sum + it.billing_amount, 0)
           return (
-            <div key={cl.id} className="rounded-lg border bg-white">
+            <div key={cl.id} className="rounded-lg border bg-card">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
                 <span className="font-medium flex-1 min-w-[8rem]">{cl.name}</span>
                 {cl.monthly_video_count > 0 && (
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">月{cl.monthly_video_count}本</span>
+                  <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">月{cl.monthly_video_count}本</span>
                 )}
                 {totalBilling > 0 && (
-                  <span className="text-sm text-gray-600">¥{totalBilling.toLocaleString()}</span>
+                  <span className="text-sm text-muted-foreground">¥{totalBilling.toLocaleString()}</span>
                 )}
                 <button onClick={() => setEditClient(cl)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
                 <button onClick={() => setDeleteTarget(cl)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
               </div>
               {/* 請求内訳の一覧（金額・契約期間・停止中を一目で確認） */}
               {items.length > 0 && (
-                <div className="px-4 py-2 border-b bg-gray-50/50">
-                  <div className="mb-1 text-xs font-medium text-gray-500">請求内訳</div>
+                <div className="px-4 py-2 border-b bg-secondary/50">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">請求内訳</div>
                   <div className="space-y-1">
                     {items.map((it) => (
                       <div key={it.id} className="flex flex-wrap items-center gap-2 text-sm">
-                        <span className={`flex-1 min-w-[6rem] ${!it.active ? 'text-gray-400 line-through' : ''}`}>
+                        <span className={`flex-1 min-w-[6rem] ${!it.active ? 'text-muted-foreground line-through' : ''}`}>
                           {it.label || '（内訳名なし）'}
                         </span>
-                        <span className={!it.active ? 'text-gray-400' : 'text-gray-600'}>
+                        <span className={!it.active ? 'text-muted-foreground' : 'text-muted-foreground'}>
                           {it.billing_amount > 0 ? `¥${it.billing_amount.toLocaleString()}` : '—'}
                         </span>
                         {it.contract_start && (
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-muted-foreground">
                             {it.contract_start.slice(0, 7)}
                             {it.contract_months ? `〜${it.contract_months}ヶ月` : '〜'}
                           </span>
                         )}
-                        {!it.active && <span className="text-xs text-gray-400">（停止中）</span>}
+                        {!it.active && <span className="text-xs text-muted-foreground">（停止中）</span>}
                       </div>
                     ))}
                   </div>
@@ -734,13 +734,13 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
               )}
               <div className="px-4 py-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500 font-medium">アサイン</span>
+                  <span className="text-xs text-muted-foreground font-medium">アサイン</span>
                   <button onClick={() => setAddAssignOpen(cl.id)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>
                     + アサインを追加
                   </button>
                 </div>
                 {myAssignments.length === 0 ? (
-                  <p className="text-xs text-gray-600 py-1">なし</p>
+                  <p className="text-xs text-muted-foreground py-1">なし</p>
                 ) : (
                   <div className="space-y-1">
                     {myAssignments.map((a) => {
@@ -751,11 +751,11 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                         unitPrice > 0 && cl.monthly_video_count > 0 ? unitPrice * cl.monthly_video_count : null
                       return (
                         <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-gray-400 line-through' : ''}`}>
+                          <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-muted-foreground line-through' : ''}`}>
                             {a.contractors?.name} — {a.role_name}
                             {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                             {fullDelivery !== null && (
-                              <span className="text-xs text-gray-500">
+                              <span className="text-xs text-muted-foreground">
                                 {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{unitPrice.toLocaleString()}×{cl.monthly_video_count}本）
                               </span>
                             )}
@@ -959,7 +959,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           <div>
             <label className="text-sm font-medium block mb-1">単価（1本あたり）</label>
             <input type="number" inputMode="numeric" min="0" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-            <p className="mt-1 text-xs text-gray-600">クライアントの月本数と掛け合わせて、フル納品時の支払額を自動計算します。</p>
+            <p className="mt-1 text-xs text-muted-foreground">クライアントの月本数と掛け合わせて、フル納品時の支払額を自動計算します。</p>
           </div>
         )}
         <div>
@@ -975,7 +975,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
             placeholder="例: 123456789"
             className="w-full border rounded px-3 py-2 text-sm"
           />
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-xs text-muted-foreground">
             その人とのチャットを開いたURLの #!rid の後ろの数字。請求書の未提出リマインドの送信先になります（未登録の人には送れません）。
           </p>
         </div>
@@ -1174,7 +1174,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">別名（カンマ区切り）</label>
           <input value={aliases} onChange={(e) => setAliases(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="めぐ姉, Reseed" />
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-xs text-muted-foreground">
             請求書の明細に書かれる通称・略称・字違いを登録すると、請求書チェックの照合で正式名と同じものとして扱います。
           </p>
         </div>
@@ -1190,7 +1190,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
             />
             <span>明細の数字（N/M）を日付として扱う（台本作成日など）</span>
           </label>
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-xs text-muted-foreground">
             通常「7/28」は支払回数（全28回中7回目）として支払期間と照合します。このクライアントが
             台本作成日を書く運用の場合はチェックを入れてください。回数の照合を行わず、記載日の作業実施を
             確認する注意だけを出します。
@@ -1200,7 +1200,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         <div>
           <label className="text-sm font-medium block mb-1">月本数（動画）</label>
           <input type="number" inputMode="numeric" min="0" value={monthlyVideoCount} onChange={(e) => setMonthlyVideoCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-          <p className="mt-1 text-xs text-gray-600">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
+          <p className="mt-1 text-xs text-muted-foreground">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
         </div>
 
         <div>
@@ -1210,13 +1210,13 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
               <Plus size={12} /> 内訳を追加
             </button>
           </div>
-          <p className="mb-2 text-xs text-gray-600">
+          <p className="mb-2 text-xs text-muted-foreground">
             内訳ごとに金額と契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
           </p>
 
           <div className="space-y-3">
             {items.map((it, index) => (
-              <div key={it.id ?? `new-${index}`} className="rounded-lg border p-3 space-y-2 bg-gray-50/50">
+              <div key={it.id ?? `new-${index}`} className="rounded-lg border p-3 space-y-2 bg-secondary/50">
                 <div className="flex items-center gap-2">
                   <input
                     value={it.label}
@@ -1229,7 +1229,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                       type="button"
                       onClick={() => removeItem(index)}
                       aria-label="この内訳を削除"
-                      className="relative shrink-0 text-gray-300 after:absolute after:-inset-3.5 hover:text-danger md:after:hidden"
+                      className="relative shrink-0 text-muted-foreground/60 after:absolute after:-inset-3.5 hover:text-danger md:after:hidden"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -1237,19 +1237,19 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1">請求額</label>
+                    <label className="text-xs text-muted-foreground block mb-1">請求額</label>
                     <input type="number" inputMode="numeric" value={it.billing_amount} onChange={(e) => updateItem(index, { billing_amount: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1">契約開始月</label>
+                    <label className="text-xs text-muted-foreground block mb-1">契約開始月</label>
                     <input type="month" value={it.contract_start} onChange={(e) => updateItem(index, { contract_start: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 block mb-1">契約期間（月）</label>
+                    <label className="text-xs text-muted-foreground block mb-1">契約期間（月）</label>
                     <input type="number" inputMode="numeric" value={it.contract_months} onChange={(e) => updateItem(index, { contract_months: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="なし" min="1" />
                   </div>
                 </div>
-                <label className="flex items-center gap-2 text-xs text-gray-600">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <input type="checkbox" checked={it.active} onChange={(e) => updateItem(index, { active: e.target.checked })} />
                   この内訳を有効にする（外すと今後の請求チェックに出さない）
                 </label>
@@ -1424,7 +1424,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         <div>
           <label className="text-sm font-medium block mb-1">役割名 <span className="text-danger">*</span></label>
           <input value={roleName} onChange={(e) => setRoleName(e.target.value)} required className="w-full border rounded px-3 py-2 text-sm" placeholder="例: 紹介者" />
-          <p className="mt-1 text-xs text-gray-600">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
+          <p className="mt-1 text-xs text-muted-foreground">種別に応じて自動入力されます。必要に応じて自由に変更できます（例: 紹介者）。</p>
         </div>
 
         <div className={`transition-opacity duration-150 ${isVideoEditor ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
@@ -1438,12 +1438,12 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
             <div>
               <label className="text-sm font-medium block mb-1">支払い開始月</label>
               <input type="month" value={paymentStartMonth} onChange={(e) => setPaymentStartMonth(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" />
-              <p className="mt-1 text-xs text-gray-600">未入力なら開始月を限定しません。</p>
+              <p className="mt-1 text-xs text-muted-foreground">未入力なら開始月を限定しません。</p>
             </div>
             <div>
               <label className="text-sm font-medium block mb-1">支払い回数</label>
               <input type="number" inputMode="numeric" min="1" value={paymentCount} onChange={(e) => setPaymentCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="継続" />
-              <p className="mt-1 text-xs text-gray-600">未入力なら継続扱いです。</p>
+              <p className="mt-1 text-xs text-muted-foreground">未入力なら継続扱いです。</p>
             </div>
           </div>
         )}

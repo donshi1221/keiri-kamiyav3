@@ -68,11 +68,11 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   hold: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   caution: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   saveFailed: 'rounded bg-warning-subtle px-2 py-1 text-warning',
-  received: 'text-gray-500',
-  fixed: 'text-gray-500',
-  applied: 'text-gray-500',
-  saved: 'text-gray-500',
-  ok: 'text-gray-500',
+  received: 'text-muted-foreground',
+  fixed: 'text-muted-foreground',
+  applied: 'text-muted-foreground',
+  saved: 'text-muted-foreground',
+  ok: 'text-muted-foreground',
 }
 
 // 注意（[注意]）は「自動では判断できないので人が見てください」という案内。人が見終わったら
@@ -106,7 +106,7 @@ function NoteLine({ line, onConfirmCaution, busy }: {
       <p
         className={cn(
           'text-xs leading-relaxed',
-          line.mark ? NOTE_CLASS[line.mark] : 'text-gray-600',
+          line.mark ? NOTE_CLASS[line.mark] : 'text-muted-foreground',
           // 背景は外側の箱に移したので、注意行の内側では重ねない。
           line.mark === 'caution' && 'bg-transparent'
         )}
@@ -129,7 +129,7 @@ function NoteLine({ line, onConfirmCaution, busy }: {
           type="button"
           onClick={() => onConfirmCaution(action.key, false)}
           disabled={busy}
-          className="flex min-h-11 shrink-0 items-center px-1 text-xs whitespace-nowrap text-gray-400 hover:underline disabled:opacity-40 md:min-h-0"
+          className="flex min-h-11 shrink-0 items-center px-1 text-xs whitespace-nowrap text-muted-foreground hover:underline disabled:opacity-40 md:min-h-0"
         >
           取り消す
         </button>
@@ -259,7 +259,7 @@ function shortenClientName(name: string): string {
 // 判定のすぐ下にクライアント別の入口を出す。編集者以外の行では delivery_sheets が空なので何も出ない。
 function DeliverySheetLinks({ sheets }: { sheets: InvoiceDeliverySheetLink[] }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-2 text-xs leading-relaxed text-gray-500">
+    <div className="flex flex-wrap items-center gap-x-2 text-xs leading-relaxed text-muted-foreground">
       <span className="whitespace-nowrap">納品シート</span>
       {/* 区切りとリンクを1つの箱に入れて、折り返しで区切りだけが行末に取り残されるのを防ぐ。 */}
       {sheets.map((sheet, i) => (
@@ -298,7 +298,7 @@ function UsageNotes() {
         <span>{open ? '使い方を閉じる' : '使い方を見る'}</span>
       </button>
       {open && (
-        <ul className="list-disc space-y-1 pl-8 text-xs leading-relaxed text-gray-500">
+        <ul className="list-disc space-y-1 pl-8 text-xs leading-relaxed text-muted-foreground">
           <li>読み取りと照合は受付時に自動で行われます。</li>
           <li>
             編集者・代行者とも「◯月分」はその月の業務分を指し、支払いは翌月です。照合する支払予定額と
@@ -438,7 +438,7 @@ function InvoiceEditDialog({ target, onClose, onSaved, onError }: {
   return (
     <FormDialog open={!!target} onClose={onClose} title="読み取り結果を修正">
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-xs leading-relaxed text-gray-500">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           「{target?.file_name}」の読み取り結果を直します。保存すると、直した内容で自動照合をやり直します。
           空欄にすると「読み取れていない」状態に戻ります。
         </p>
@@ -647,7 +647,7 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
   return (
     <FormDialog open={!!target} onClose={onClose} title="経費を登録" maxWidth="max-w-2xl">
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-xs leading-relaxed text-gray-500">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           「{target?.file_name}」の経費明細をそのまま立替経費として登録します。登録先は
           {target && target.payout_year !== null && target.payout_month !== null
             ? `${target.payout_year}年${target.payout_month}月（支払月）`
@@ -657,10 +657,10 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
 
         <div className="space-y-3">
           {drafts.map((d, index) => (
-            <div key={index} className="space-y-2 rounded-lg border bg-gray-50/50 p-3">
+            <div key={index} className="space-y-2 rounded-lg border bg-secondary/50 p-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs text-gray-500">
+                  <label className="mb-1 block text-xs text-muted-foreground">
                     金額 <span className="text-danger">*</span>
                   </label>
                   <input
@@ -670,40 +670,40 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
                     value={d.amount}
                     disabled={d.done}
                     onChange={(e) => update(index, { amount: e.target.value })}
-                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-muted md:min-h-0"
                     placeholder="0"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-gray-500">日付</label>
+                  <label className="mb-1 block text-xs text-muted-foreground">日付</label>
                   <input
                     type="date"
                     value={d.date}
                     disabled={d.done}
                     onChange={(e) => update(index, { date: e.target.value })}
-                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                    className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-muted md:min-h-0"
                   />
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-gray-500">メモ</label>
+                <label className="mb-1 block text-xs text-muted-foreground">メモ</label>
                 <input
                   value={d.note}
                   disabled={d.done}
                   onChange={(e) => update(index, { note: e.target.value })}
-                  className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                  className="min-h-11 w-full rounded border px-3 py-2 text-sm disabled:bg-muted md:min-h-0"
                   placeholder="明細の内容"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-gray-500">
+                <label className="mb-1 block text-xs text-muted-foreground">
                   登録先アサイン <span className="text-danger">*</span>
                 </label>
                 <select
                   value={d.assignmentId}
                   disabled={d.done}
                   onChange={(e) => update(index, { assignmentId: e.target.value })}
-                  className="min-h-11 w-full rounded border bg-white px-3 py-2 text-sm disabled:bg-gray-100 md:min-h-0"
+                  className="min-h-11 w-full rounded border bg-card px-3 py-2 text-sm disabled:bg-muted md:min-h-0"
                 >
                   <option value="">選択してください</option>
                   {(target?.expense_assignments ?? []).map((a) => (
@@ -855,7 +855,7 @@ export default function InvoiceCheckClient() {
     <div className="space-y-6">
       <div className="space-y-2">
         <h1 className="text-xl font-bold">請求書チェック</h1>
-        <p className="text-xs leading-relaxed text-gray-500">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           受付URLから届いた請求書をAIが読み取り、支払予定額と自動照合します。対応が必要なのは NG・保留 の行だけです。
         </p>
         <UsageNotes />
@@ -868,13 +868,13 @@ export default function InvoiceCheckClient() {
       )}
 
       {!rows && (
-        <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
+        <div className="rounded-lg border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
           読み込み中…
         </div>
       )}
 
       {rows && rows.length === 0 && !error && (
-        <div className="rounded-lg border border-dashed bg-white px-4 py-10 text-center text-sm text-gray-500">
+        <div className="rounded-lg border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
           受け付けた請求書はまだありません。
         </div>
       )}
@@ -882,55 +882,55 @@ export default function InvoiceCheckClient() {
       {rows && rows.length > 0 && (
         <>
           {/* 一覧テーブル（PC・タブレット） */}
-          <div className="hidden overflow-x-auto rounded-lg border bg-white md:block">
+          <div className="hidden overflow-x-auto rounded-lg border bg-card md:block">
             {/* 列を増やすと日本語が1文字ずつ折り返されて読めなくなるため、関連する値は1セルに縦積みして5列に抑える。
                 幅が足りない画面では潰さずに横スクロールさせる（min-w）。 */}
             <table className="w-full min-w-[60rem] text-sm">
-              <thead className="border-b bg-gray-50">
+              <thead className="border-b bg-secondary">
                 <tr>
-                  <th className="w-[13rem] px-4 py-2 text-left font-medium whitespace-nowrap text-gray-600">受付</th>
-                  <th className="w-[12rem] px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">差出人 / 対象月</th>
-                  <th className="w-[9rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">金額</th>
-                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-gray-600">判定</th>
-                  <th className="w-[11rem] px-3 py-2 text-right font-medium whitespace-nowrap text-gray-600">操作</th>
+                  <th className="w-[13rem] px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">受付</th>
+                  <th className="w-[12rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">差出人 / 対象月</th>
+                  <th className="w-[9rem] px-3 py-2 text-right font-medium whitespace-nowrap text-muted-foreground">金額</th>
+                  <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">判定</th>
+                  <th className="w-[11rem] px-3 py-2 text-right font-medium whitespace-nowrap text-muted-foreground">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-b align-top last:border-0">
                     <td className="px-4 py-3">
-                      <div className="whitespace-nowrap text-gray-600">{formatReceivedAt(r.created_at)}</div>
+                      <div className="whitespace-nowrap text-muted-foreground">{formatReceivedAt(r.created_at)}</div>
                       {/* ファイル名は長くて列幅を壊すので1行に省略し、全文は title（マウスを乗せると出る吹き出し）で読めるようにする。 */}
-                      <div className="max-w-[11rem] truncate text-xs text-gray-500" title={r.file_name}>
+                      <div className="max-w-[11rem] truncate text-xs text-muted-foreground" title={r.file_name}>
                         {r.file_name}
                       </div>
                       {r.extract_error && <div className="mt-1 text-xs text-danger">{r.extract_error}</div>}
                     </td>
                     <td className="px-3 py-3">
                       {/* 委託者が特定できていれば、以降の作業はマスタ上の名前で行うためそちらを主役にする。 */}
-                      <div className="whitespace-nowrap font-medium text-gray-900">
+                      <div className="whitespace-nowrap font-medium text-foreground">
                         {r.contractor_name ?? r.extracted_issuer ?? '—'}
                       </div>
                       {r.contractor_name === null ? (
-                        <div className="text-xs whitespace-nowrap text-gray-500">委託者 未特定</div>
+                        <div className="text-xs whitespace-nowrap text-muted-foreground">委託者 未特定</div>
                       ) : (
                         r.extracted_issuer !== null && r.extracted_issuer !== r.contractor_name && (
-                          <div className="text-xs whitespace-nowrap text-gray-500">差出人 {r.extracted_issuer}</div>
+                          <div className="text-xs whitespace-nowrap text-muted-foreground">差出人 {r.extracted_issuer}</div>
                         )
                       )}
-                      <div className="mt-1 text-xs whitespace-nowrap text-gray-500">{formatTargetMonth(r)}</div>
+                      <div className="mt-1 text-xs whitespace-nowrap text-muted-foreground">{formatTargetMonth(r)}</div>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <div
                         className={cn(
                           'whitespace-nowrap font-medium',
-                          isAmountMismatch(r) ? 'text-danger' : 'text-gray-900'
+                          isAmountMismatch(r) ? 'text-danger' : 'text-foreground'
                         )}
                       >
-                        <span className="mr-1 text-xs font-normal text-gray-500">請求</span>
+                        <span className="mr-1 text-xs font-normal text-muted-foreground">請求</span>
                         {formatAmount(r.extracted_amount)}
                       </div>
-                      <div className="whitespace-nowrap text-xs text-gray-500">
+                      <div className="whitespace-nowrap text-xs text-muted-foreground">
                         <span className="mr-1">予定</span>
                         {formatAmount(r.expected_amount)}
                       </div>
@@ -988,7 +988,7 @@ export default function InvoiceCheckClient() {
                           type="button"
                           onClick={() => recheck(r.id)}
                           disabled={busy(r.id)}
-                          className="whitespace-nowrap text-info hover:underline disabled:text-gray-400"
+                          className="whitespace-nowrap text-info hover:underline disabled:text-muted-foreground"
                         >
                           {recheckingId === r.id ? 'チェック中…' : '再チェック'}
                         </button>
@@ -996,7 +996,7 @@ export default function InvoiceCheckClient() {
                           type="button"
                           onClick={() => reExtract(r.id)}
                           disabled={busy(r.id)}
-                          className="whitespace-nowrap text-info hover:underline disabled:text-gray-400"
+                          className="whitespace-nowrap text-info hover:underline disabled:text-muted-foreground"
                         >
                           {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                         </button>
@@ -1016,41 +1016,41 @@ export default function InvoiceCheckClient() {
           </div>
 
           {/* 一覧カード（スマホ） */}
-          <div className="divide-y rounded-lg border bg-white md:hidden">
+          <div className="divide-y rounded-lg border bg-card md:hidden">
             {rows.map((r) => (
               <div key={r.id} className="px-4 py-3">
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="text-sm font-medium break-all">{r.file_name}</div>
-                    <div className="text-xs text-gray-500">{formatReceivedAt(r.created_at)} 受付</div>
+                    <div className="text-xs text-muted-foreground">{formatReceivedAt(r.created_at)} 受付</div>
                   </div>
                   <StatusBadge status={r.status} />
                 </div>
 
-                <div className="space-y-1 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                <div className="space-y-1 rounded-lg bg-secondary px-3 py-2 text-sm">
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500">請求額</span>
-                    <span className="font-medium text-gray-900">{formatAmount(r.extracted_amount)}</span>
+                    <span className="text-muted-foreground">請求額</span>
+                    <span className="font-medium text-foreground">{formatAmount(r.extracted_amount)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500">支払予定</span>
-                    <span className="text-gray-700">{formatAmount(r.expected_amount)}</span>
+                    <span className="text-muted-foreground">支払予定</span>
+                    <span className="text-foreground">{formatAmount(r.expected_amount)}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="shrink-0 text-gray-500">差出人</span>
-                    <span className="text-right text-gray-700">{r.extracted_issuer ?? '—'}</span>
+                    <span className="shrink-0 text-muted-foreground">差出人</span>
+                    <span className="text-right text-foreground">{r.extracted_issuer ?? '—'}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="shrink-0 text-gray-500">委託者</span>
-                    <span className="text-right text-gray-700">{r.contractor_name ?? '未特定'}</span>
+                    <span className="shrink-0 text-muted-foreground">委託者</span>
+                    <span className="text-right text-foreground">{r.contractor_name ?? '未特定'}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="shrink-0 text-gray-500">宛名</span>
-                    <span className="text-right text-gray-700">{r.extracted_addressee ?? '—'}</span>
+                    <span className="shrink-0 text-muted-foreground">宛名</span>
+                    <span className="text-right text-foreground">{r.extracted_addressee ?? '—'}</span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500">対象月</span>
-                    <span className="text-gray-700">{formatTargetMonth(r)}</span>
+                    <span className="text-muted-foreground">対象月</span>
+                    <span className="text-foreground">{formatTargetMonth(r)}</span>
                   </div>
                 </div>
 

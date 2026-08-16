@@ -113,14 +113,14 @@ export default function TaxPage() {
         <button
           type="button"
           onClick={() => setMobilePanel('advice')}
-          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'advice' ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500'}`}
+          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'advice' ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground'}`}
         >
           アドバイス管理
         </button>
         <button
           type="button"
           onClick={() => setMobilePanel('chat')}
-          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'chat' ? 'border-gray-900 text-gray-900 font-medium' : 'border-transparent text-gray-500'}`}
+          className={`pb-2 px-1 text-sm border-b-2 transition-colors ${mobilePanel === 'chat' ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground'}`}
         >
           AIチャット
         </button>
@@ -163,17 +163,17 @@ export default function TaxPage() {
 
           <div className="flex-1 overflow-y-auto space-y-2">
             {entries.length === 0 ? (
-              <p className="text-sm text-gray-600">アドバイスが登録されていません</p>
+              <p className="text-sm text-muted-foreground">アドバイスが登録されていません</p>
             ) : (
               entries.map((e) => (
-                <div key={e.id} className="rounded-lg border bg-white p-3 text-sm">
+                <div key={e.id} className="rounded-lg border bg-card p-3 text-sm">
                   <div className="flex items-start gap-1">
                     <span className="shrink-0">{e.source_type === 'file' ? '📎' : '📄'}</span>
                     <span className="flex-1 font-medium line-clamp-2 break-all">{e.title}</span>
                     {/* -my-3 は、当たり判定を44pxに広げてもカードの高さが増えないよう見た目上の高さを元に戻すため。 */}
                     <button onClick={() => setDeleteEntryTarget(e)} aria-label="このアドバイスを削除" className="text-danger hover:text-danger shrink-0 ml-1 inline-flex h-11 w-11 items-center justify-center -my-3 md:h-auto md:w-auto md:my-0">×</button>
                   </div>
-                  <div className="text-xs text-gray-500 mt-1 ml-5">
+                  <div className="text-xs text-muted-foreground mt-1 ml-5">
                     {new Date(e.created_at).toLocaleDateString('ja-JP')}
                   </div>
                 </div>
@@ -211,7 +211,7 @@ export default function TaxPage() {
               onFirstMessageSent={loadSessions}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-sm text-gray-600 border rounded-lg">
+            <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground border rounded-lg">
               「新しい会話」をクリックしてチャットを開始してください
             </div>
           )}
@@ -363,18 +363,18 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
       {errorMsg && <ErrorToast message={errorMsg} onClose={() => setErrorMsg(null)} />}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !streaming && (
-          <p className="text-sm text-gray-600 text-center mt-8">メッセージを送信してください</p>
+          <p className="text-sm text-muted-foreground text-center mt-8">メッセージを送信してください</p>
         )}
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === 'user' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'}`}>
+            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground'}`}>
               {m.content}
             </div>
           </div>
         ))}
         {streaming && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 whitespace-pre-wrap">
+            <div className="max-w-[80%] rounded-lg px-3 py-2 text-sm bg-secondary text-foreground whitespace-pre-wrap">
               {streamingText || <span className="animate-pulse">…</span>}
             </div>
           </div>
@@ -389,7 +389,7 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send() }}
           placeholder="メッセージを入力（Ctrl+Enter で送信）"
           rows={2}
-          className="flex-1 resize-none border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+          className="flex-1 resize-none border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
           disabled={streaming}
         />
         <Button size="sm" className="h-11 md:h-7" onClick={send} disabled={streaming || !input.trim()}>
