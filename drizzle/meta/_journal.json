@@ -169,6 +169,13 @@
       "when": 1786938516938,
       "tag": "0023_first_taskmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786941341677,
+      "tag": "0024_petite_longshot",
+      "breakpoints": true
     }
   ]
 }

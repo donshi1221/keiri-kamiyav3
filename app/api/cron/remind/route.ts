@@ -8,7 +8,7 @@ import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
 import { computeCarryOver } from '@/lib/carry-over'
 import { recordCronSuccess, checkCronStale } from '@/lib/cron-monitor'
-import { payrollAmountsOfRecord, payrollNet } from '@/lib/payroll'
+import { payrollAmountsOfRecord, payrollTransferAmount } from '@/lib/payroll'
 import { CRON_STALE_ALERT_DAYS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 
 // 関数のタイムアウト上限（秒）。委託者・クライアントを全件走査しメール送信まで行うため、
@@ -173,7 +173,7 @@ export async function GET(req: NextRequest) {
       .filter(({ dueDay }) => isInReminderWindow(day, dueDay))
     if (unpaidPayroll.length > 0) {
       const lines = unpaidPayroll.map(({ p, dueDay }) =>
-        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollNet(payrollAmountsOfRecord(p)).toLocaleString()}）${overdueMark(day, dueDay)}`
+        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollTransferAmount(payrollAmountsOfRecord(p), p.expense_reimbursement).toLocaleString()}）${overdueMark(day, dueDay)}`
       )
       sections.push(`■ 役員報酬・給与 — 振込\n${lines.join('\n')}`)
     }

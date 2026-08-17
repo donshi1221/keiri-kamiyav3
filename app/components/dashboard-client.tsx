@@ -12,7 +12,7 @@ import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PayrollRecordWithRecipient } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
-import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet } from '@/lib/payroll'
+import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
@@ -519,6 +519,9 @@ const PAYROLL_FIELDS = [
   { key: 'employment_insurance_snapshot', label: '雇用保険' },
   { key: 'income_tax_snapshot', label: '源泉所得税' },
   { key: 'resident_tax_snapshot', label: '住民税' },
+  // 立替経費は控除の対象外（非課税の実費返金）なので、他の6項目とは足し引きの向きが違う。
+  // 見た目でも区別できるようラベルに「＋」を付けて最後に置く。
+  { key: 'expense_reimbursement', label: '＋ 立替経費精算（非課税）' },
 ] as const
 type PayrollField = (typeof PAYROLL_FIELDS)[number]['key']
 
@@ -531,6 +534,7 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
   const [values, setValues] = useState<Record<PayrollField, string>>(() => ({
     gross_snapshot: '', health_insurance_snapshot: '', pension_snapshot: '',
     employment_insurance_snapshot: '', income_tax_snapshot: '', resident_tax_snapshot: '',
+    expense_reimbursement: '',
   }))
   const [saving, setSaving] = useState(false)
 
@@ -543,20 +547,21 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
       employment_insurance_snapshot: String(record.employment_insurance_snapshot),
       income_tax_snapshot: String(record.income_tax_snapshot),
       resident_tax_snapshot: String(record.resident_tax_snapshot),
+      expense_reimbursement: String(record.expense_reimbursement),
     })
   }, [record])
 
   if (!record) return null
 
   const toNum = (v: string) => (v.trim() === '' ? 0 : Number(v))
-  const preview = payrollNet({
+  const preview = payrollTransferAmount({
     gross: toNum(values.gross_snapshot),
     health_insurance: toNum(values.health_insurance_snapshot),
     pension: toNum(values.pension_snapshot),
     employment_insurance: toNum(values.employment_insurance_snapshot),
     income_tax: toNum(values.income_tax_snapshot),
     resident_tax: toNum(values.resident_tax_snapshot),
-  })
+  }, toNum(values.expense_reimbursement))
 
   async function submit() {
     if (!record) return
@@ -568,6 +573,7 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
       employment_insurance_snapshot: toNum(values.employment_insurance_snapshot),
       income_tax_snapshot: toNum(values.income_tax_snapshot),
       resident_tax_snapshot: toNum(values.resident_tax_snapshot),
+      expense_reimbursement: toNum(values.expense_reimbursement),
     })
     setSaving(false)
   }
@@ -599,7 +605,7 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
           ))}
         </div>
         <div className="rounded border px-3 py-2 text-sm">
-          振込額（手取り） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+          振込額（手取り＋立替） <span className="font-semibold">¥{preview.toLocaleString()}</span>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
@@ -2753,17 +2759,36 @@ export default function DashboardClient({
                       額面 ¥{amounts.gross.toLocaleString()} ・ 控除 ¥{payrollDeductions(amounts).toLocaleString()}
                       ・ 支払日 {payrollDueDay(p)}日
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setPayrollEditTarget(p)}
-                      className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
-                    >
-                      この月の金額を修正
-                    </button>
+                    <div className="flex flex-wrap items-center gap-x-3">
+                      <button
+                        type="button"
+                        onClick={() => setPayrollEditTarget(p)}
+                        className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+                      >
+                        この月の金額を修正
+                      </button>
+                      {/* 明細は印刷して本人へ渡す使い方なので、別タブで開いてダッシュボードを閉じさせない。 */}
+                      <a
+                        href={`/payroll/${p.id}/slip`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+                      >
+                        明細
+                      </a>
+                    </div>
                   </div>
-                  <span className="shrink-0 text-base font-semibold text-foreground">
-                    ¥{payrollNet(amounts).toLocaleString()}
-                  </span>
+                  <div className="shrink-0 text-right">
+                    <span className="text-base font-semibold text-foreground">
+                      ¥{payrollTransferAmount(amounts, p.expense_reimbursement).toLocaleString()}
+                    </span>
+                    {/* 立替がある月だけ内訳を出す。無い月に「給与◯円＋立替0円」と書いても読む手間が増えるだけ。 */}
+                    {p.expense_reimbursement > 0 && (
+                      <span className="block text-xs text-muted-foreground">
+                        内訳: {kindLabel} ¥{payrollNet(amounts).toLocaleString()} ＋ 立替 ¥{p.expense_reimbursement.toLocaleString()}
+                      </span>
+                    )}
+                  </div>
                   <div className="shrink-0 text-center">
                     <span className="block text-xs text-muted-foreground">振込済み</span>
                     <MoneyCheckControl

@@ -59,7 +59,7 @@ export default function Nav() {
   return (
     <>
       {/* PC・タブレット表示（md以上）: 上部の横並びナビ */}
-      <nav className="hidden border-b bg-card sticky top-0 z-10 md:block">
+      <nav data-print-hide className="hidden border-b bg-card sticky top-0 z-10 md:block">
         <div className="max-w-6xl mx-auto px-4 flex items-center gap-6 h-14">
           <span className="font-bold text-sm text-foreground">keiri-v3</span>
           <div className="flex gap-1">
@@ -99,7 +99,7 @@ export default function Nav() {
       </nav>
 
       {/* スマホ表示（md未満）: 画面上部にタイトルとログアウト */}
-      <header className="border-b bg-card sticky top-0 z-10 md:hidden">
+      <header data-print-hide className="border-b bg-card sticky top-0 z-10 md:hidden">
         <div className="px-4 flex items-center h-12">
           <span className="font-bold text-sm text-foreground">keiri-v3</span>
           <a
@@ -123,6 +123,7 @@ export default function Nav() {
 
       {/* スマホ表示（md未満）: 画面下部固定のタブバー */}
       <nav
+        data-print-hide
         className="fixed inset-x-0 bottom-0 z-20 border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
         aria-label="メインナビゲーション"
       >

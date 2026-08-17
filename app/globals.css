@@ -179,3 +179,41 @@
     @apply font-sans;
   }
 }
+
+/* 印刷（給与明細のPDF化）。画面の導線を落とし、紙で読める配色に固定する。 */
+@media print {
+  /* ダークが有効な端末でそのまま刷ると黒地になりインクを大量に食うため、
+     印刷時だけライトの値へ戻す（明細で使うトークンに限る）。 */
+  :root,
+  .dark {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.20 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.20 0 0);
+    --secondary: oklch(0.95 0 0);
+    --secondary-foreground: oklch(0.20 0 0);
+    --muted-foreground: oklch(0.40 0 0);
+    /* 罫線は画面より濃くする。画面用の薄い線は家庭用プリンタでほとんど出ないため。 */
+    --border: oklch(0.65 0 0);
+  }
+
+  /* ナビ・下部タブ・操作ボタンなど、紙に残しても押せないものを消す。 */
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  body {
+    background: var(--background);
+  }
+
+  /* 画面用の余白と最大幅は紙では無駄になるので外す（A4の余白は @page 側で取る）。 */
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 15mm;
+  }
+}

@@ -402,6 +402,13 @@ export const monthlyPayrollRecords = pgTable('monthly_payroll_records', {
   employment_insurance_snapshot: integer('employment_insurance_snapshot').notNull().default(0),
   income_tax_snapshot: integer('income_tax_snapshot').notNull().default(0),
   resident_tax_snapshot: integer('resident_tax_snapshot').notNull().default(0),
+  // 立替経費の実費精算（円）。給与と一緒に振り込むが、性質はまったく別物。
+  // 立替の払い戻しは「本人が先に払ったお金を返すだけ」で所得ではないため非課税で、
+  // 社会保険料・源泉所得税・住民税のどの計算対象にも入らない。
+  // そのため控除の計算（lib/payroll の payrollNet）には一切通さず、
+  // 手取りが確定したあとに振込額へ足すだけにしている
+  // （snapshot 側の額面に混ぜると、翌月以降の源泉税まで狂ってしまうため）。
+  expense_reimbursement: integer('expense_reimbursement').notNull().default(0),
   paid_at: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.recipient_id)])

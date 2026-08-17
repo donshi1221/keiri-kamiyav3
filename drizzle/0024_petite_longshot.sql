@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_payroll_records" ADD COLUMN "expense_reimbursement" integer DEFAULT 0 NOT NULL;

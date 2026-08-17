@@ -248,6 +248,8 @@ export const payrollSnapshotPatchSchema = z.object({
   employment_insurance_snapshot: moneyInt.optional(),
   income_tax_snapshot: moneyInt.optional(),
   resident_tax_snapshot: moneyInt.optional(),
+  // 立替経費の実費精算。控除の計算には関わらず、手取りに足すだけの項目。
+  expense_reimbursement: moneyInt.optional(),
 })
 
 export const snapshotBackfillSchema = z.object({

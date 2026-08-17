@@ -51,6 +51,14 @@ export function payrollNet(a: PayrollAmounts): number {
   return a.gross - payrollDeductions(a)
 }
 
+// 実際に振り込む金額 ＝ 手取り + 立替経費の精算。
+// 立替の精算は非課税の実費返金なので payrollNet（控除の引き算）には通さず、
+// 手取りが確定したあとにここで足す（詳しい理由は lib/schema の expense_reimbursement のコメント）。
+// 画面・明細・リマインドが同じ足し算を各所に書くと片方だけ足し忘れるため、この1本に寄せる。
+export function payrollTransferAmount(a: PayrollAmounts, expenseReimbursement: number): number {
+  return payrollNet(a) + expenseReimbursement
+}
+
 export const PAYROLL_KIND_LABEL: Record<PayrollKind, string> = {
   executive: '役員報酬',
   employee: '給与',
