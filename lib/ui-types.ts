@@ -8,6 +8,8 @@ import type {
   InvoiceUpload,
   ExpenseUpload,
   ExpenseUploadItem,
+  PayrollRecipient,
+  MonthlyPayrollRecord,
 } from './schema'
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
 // import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
@@ -290,6 +292,28 @@ export interface ExpenseInboxResponse {
   file_type: string
   extract_error: string | null
   items: ExpenseUploadItem[]
+}
+
+// ─── 役員報酬・給与 ─────────────────────────────
+// 支給区分。列の型から導き、選択肢（lib/config の PAYROLL_KINDS）と1対1に保つ。
+export type PayrollKind = PayrollRecipient['kind']
+
+// 手取りの計算に必要な6つの金額だけを抜き出した形（lib/payroll が受け取る）。
+// マスタ（payroll_recipients）と月次の控え（monthly_payroll_records）は列名が違うだけで
+// 計算はまったく同じため、どちらからもこの形に寄せて1つの計算式を共用する。
+export interface PayrollAmounts {
+  gross: number
+  health_insurance: number
+  pension: number
+  employment_insurance: number
+  income_tax: number
+  resident_tax: number
+}
+
+// ダッシュボードが使う「月次の支給レコード + 対象者マスタ」の型。
+// 種別ラベルと支払日はマスタ側にしか無いため（月次には控えていない）、結合して渡す。
+export type PayrollRecordWithRecipient = MonthlyPayrollRecord & {
+  payroll_recipients: Pick<PayrollRecipient, 'id' | 'name' | 'kind' | 'pay_day'> | null
 }
 
 // ─── Googleドライブ保存（lib/google-drive）─────────────────────────────

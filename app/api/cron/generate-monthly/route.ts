@@ -23,10 +23,10 @@ export async function GET(req: NextRequest) {
     const year = today.getFullYear()
     const month = today.getMonth() + 1
 
-    const { assignmentCount, clientCount } = await generateMonthlyRecords(year, month)
+    const { assignmentCount, clientCount, payrollCount } = await generateMonthlyRecords(year, month)
     await recordCronSuccess('generate-monthly')
 
-    return Response.json({ ok: true, year, month, assignmentCount, clientCount })
+    return Response.json({ ok: true, year, month, assignmentCount, clientCount, payrollCount })
   } catch (err) {
     return serverError(err)
   }

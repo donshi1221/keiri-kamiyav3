@@ -16,8 +16,10 @@ import {
 import ErrorToast from '@/app/components/error-toast'
 import { FormDialog } from '@/app/components/form-dialog'
 import { Plus, Trash2 } from 'lucide-react'
-import type { Contractor, Client, Assignment, ClientBillingItem } from '@/lib/schema'
-import type { GoogleDriveStatus } from '@/lib/ui-types'
+import type { Contractor, Client, Assignment, ClientBillingItem, PayrollRecipient } from '@/lib/schema'
+import type { GoogleDriveStatus, PayrollKind } from '@/lib/ui-types'
+import { PAYROLL_KINDS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
+import { PAYROLL_KIND_LABEL, payrollAmountsOfRecipient, payrollDeductions, payrollNet } from '@/lib/payroll'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
@@ -122,6 +124,10 @@ export default function MasterPage() {
         </>
       )}
 
+      {/* 役員報酬・給与は委託者（外注）でもクライアントでもない自社の人件費なので、タブの外に置く。
+          委託者タブに混ぜると外注費と同じものに見え、利益計算の意味を取り違えるおそれがある。 */}
+      <PayrollSection onError={showError} />
+
       {/* 受付URLは委託者・クライアントのどちらにも属さない全体設定なので、タブの外に置く。
           請求書用と経費用は配る相手も再発行の影響範囲も別なので、取り違えないよう見出しと説明で書き分ける。 */}
       <UploadUrlSection
@@ -141,6 +147,356 @@ export default function MasterPage() {
       {/* ドライブ連携も受付URLと同じく請求書まわりの全体設定なので、続けて並べる。 */}
       <GoogleDriveSection onError={showError} />
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────
+// 役員報酬・給与
+// ─────────────────────────────────────────────
+// 対象者は数名しかいないため、委託者タブのようなタブ切り替えは設けず1つのカードに収める。
+function PayrollSection({ onError }: { onError: (msg: string) => void }) {
+  const [recipients, setRecipients] = useState<PayrollRecipient[]>([])
+  const [loading, setLoading] = useState(true)
+  const [addOpen, setAddOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<PayrollRecipient | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<PayrollRecipient | null>(null)
+  const [deactivateTarget, setDeactivateTarget] = useState<PayrollRecipient | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/master/payroll-recipients')
+      if (!res.ok) throw new Error(await readErrorMessage(res, '役員報酬・給与の読み込みに失敗しました。'))
+      setRecipients(await res.json())
+    } catch (err) {
+      onError(err instanceof Error ? err.message : '役員報酬・給与の読み込みに失敗しました。')
+    } finally {
+      setLoading(false)
+    }
+  }, [onError])
+
+  useEffect(() => { load() }, [load])
+
+  async function setActive(id: string, active: boolean) {
+    try {
+      const res = await fetch(`/api/master/payroll-recipients/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '状態の変更に失敗しました。'))
+        return
+      }
+      load()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  async function remove(target: PayrollRecipient) {
+    try {
+      const res = await fetch(`/api/master/payroll-recipients/${target.id}`, { method: 'DELETE' })
+      if (res.status === 409) {
+        const data = await res.json().catch(() => null)
+        // 月次記録から参照されている＝消すと過去月が壊れる。非アクティブ化を案内する。
+        if (data?.hint === 'inactive') {
+          setDeactivateTarget(target)
+          return
+        }
+        onError(data?.error ?? '削除できませんでした。')
+        return
+      }
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '削除に失敗しました。'))
+        return
+      }
+      load()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <div className="min-w-[12rem] flex-1">
+          <h2 className="font-medium">役員報酬・給与</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            額面と控除額を登録すると、毎月の振込額（手取り）と源泉所得税をダッシュボードに自動表示します。
+          </p>
+        </div>
+        <Button size="sm" className="h-11 md:h-7" onClick={() => setAddOpen(true)}>+ 対象者を追加</Button>
+      </div>
+
+      <div className="px-4 py-3">
+        {loading ? (
+          <p className="text-sm text-muted-foreground">読み込み中…</p>
+        ) : recipients.length === 0 ? (
+          <p className="text-sm text-muted-foreground">対象者が登録されていません</p>
+        ) : (
+          <div className="space-y-2">
+            {recipients.map((p) => {
+              const amounts = payrollAmountsOfRecipient(p)
+              return (
+                <div key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-2 last:border-b-0 last:pb-0">
+                  <span className={`min-w-[7rem] flex-1 text-sm font-medium ${p.active ? '' : 'text-muted-foreground line-through'}`}>
+                    {p.name}
+                  </span>
+                  <span className="rounded bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
+                    {PAYROLL_KIND_LABEL[p.kind]}
+                  </span>
+                  {/* 額面・控除・手取りは横並びにすると狭い画面で折り返して読みづらいので、
+                      小さい文字でひとまとまりにして「額面 → 控除 → 手取り」の順に並べる。 */}
+                  <span className="text-xs text-muted-foreground">
+                    額面 ¥{p.gross_amount.toLocaleString()} ・ 控除 ¥{payrollDeductions(amounts).toLocaleString()}
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">
+                    手取り ¥{payrollNet(amounts).toLocaleString()}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    支払日 {p.pay_day ? `${p.pay_day}日` : '未設定'}
+                  </span>
+                  <button onClick={() => setEditTarget(p)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
+                  {p.active ? (
+                    <button onClick={() => setDeleteTarget(p)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
+                  ) : (
+                    <button onClick={() => setActive(p.id, true)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>再開</button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <PayrollFormDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSaved={() => { setAddOpen(false); load() }}
+        onError={onError}
+        initial={null}
+      />
+      <PayrollFormDialog
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => { setEditTarget(null); load() }}
+        onError={onError}
+        initial={editTarget}
+      />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>対象者を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.name}」を削除します。月次記録が存在する場合は削除できず、非アクティブ化を案内します。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteTarget) remove(deleteTarget)
+                setDeleteTarget(null)
+              }}
+            >
+              削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deactivateTarget} onOpenChange={(open) => { if (!open) setDeactivateTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>削除できません</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deactivateTarget?.name}」は月次記録が存在するため削除できません。代わりに非アクティブにしますか？（過去の記録は残り、翌月からは生成されなくなります）
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deactivateTarget) setActive(deactivateTarget.id, false)
+                setDeactivateTarget(null)
+              }}
+            >
+              非アクティブにする
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// 控除の入力欄。5項目とも「0以上の整数を入れるだけ」で作りが同じなので1つの部品にまとめる。
+function PayrollAmountField({ label, value, onChange, hint }: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium">{label}</label>
+      <input
+        type="number"
+        inputMode="numeric"
+        min="0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="0"
+        className="w-full rounded border px-3 py-2 text-right text-sm"
+      />
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  )
+}
+
+function PayrollFormDialog({ open, onClose, onSaved, onError, initial }: {
+  open: boolean
+  onClose: () => void
+  onSaved: () => void
+  onError: (msg: string) => void
+  initial: PayrollRecipient | null
+}) {
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<PayrollKind>('employee')
+  const [gross, setGross] = useState('')
+  const [health, setHealth] = useState('')
+  const [pension, setPension] = useState('')
+  const [employment, setEmployment] = useState('')
+  const [incomeTax, setIncomeTax] = useState('')
+  const [residentTax, setResidentTax] = useState('')
+  const [payDay, setPayDay] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setName(initial?.name ?? '')
+    setKind(initial?.kind ?? 'employee')
+    // 0 は「登録済みの0円」ではなく未入力として空欄にする（保存時に0へ戻るので値は変わらない）。
+    const num = (v: number | null | undefined) => (v ? String(v) : '')
+    setGross(num(initial?.gross_amount))
+    setHealth(num(initial?.health_insurance))
+    setPension(num(initial?.pension))
+    setEmployment(num(initial?.employment_insurance))
+    setIncomeTax(num(initial?.income_tax))
+    setResidentTax(num(initial?.resident_tax))
+    setPayDay(num(initial?.pay_day))
+  }, [open, initial])
+
+  const toNum = (v: string) => (v.trim() === '' ? 0 : Number(v))
+  const preview = payrollNet({
+    gross: toNum(gross),
+    health_insurance: toNum(health),
+    pension: toNum(pension),
+    employment_insurance: toNum(employment),
+    income_tax: toNum(incomeTax),
+    resident_tax: toNum(residentTax),
+  })
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    const payload = {
+      name,
+      kind,
+      gross_amount: toNum(gross),
+      health_insurance: toNum(health),
+      pension: toNum(pension),
+      employment_insurance: toNum(employment),
+      income_tax: toNum(incomeTax),
+      resident_tax: toNum(residentTax),
+      pay_day: payDay.trim() === '' ? null : Number(payDay),
+    }
+    try {
+      const res = initial
+        ? await fetch(`/api/master/payroll-recipients/${initial.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+        : await fetch('/api/master/payroll-recipients', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '役員報酬・給与の保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      // 通信断でも fetch は例外になる。setSaving を戻さないと「保存中…」で固着する。
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <FormDialog open={open} onClose={onClose} title={initial ? '役員報酬・給与を編集' : '役員報酬・給与を追加'}>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium">氏名 <span className="text-danger">*</span></label>
+          <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded border px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">種別</label>
+          <select value={kind} onChange={(e) => setKind(e.target.value as PayrollKind)} className="w-full rounded border px-3 py-2 text-sm">
+            {PAYROLL_KINDS.map((k) => (
+              <option key={k} value={k}>{PAYROLL_KIND_LABEL[k]}</option>
+            ))}
+          </select>
+        </div>
+        <PayrollAmountField label="額面" value={gross} onChange={setGross} />
+
+        <div className="space-y-3 rounded border bg-secondary p-3">
+          <p className="text-sm font-medium">控除（本人負担分）</p>
+          {/* 狭い画面では1列、広い画面では2列。金額欄が5つ縦に並ぶと入力のたびに画面が流れるため。 */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <PayrollAmountField label="健康保険" value={health} onChange={setHealth} />
+            <PayrollAmountField label="厚生年金" value={pension} onChange={setPension} />
+            <PayrollAmountField label="雇用保険" value={employment} onChange={setEmployment} />
+            <PayrollAmountField label="源泉所得税" value={incomeTax} onChange={setIncomeTax} />
+            <PayrollAmountField label="住民税" value={residentTax} onChange={setResidentTax} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            料率表は持たないため、ここに入れた金額をそのまま毎月の控除として使います。改定があったらこの値を直してください。
+          </p>
+        </div>
+
+        <div className="rounded border px-3 py-2 text-sm">
+          振込額（手取り） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium">支払日</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            max="31"
+            value={payDay}
+            onChange={(e) => setPayDay(e.target.value)}
+            placeholder="例: 25"
+            className="w-24 rounded border px-3 py-2 text-right text-sm"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            振込リマインドの期日になります。未入力のときは{PAYROLL_DEFAULT_PAY_DAY}日として扱います。
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+        </div>
+      </form>
+    </FormDialog>
   )
 }
 

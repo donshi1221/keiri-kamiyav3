@@ -1,14 +1,15 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords } from '@/lib/schema'
 import { and, eq } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
 import { computeCarryOver } from '@/lib/carry-over'
 import { recordCronSuccess, checkCronStale } from '@/lib/cron-monitor'
-import { CRON_STALE_ALERT_DAYS } from '@/lib/config'
+import { payrollAmountsOfRecord, payrollNet } from '@/lib/payroll'
+import { CRON_STALE_ALERT_DAYS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 
 // 関数のタイムアウト上限（秒）。委託者・クライアントを全件走査しメール送信まで行うため、
 // 既定の短いタイムアウトだと途中で切れうる。Vercel の仕様上リテラルで指定する必要がある。
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
     const remindDay25 = isInReminderWindow(day, 25)
     const remindLastDay = isInReminderWindow(day, lastDay)
 
-    const [records, clientRecords, globalTask, customTasks] = await Promise.all([
+    const [records, clientRecords, globalTask, customTasks, payrollRecords] = await Promise.all([
       db.query.monthlyRecords.findMany({
         where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
         columns: { invoice_received_at: true, payment_reserved_at: true, contractor_paid_at: true },
@@ -81,6 +82,11 @@ export async function GET(req: NextRequest) {
         where: and(eq(monthlyGlobalTasks.year, year), eq(monthlyGlobalTasks.month, month)),
       }),
       db.select().from(monthlyCustomGlobalTasks),
+      // 役員報酬・給与。支払日が人ごとに違うため、期日判定に使う pay_day を対象者から結合して取る。
+      db.query.monthlyPayrollRecords.findMany({
+        where: and(eq(monthlyPayrollRecords.year, year), eq(monthlyPayrollRecords.month, month)),
+        with: { payroll_recipients: { columns: { name: true, pay_day: true } } },
+      }),
     ])
 
     // 監視アラート: 月次生成cronがしばらく成功していなければ、メール冒頭で知らせる。
@@ -157,6 +163,19 @@ export async function GET(req: NextRequest) {
         )
         sections.push(`■ 委託者 — 請求書受領（期日: 10日）\n${lines.join('\n')}`)
       }
+    }
+
+    // 役員報酬・給与の振込。期日（支払日）が人ごとに違うため、まとめて1つの窓では判定できない。
+    // 行ごとにその人の支払日で窓に入っているかを見る。月末を超える指定は末日に丸める（画面と同じ扱い）。
+    const unpaidPayroll = payrollRecords
+      .filter((p) => !p.paid_at)
+      .map((p) => ({ p, dueDay: Math.min(p.payroll_recipients?.pay_day ?? PAYROLL_DEFAULT_PAY_DAY, lastDay) }))
+      .filter(({ dueDay }) => isInReminderWindow(day, dueDay))
+    if (unpaidPayroll.length > 0) {
+      const lines = unpaidPayroll.map(({ p, dueDay }) =>
+        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollNet(payrollAmountsOfRecord(p)).toLocaleString()}）${overdueMark(day, dueDay)}`
+      )
+      sections.push(`■ 役員報酬・給与 — 振込\n${lines.join('\n')}`)
     }
 
     if (remindLastDay) {

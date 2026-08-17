@@ -1,5 +1,5 @@
 import { db } from './db'
-import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks } from './schema'
+import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords } from './schema'
 import { eq } from 'drizzle-orm'
 
 function isPaymentActiveForMonth(
@@ -79,9 +79,29 @@ export async function generateMonthlyRecords(year: number, month: number) {
       .onConflictDoNothing()
   }
 
+  // 役員報酬・給与。契約期間の概念が無い（在籍している限り毎月発生する）ため、
+  // active な対象者をそのまま全員生成する。
+  const activeRecipients = await db.select().from(payrollRecipients).where(eq(payrollRecipients.active, true))
+
+  if (activeRecipients.length > 0) {
+    await db.insert(monthlyPayrollRecords)
+      .values(activeRecipients.map((p) => ({
+        year,
+        month,
+        recipient_id: p.id,
+        gross_snapshot: p.gross_amount,
+        health_insurance_snapshot: p.health_insurance,
+        pension_snapshot: p.pension,
+        employment_insurance_snapshot: p.employment_insurance,
+        income_tax_snapshot: p.income_tax,
+        resident_tax_snapshot: p.resident_tax,
+      })))
+      .onConflictDoNothing()
+  }
+
   await db.insert(monthlyGlobalTasks)
     .values({ year, month })
     .onConflictDoNothing()
 
-  return { assignmentCount: payableAssignments.length, clientCount: activeItems.length }
+  return { assignmentCount: payableAssignments.length, clientCount: activeItems.length, payrollCount: activeRecipients.length }
 }

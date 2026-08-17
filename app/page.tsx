@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
 import type { InvoiceAlertCounts } from '@/lib/ui-types'
 import { nowJST } from '@/lib/dates'
@@ -34,6 +34,7 @@ export default async function DashboardPage({
     monthExpenses,
     monthClientExpenses,
     invoiceStatusCountRows,
+    payrollRecords,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -111,6 +112,14 @@ export default async function DashboardPage({
       status: invoiceUploads.status,
       count: sql<number>`count(*)`,
     }).from(invoiceUploads).groupBy(invoiceUploads.status),
+    // 役員報酬・給与。種別ラベルと支払日はマスタ側にしか無いため対象者を結合して取る。
+    db.query.monthlyPayrollRecords.findMany({
+      where: and(eq(monthlyPayrollRecords.year, year), eq(monthlyPayrollRecords.month, month)),
+      orderBy: [asc(monthlyPayrollRecords.created_at)],
+      with: {
+        payroll_recipients: { columns: { id: true, name: true, kind: true, pay_day: true } },
+      },
+    }),
   ])
 
   const carryOver = computeCarryOver(
@@ -195,6 +204,7 @@ export default async function DashboardPage({
       mfJustConnected={params.mf_connected === '1'}
       carryOver={carryOver}
       invoiceAlert={invoiceAlert}
+      payrollRecords={payrollRecords}
     />
   )
 }

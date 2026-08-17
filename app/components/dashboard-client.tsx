@@ -10,11 +10,14 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PayrollRecordWithRecipient } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
+import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet } from '@/lib/payroll'
+import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
+import { FormDialog } from './form-dialog'
 
 // Checkbox は見た目 16px のままだとスマホで押しづらいため、当たり判定用の after 疑似要素だけを
 // 44×44px に広げる（16 + 14×2）。md 以上は shadcn 既定のコンパクトな判定に戻す。
@@ -506,6 +509,109 @@ function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onCo
   )
 }
 
+// その月の役員報酬・給与の金額（控え）を直す小さなダイアログ。
+// 保険料率や住民税は年の途中で改定されるため、マスタを直すと過去月まで遡って金額が変わってしまう。
+// 改定のあった月だけをここで直せるようにして、過去の記録はそのまま残す。
+const PAYROLL_FIELDS = [
+  { key: 'gross_snapshot', label: '額面' },
+  { key: 'health_insurance_snapshot', label: '健康保険' },
+  { key: 'pension_snapshot', label: '厚生年金' },
+  { key: 'employment_insurance_snapshot', label: '雇用保険' },
+  { key: 'income_tax_snapshot', label: '源泉所得税' },
+  { key: 'resident_tax_snapshot', label: '住民税' },
+] as const
+type PayrollField = (typeof PAYROLL_FIELDS)[number]['key']
+
+function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
+  record: PayrollRecordWithRecipient | null
+  monthLabel: string
+  onClose: () => void
+  onSave: (id: string, values: Record<PayrollField, number>) => Promise<void>
+}) {
+  const [values, setValues] = useState<Record<PayrollField, string>>(() => ({
+    gross_snapshot: '', health_insurance_snapshot: '', pension_snapshot: '',
+    employment_insurance_snapshot: '', income_tax_snapshot: '', resident_tax_snapshot: '',
+  }))
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!record) return
+    setValues({
+      gross_snapshot: String(record.gross_snapshot),
+      health_insurance_snapshot: String(record.health_insurance_snapshot),
+      pension_snapshot: String(record.pension_snapshot),
+      employment_insurance_snapshot: String(record.employment_insurance_snapshot),
+      income_tax_snapshot: String(record.income_tax_snapshot),
+      resident_tax_snapshot: String(record.resident_tax_snapshot),
+    })
+  }, [record])
+
+  if (!record) return null
+
+  const toNum = (v: string) => (v.trim() === '' ? 0 : Number(v))
+  const preview = payrollNet({
+    gross: toNum(values.gross_snapshot),
+    health_insurance: toNum(values.health_insurance_snapshot),
+    pension: toNum(values.pension_snapshot),
+    employment_insurance: toNum(values.employment_insurance_snapshot),
+    income_tax: toNum(values.income_tax_snapshot),
+    resident_tax: toNum(values.resident_tax_snapshot),
+  })
+
+  async function submit() {
+    if (!record) return
+    setSaving(true)
+    await onSave(record.id, {
+      gross_snapshot: toNum(values.gross_snapshot),
+      health_insurance_snapshot: toNum(values.health_insurance_snapshot),
+      pension_snapshot: toNum(values.pension_snapshot),
+      employment_insurance_snapshot: toNum(values.employment_insurance_snapshot),
+      income_tax_snapshot: toNum(values.income_tax_snapshot),
+      resident_tax_snapshot: toNum(values.resident_tax_snapshot),
+    })
+    setSaving(false)
+  }
+
+  return (
+    <FormDialog
+      open
+      onClose={onClose}
+      title={`${monthLabel}の金額を修正（${record.payroll_recipients?.name ?? '?'}）`}
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          この月の金額だけを直します（マスタの登録値と過去月の記録は変わりません）。
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {PAYROLL_FIELDS.map((f) => (
+            <div key={f.key}>
+              <label className="mb-1 block text-sm font-medium" htmlFor={`payroll-${f.key}`}>{f.label}</label>
+              <input
+                id={`payroll-${f.key}`}
+                type="number"
+                inputMode="numeric"
+                min="0"
+                value={values[f.key]}
+                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                className="w-full rounded border border-border px-3 py-2 text-right text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="rounded border px-3 py-2 text-sm">
+          振込額（手取り） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving}>
+            {saving ? '保存中…' : '保存'}
+          </Button>
+        </div>
+      </div>
+    </FormDialog>
+  )
+}
+
 interface Props {
   year: number
   month: number
@@ -530,10 +636,12 @@ interface Props {
   carryOver: CarryOverGroup[]
   // 対応が必要な請求書が1件も無ければ null（カードごと出さない）。
   invoiceAlert: InvoiceAlertCounts | null
+  // 役員報酬・給与の当月分。対象者が未登録なら空配列（カードごと出さない）。
+  payrollRecords: PayrollRecordWithRecipient[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, payrollRecords,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -553,6 +661,10 @@ export default function DashboardClient({
   const [expenseFormFor, setExpenseFormFor] = useState<string | null>(null)
   // 自社経費の入力フォームを開いているクライアントID。立替経費とは紐づく相手が違うので別の状態で持つ。
   const [clientExpenseFormFor, setClientExpenseFormFor] = useState<string | null>(null)
+  const [localPayrollRecords, setLocalPayrollRecords] = useState(payrollRecords)
+  // 振込済みチェックを外すときの確認待ち（金銭に関わるチェックと同じ誤タップ防止）。
+  const [pendingPayrollUncheck, setPendingPayrollUncheck] = useState<string | null>(null)
+  const [payrollEditTarget, setPayrollEditTarget] = useState<PayrollRecordWithRecipient | null>(null)
   const [localGlobal, setLocalGlobal] = useState(globalTask)
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
   const [oneTimeTasks, setOneTimeTasks] = useState(initialOneTimeTasks)
@@ -871,6 +983,48 @@ export default function DashboardClient({
     else bulkToggleClientConfirmed(ids, false)
   }
 
+  // ─── 役員報酬・給与 ─────────────────────────────
+  async function togglePayroll(id: string, nextChecked: boolean) {
+    const prevValue = localPayrollRecords.find((r) => r.id === id)?.paid_at ?? null
+    setLocalPayrollRecords((prev) => prev.map((r) => r.id === id ? { ...r, paid_at: nextChecked ? new Date().toISOString() : null } : r))
+    try {
+      const res = await fetch(`/api/checklist/payroll/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checked: nextChecked }),
+      })
+      if (!res.ok) throw new Error('save failed')
+      const updated = (await res.json()) as PayrollRecordWithRecipient
+      // 対象者（マスタ）はAPIが返さないため、画面側の結合はそのまま引き継ぐ。
+      setLocalPayrollRecords((prev) => prev.map((r) => r.id === id ? { ...updated, payroll_recipients: r.payroll_recipients } : r))
+    } catch {
+      setLocalPayrollRecords((prev) => prev.map((r) => r.id === id ? { ...r, paid_at: prevValue } : r))
+      showError('保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  function requestTogglePayroll(id: string, currentlyChecked: boolean) {
+    if (currentlyChecked) setPendingPayrollUncheck(id)
+    else togglePayroll(id, true)
+  }
+
+  // その月の金額（控え）の書き換え。マスタと過去月には影響しない。
+  async function savePayrollAmounts(id: string, values: Record<PayrollField, number>) {
+    try {
+      const res = await fetch(`/api/checklist/payroll/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+      if (!res.ok) throw new Error('save failed')
+      const updated = (await res.json()) as PayrollRecordWithRecipient
+      setLocalPayrollRecords((prev) => prev.map((r) => r.id === id ? { ...updated, payroll_recipients: r.payroll_recipients } : r))
+      setPayrollEditTarget(null)
+    } catch {
+      showError('金額の保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
   async function toggleGlobal(field: 'expense_confirmed_at' | 'payment_report_confirmed_at' | 'withholding_confirmed_at') {
     if (!localGlobal) return
     const prevValue = localGlobal[field]
@@ -919,7 +1073,19 @@ export default function DashboardClient({
     return sum + (r.payout_amount_snapshot ?? asgn?.contractor_payout_amount ?? 0)
   }, 0) + expenseTotalAll
   const otherExpenses = mfExpense?.amount ?? 0
+  // 役員報酬・給与はここに含めない。このアプリの「利益」はクライアント請求から外注費を引いた粗利で、
+  // 自社の人件費まで引くと今までの月と数字の意味が変わり、過去月との比較ができなくなるため。
   const profit = revenue - contractorCost - otherExpenses
+
+  // ─── 役員報酬・給与の集計 ─────────────────────────────
+  // 支払日が未登録なら既定日。31日など月末を超える指定は、その月の末日に丸めて判定する
+  // （カスタムタスクの日にち指定と同じ扱い）。
+  const payrollDueDay = (r: PayrollRecordWithRecipient): number =>
+    Math.min(r.payroll_recipients?.pay_day ?? PAYROLL_DEFAULT_PAY_DAY, lastDay)
+  const payrollDueState = (r: PayrollRecordWithRecipient): DueState =>
+    isCurrentMonth ? getDueState(day, payrollDueDay(r), r.paid_at) : (r.paid_at ? 'done' : 'upcoming')
+  // 源泉所得税は毎月まとめて納付するため、給与分の合計を1か所に出す（納付額を人が数え直さずに済む）。
+  const payrollIncomeTaxTotal = localPayrollRecords.reduce((s, r) => s + r.income_tax_snapshot, 0)
 
   async function syncMFExpenses() {
     setIsSyncing(true)
@@ -1507,6 +1673,13 @@ export default function DashboardClient({
       if (paidState === 'overdue') overdueItems.push({ label: name, group: 'contractorPaid', target: paidTarget })
       else if (paidState === 'inWindow') inWindowItems.push({ label: name, group: 'contractorPaid', target: paidTarget })
     }
+    // 役員報酬・給与の振込。支払日は人ごとに違うため、行ごとに期日を見る。
+    for (const p of localPayrollRecords) {
+      const st = payrollDueState(p)
+      const label = `${PAYROLL_KIND_LABEL[p.payroll_recipients?.kind ?? 'employee']}振込：${p.payroll_recipients?.name ?? '?'}`
+      if (st === 'overdue') overdueItems.push({ label, target: `payroll-${p.id}` })
+      else if (st === 'inWindow') inWindowItems.push({ label, target: `payroll-${p.id}` })
+    }
     // 単発タスク: 期日超過なら「期限超過」、期日が近い（既定3日以内）なら「対応期間中」に載せる。
     for (const t of oneTimeTasks) {
       if (t.completed_at) continue
@@ -1564,6 +1737,14 @@ export default function DashboardClient({
         done: g.items.every((cr) => !!cr.payment_confirmed_at),
       })
     }
+  }
+  for (const p of localPayrollRecords) {
+    monthChecks.push({
+      key: `payroll-${p.id}`,
+      target: `payroll-${p.id}`,
+      label: `${PAYROLL_KIND_LABEL[p.payroll_recipients?.kind ?? 'employee']}振込：${p.payroll_recipients?.name ?? '?'}`,
+      done: !!p.paid_at,
+    })
   }
   if (localGlobal) {
     for (const t of globalTaskDefs) {
@@ -2543,6 +2724,76 @@ export default function DashboardClient({
         </>
         )}
       </section>
+
+      {/* 役員報酬・給与。対象者が未登録の月はカードごと出さない（空の枠を並べても操作が無いため）。 */}
+      {localPayrollRecords.length > 0 && (
+        <section className="rounded-lg border bg-card p-4">
+          <h2 className="mb-3 text-sm font-semibold text-foreground">役員報酬・給与</h2>
+          <div className="space-y-3">
+            {localPayrollRecords.map((p) => {
+              const amounts = payrollAmountsOfRecord(p)
+              const paid = !!p.paid_at
+              const state = payrollDueState(p)
+              const name = p.payroll_recipients?.name ?? '?'
+              const kindLabel = PAYROLL_KIND_LABEL[p.payroll_recipients?.kind ?? 'employee']
+              return (
+                <div
+                  key={p.id}
+                  data-pending-row={`payroll-${p.id}`}
+                  className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded border-l-4 px-2 py-2 scroll-mt-24 ${
+                    state === 'overdue' ? 'border-l-danger' : state === 'inWindow' ? 'border-l-warning' : 'border-l-transparent'
+                  } ${rowBg(`payroll-${p.id}`, 'bg-secondary')}`}
+                >
+                  <div className="min-w-[10rem] flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-card px-1.5 py-0.5 text-xs text-muted-foreground">{kindLabel}</span>
+                      <span className="text-sm font-medium text-foreground">{name}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      額面 ¥{amounts.gross.toLocaleString()} ・ 控除 ¥{payrollDeductions(amounts).toLocaleString()}
+                      ・ 支払日 {payrollDueDay(p)}日
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPayrollEditTarget(p)}
+                      className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+                    >
+                      この月の金額を修正
+                    </button>
+                  </div>
+                  <span className="shrink-0 text-base font-semibold text-foreground">
+                    ¥{payrollNet(amounts).toLocaleString()}
+                  </span>
+                  <div className="shrink-0 text-center">
+                    <span className="block text-xs text-muted-foreground">振込済み</span>
+                    <MoneyCheckControl
+                      checked={paid}
+                      checkedAt={p.paid_at}
+                      pending={pendingPayrollUncheck === p.id}
+                      label={`${name}の${kindLabel}の振込`}
+                      onRequest={() => requestTogglePayroll(p.id, paid)}
+                      onConfirm={() => { setPendingPayrollUncheck(null); togglePayroll(p.id, false) }}
+                      onCancel={() => setPendingPayrollUncheck(null)}
+                      badge={isCurrentMonth && !paid && <DueBadge state={state} />}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {/* 源泉所得税は月ごとにまとめて納付するため、控除の合計をカード内に併記する。 */}
+          <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+            今月の源泉所得税（給与分）: <span className="font-semibold text-foreground">¥{payrollIncomeTaxTotal.toLocaleString()}</span>
+          </p>
+        </section>
+      )}
+
+      <PayrollAmountsDialog
+        record={payrollEditTarget}
+        monthLabel={`${year}年${month}月`}
+        onClose={() => setPayrollEditTarget(null)}
+        onSave={savePayrollAmounts}
+      />
 
       {/* グローバルタスク（常時表示） */}
       <section ref={globalTaskSectionRef} data-pending-row="global-tasks" className={`scroll-mt-24 rounded-lg border p-4 ${rowBg('global-tasks', 'bg-card')}`}>

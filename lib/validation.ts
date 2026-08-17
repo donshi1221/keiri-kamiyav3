@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EXPENSE_ITEM_KINDS } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS, PAYROLL_KINDS } from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -210,6 +210,44 @@ const expenseItemAssignSchema = z
 // 明細が1件も無い送信は、読み取り前・読み取り失敗のまま送られた事故なので弾く。
 export const expenseSubmitSchema = z.object({
   items: z.array(expenseItemAssignSchema).min(1, { message: '明細が1件もありません' }),
+})
+
+// ─── 役員報酬・給与 ─────────────────────────────
+// 控除額はユーザーが登録した値をそのまま使う（料率表は持たない）ので、検証は「0以上の整数」だけ。
+// pay_day は空欄＝未設定（既定日で扱う）なので null に寄せる。
+const payDayField = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? null : v),
+  z.coerce
+    .number()
+    .int({ message: '支払日は整数で入力してください' })
+    .min(1, { message: '支払日は1〜31で入力してください' })
+    .max(31, { message: '支払日は1〜31で入力してください' })
+    .nullable()
+)
+
+export const payrollRecipientCreateSchema = z.object({
+  name: z.string().trim().min(1, { message: '氏名は必須です' }),
+  kind: z.enum(PAYROLL_KINDS, { message: '種別を選んでください' }),
+  gross_amount: moneyInt.optional(),
+  health_insurance: moneyInt.optional(),
+  pension: moneyInt.optional(),
+  employment_insurance: moneyInt.optional(),
+  income_tax: moneyInt.optional(),
+  resident_tax: moneyInt.optional(),
+  pay_day: payDayField.optional(),
+  active: z.boolean().optional(),
+})
+export const payrollRecipientPatchSchema = payrollRecipientCreateSchema.partial()
+
+// 月次レコードの金額修正（料率改定の月に、その月の控えだけを直す）。
+// 送られてきた項目だけを更新するため全項目を任意にする。
+export const payrollSnapshotPatchSchema = z.object({
+  gross_snapshot: moneyInt.optional(),
+  health_insurance_snapshot: moneyInt.optional(),
+  pension_snapshot: moneyInt.optional(),
+  employment_insurance_snapshot: moneyInt.optional(),
+  income_tax_snapshot: moneyInt.optional(),
+  resident_tax_snapshot: moneyInt.optional(),
 })
 
 export const snapshotBackfillSchema = z.object({

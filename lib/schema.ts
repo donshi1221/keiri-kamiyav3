@@ -1,5 +1,6 @@
 import { pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb, unique } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
+import type { PAYROLL_KINDS } from './config'
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -358,6 +359,49 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// 役員報酬・給与の支給対象者（役員1名＋従業員1名）。
+// 保険料率表・源泉徴収税額表はアプリに持たず、控除額はここに登録された値をそのまま使う
+// （料率は毎年変わるうえ、等級の判定まで抱えると保守しきれないため。改定時は人がこの値を直す）。
+// kind を enum ではなく text にしているのは、区分を足すときにDBの型変更を伴わせないため
+// （expense_upload_items.kind と同じ流儀）。取りうる値は lib/config の PAYROLL_KINDS。
+export const payrollRecipients = pgTable('payroll_recipients', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  kind: text('kind').$type<(typeof PAYROLL_KINDS)[number]>().notNull().default('employee'),
+  // 額面（円）。ここから下の5つの控除を引いた残りが振込額（手取り）になる。
+  gross_amount: integer('gross_amount').notNull().default(0),
+  // 本人負担分の控除額（円）。会社負担分はここには入れない（振込額の計算に関係しないため）。
+  health_insurance: integer('health_insurance').notNull().default(0),
+  pension: integer('pension').notNull().default(0),
+  employment_insurance: integer('employment_insurance').notNull().default(0),
+  income_tax: integer('income_tax').notNull().default(0),
+  resident_tax: integer('resident_tax').notNull().default(0),
+  // 支払日（1〜31）。表示と振込リマインドの期日に使う。未設定は lib/config の既定日で扱う。
+  pay_day: integer('pay_day'),
+  active: boolean('active').notNull().default(true),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// 月次の支給レコード。マスタを改定しても過去月の表示・振込額が変わらないよう、
+// 生成時点の額面と5つの控除額をすべて控える（snapshot）。
+// 料率改定の月はこの控えを直接直す（マスタを直すと過去月まで遡って変わってしまうため）。
+// 控えを notNull にしているのは、生成時に必ず全項目を書き込むため。
+// 手取りは6項目の引き算で毎回出すので、nullを許すと計算のたびに null 判定が要る。
+export const monthlyPayrollRecords = pgTable('monthly_payroll_records', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  year: integer('year').notNull(),
+  month: integer('month').notNull(),
+  recipient_id: uuid('recipient_id').notNull().references(() => payrollRecipients.id),
+  gross_snapshot: integer('gross_snapshot').notNull().default(0),
+  health_insurance_snapshot: integer('health_insurance_snapshot').notNull().default(0),
+  pension_snapshot: integer('pension_snapshot').notNull().default(0),
+  employment_insurance_snapshot: integer('employment_insurance_snapshot').notNull().default(0),
+  income_tax_snapshot: integer('income_tax_snapshot').notNull().default(0),
+  resident_tax_snapshot: integer('resident_tax_snapshot').notNull().default(0),
+  paid_at: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (t) => [unique().on(t.year, t.month, t.recipient_id)])
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const contractorsRelations = relations(contractors, ({ many }) => ({
@@ -440,6 +484,17 @@ export const expenseUploadItemsRelations = relations(expenseUploadItems, ({ one 
   }),
 }))
 
+export const payrollRecipientsRelations = relations(payrollRecipients, ({ many }) => ({
+  monthly_payroll_records: many(monthlyPayrollRecords),
+}))
+
+export const monthlyPayrollRecordsRelations = relations(monthlyPayrollRecords, ({ one }) => ({
+  payroll_recipients: one(payrollRecipients, {
+    fields: [monthlyPayrollRecords.recipient_id],
+    references: [payrollRecipients.id],
+  }),
+}))
+
 export const taxChatSessionsRelations = relations(taxChatSessions, ({ many }) => ({
   messages: many(taxChatMessages),
 }))
@@ -473,3 +528,5 @@ export type InvoiceUpload = typeof invoiceUploads.$inferSelect
 export type ExpenseUpload = typeof expenseUploads.$inferSelect
 export type ExpenseUploadItem = typeof expenseUploadItems.$inferSelect
 export type GoogleDriveToken = typeof googleDriveTokens.$inferSelect
+export type PayrollRecipient = typeof payrollRecipients.$inferSelect
+export type MonthlyPayrollRecord = typeof monthlyPayrollRecords.$inferSelect

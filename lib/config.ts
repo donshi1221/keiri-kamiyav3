@@ -128,6 +128,19 @@ export const EXPENSE_ITEM_KINDS = ['client_billed', 'company', 'excluded'] as co
 // 画像はサブタイプが機種でまちまち（jpeg / heic / webp）なので前方一致で判定する。
 export const EXPENSE_UPLOAD_MIME_PREFIXES = ['application/pdf', 'image/'] as const
 
+// ─── 役員報酬・給与 ─────────────────────────────
+// 支給対象の区分。金額の扱いは同じだが、画面の呼び名（役員報酬／給与）が変わる。
+// 画面のプルダウンとサーバー側の検証（zod）で同じ一覧を使うためここ1か所に置く
+// （経費の EXPENSE_ITEM_KINDS と同じ流儀）。
+export const PAYROLL_KINDS = ['executive', 'employee'] as const
+
+// 支払日が未登録のときに使う日にち。振込のリマインドは期日が無いと出しようがないため、
+// 一般的な給与支給日である25日を既定にする。
+// ここだけ環境変数で上書きできるようにしていないのは、この値を画面（クライアント側）でも
+// 「未入力なら◯日」と案内するため。NEXT_PUBLIC でない環境変数はブラウザ側では読めず、
+// サーバーで25以外にすると画面の案内文とリマインドの期日が食い違ってしまう。
+export const PAYROLL_DEFAULT_PAY_DAY = 25
+
 // ─── 納品チェック（編集者スプレッドシート）─────────────────────────────
 // 編集者の納品スプレッドシートは全員同じ列構成（A:納品〆切 / B:本数 / C:動画のNo / D:納品URL）。
 // 列は0始まりのインデックスで持ち、将来レイアウトが変わっても env で追従できるようにする。
