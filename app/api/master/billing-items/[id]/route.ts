@@ -2,8 +2,9 @@ import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { clientBillingItems, monthlyClientRecords } from '@/lib/schema'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 import { parseBody, billingItemPatchSchema } from '@/lib/validation'
+import { nowJST } from '@/lib/dates'
 
 export async function PATCH(
   req: NextRequest,
@@ -30,6 +31,24 @@ export async function PATCH(
 
     const [data] = await db.update(clientBillingItems).set(patch).where(eq(clientBillingItems.id, id)).returning()
     if (!data) return Response.json({ error: 'Not found' }, { status: 404 })
+
+    // 月額を変えたときは、生成済みの月次記録の控えも今月以降のぶんだけ追従させる。
+    // 過去月と請求書送付済みの月は、確定した数字を遡って変えないため対象外にする。
+    if (v.billing_amount !== undefined) {
+      const now = nowJST()
+      const cutoff = now.getFullYear() * 100 + (now.getMonth() + 1)
+      await db
+        .update(monthlyClientRecords)
+        .set({ billing_amount_snapshot: v.billing_amount })
+        .where(
+          and(
+            eq(monthlyClientRecords.billing_item_id, id),
+            isNull(monthlyClientRecords.invoice_sent_at),
+            sql`${monthlyClientRecords.year} * 100 + ${monthlyClientRecords.month} >= ${cutoff}`
+          )
+        )
+    }
+
     return Response.json(data)
   } catch (err) {
     return serverError(err)
