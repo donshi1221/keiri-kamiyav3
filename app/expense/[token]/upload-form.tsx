@@ -26,6 +26,18 @@ type ItemDraft = {
 
 const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '' }
 
+// 1ファイル分の処理結果。最後の一覧で「どれが経理に届いて、どれが届いていないか」を
+// 代表がその場で把握できないと、失敗分だけを担当者に伝えることができない。
+type FileResult = {
+  name: string
+  status: 'submitted' | 'extract_failed' | 'upload_failed'
+  message?: string
+}
+
+// アップロードは失敗しても例外にせず、理由を持ち回る（先読みした Promise を後から受け取るため、
+// 投げっぱなしの例外だと受け取る側で拾いようがない）。
+type UploadOutcome = { ok: true; data: ExpenseInboxResponse } | { ok: false; error: string }
+
 // 送信できる状態か。サーバー側の検証（lib/validation の expenseItemAssignSchema）と同じ条件にして、
 // 画面では通るのに送信で弾かれる、という食い違いを避ける。
 function isComplete(draft: ItemDraft): boolean {
@@ -107,14 +119,20 @@ export default function ExpenseUploadForm({
   token: string
   clients: Pick<Client, 'id' | 'name'>[]
 }) {
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  // 選択中の画面（select）→ 1件ずつ割り当て（working）→ 結果一覧（done）の3段階。
+  const [phase, setPhase] = useState<'select' | 'working' | 'done'>('select')
+  const [index, setIndex] = useState(0)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [uploadError, setUploadError] = useState('')
   const [inbox, setInbox] = useState<ExpenseInboxResponse | null>(null)
   const [drafts, setDrafts] = useState<Record<string, ItemDraft>>({})
   const [submitting, setSubmitting] = useState(false)
-  const [done, setDone] = useState(false)
+  const [results, setResults] = useState<FileResult[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  // 先読み中の1件。描画に使わない（表示は結果を受け取ってから）ので state ではなく ref で持つ。
+  const prefetchRef = useRef<{ index: number; promise: Promise<UploadOutcome> } | null>(null)
 
   const items = inbox?.items ?? []
 
@@ -148,31 +166,91 @@ export default function ExpenseUploadForm({
     })
   }
 
-  async function sendFile(e: React.FormEvent) {
-    e.preventDefault()
-    if (!file) return
-    setUploading(true)
-    setError('')
-
+  async function uploadOne(target: File): Promise<UploadOutcome> {
     const body = new FormData()
     body.append('token', token)
-    body.append('file', file)
+    body.append('file', target)
 
     try {
       const res = await fetch('/api/expense-inbox', { method: 'POST', body })
-      setUploading(false)
       if (!res.ok) {
-        setError(await readErrorMessage(res, 'アップロードに失敗しました。時間をおいて再度お試しください。'))
-        return
+        return { ok: false, error: await readErrorMessage(res, 'アップロードに失敗しました。時間をおいて再度お試しください。') }
       }
-      const data = (await res.json()) as ExpenseInboxResponse
-      setInbox(data)
-      setDrafts(Object.fromEntries(data.items.map((item) => [item.id, EMPTY_DRAFT])))
+      return { ok: true, data: (await res.json()) as ExpenseInboxResponse }
     } catch {
-      // 通信断でも fetch は例外になる。戻さないと「読み取っています…」でボタンが固着する。
-      setUploading(false)
-      setError('通信に失敗しました。接続を確認して再度お試しください。')
+      // 通信断でも fetch は例外になる。理由を返さないと「読み取っています…」の表示から抜けられない。
+      return { ok: false, error: '通信に失敗しました。接続を確認して再度お試しください。' }
     }
+  }
+
+  // 割り当ての操作中に次の1件をAIへ回しておくと、次の画面がほぼ待ち時間なしで出る。
+  // 先読みは必ず「次の1つ」だけにする。全件を一度に投げると、AI読み取りの無料枠を一気に使い切り、
+  // 受付APIの制限時間（60秒）にも同時実行がぶつかって、まとめて失敗しかねないため。
+  function startPrefetch(nextIndex: number, list: File[]) {
+    const next = list[nextIndex]
+    prefetchRef.current = next ? { index: nextIndex, promise: uploadOne(next) } : null
+  }
+
+  function recordResult(result: FileResult) {
+    setResults((prev) => [...prev, result])
+  }
+
+  // 指定の1件を画面に出す。先読み済みならその結果を待つだけで済む。
+  async function openFile(target: number, list: File[]) {
+    const file = list[target]
+    if (!file) return
+
+    setUploading(true)
+    setError('')
+    setUploadError('')
+    setInbox(null)
+    setDrafts({})
+
+    const prefetched = prefetchRef.current
+    const pending = prefetched?.index === target ? prefetched.promise : uploadOne(file)
+    prefetchRef.current = null
+
+    const outcome = await pending
+    setUploading(false)
+    setPhase('working')
+
+    if (!outcome.ok) {
+      setUploadError(outcome.error)
+      recordResult({ name: file.name, status: 'upload_failed', message: outcome.error })
+    } else {
+      setInbox(outcome.data)
+      setDrafts(Object.fromEntries(outcome.data.items.map((item) => [item.id, EMPTY_DRAFT])))
+      // 失敗はこの時点で記録する。代表が「次のファイルへ」を押さずに画面を離れても、
+      // 直前まで見ていた結果一覧に失敗が残っている方が担当者へ伝えやすい。
+      if (outcome.data.extract_error || outcome.data.items.length === 0) {
+        recordResult({
+          name: outcome.data.file_name,
+          status: 'extract_failed',
+          message: outcome.data.extract_error ?? '明細が1件も読み取れませんでした',
+        })
+      }
+    }
+
+    startPrefetch(target + 1, list)
+  }
+
+  async function start(e: React.FormEvent) {
+    e.preventDefault()
+    if (files.length === 0) return
+    setIndex(0)
+    setResults([])
+    await openFile(0, files)
+  }
+
+  async function goNext() {
+    const next = index + 1
+    if (next >= files.length) {
+      setInbox(null)
+      setPhase('done')
+      return
+    }
+    setIndex(next)
+    await openFile(next, files)
   }
 
   async function submitAssignments() {
@@ -202,7 +280,8 @@ export default function ExpenseUploadForm({
         setError(await readErrorMessage(res, '送信に失敗しました。時間をおいて再度お試しください。'))
         return
       }
-      setDone(true)
+      recordResult({ name: inbox.file_name, status: 'submitted' })
+      await goNext()
     } catch {
       setSubmitting(false)
       setError('通信に失敗しました。接続を確認して再度お試しください。')
@@ -210,20 +289,76 @@ export default function ExpenseUploadForm({
   }
 
   function reset() {
-    setFile(null)
+    setFiles([])
+    setPhase('select')
+    setIndex(0)
     setInbox(null)
     setDrafts({})
-    setDone(false)
+    setResults([])
     setError('')
+    setUploadError('')
+    prefetchRef.current = null
     if (inputRef.current) inputRef.current.value = ''
   }
 
-  if (done) {
+  const isLast = index >= files.length - 1
+  const currentName = files[index]?.name ?? ''
+
+  // 複数選んだときだけ進み具合を出す。1件だけのときは分母が常に1で、かえって読む手間が増えるため。
+  const progress =
+    files.length > 1 ? (
+      <p className="text-xs font-medium text-muted-foreground">
+        {index + 1}/{files.length}件目：<span className="break-all">{currentName}</span>
+      </p>
+    ) : null
+
+  const nextButton = (
+    <Button type="button" variant="outline" className="h-11 w-full" onClick={goNext}>
+      {isLast ? '結果を見る' : '次のファイルへ'}
+    </Button>
+  )
+
+  // ─── 最終段階: ファイルごとの結果 ───────────────────────────────
+  if (phase === 'done') {
+    const failed = results.filter((r) => r.status !== 'submitted')
     return (
       <div className="space-y-4">
-        <div className="rounded-lg border border-success bg-success-subtle px-4 py-3 text-sm text-success">
-          送信しました。経理の確認をお待ちください。
-        </div>
+        {failed.length === 0 ? (
+          <div className="rounded-lg border border-success bg-success-subtle px-4 py-3 text-sm text-success">
+            送信しました。経理の確認をお待ちください。
+          </div>
+        ) : (
+          <div className="rounded-lg border border-warning bg-warning-subtle px-4 py-3 text-sm text-warning">
+            <p className="font-medium">{failed.length}件のファイルを送信できませんでした</p>
+            <p className="mt-1">ファイル自体はお預かりしています。お手数ですが担当者にご連絡ください。</p>
+          </div>
+        )}
+
+        {results.length > 1 && (
+          <div className="divide-y rounded-lg border bg-card">
+            {results.map((result, i) => (
+              <div key={`${result.name}-${i}`} className="flex items-start justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm break-all">{result.name}</p>
+                  {result.message && <p className="mt-1 text-xs text-muted-foreground break-all">{result.message}</p>}
+                </div>
+                <p
+                  className={cn(
+                    'shrink-0 text-xs font-medium',
+                    result.status === 'submitted' ? 'text-success' : 'text-danger'
+                  )}
+                >
+                  {result.status === 'submitted'
+                    ? '送信済み'
+                    : result.status === 'extract_failed'
+                      ? '読み取り失敗'
+                      : 'アップロード失敗'}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
         <Button type="button" variant="outline" className="h-11 w-full" onClick={reset}>
           続けて別のファイルを送る
         </Button>
@@ -232,12 +367,12 @@ export default function ExpenseUploadForm({
   }
 
   // ─── 第1段階: ファイルを選んで送る ───────────────────────────────
-  if (!inbox) {
+  if (phase === 'select') {
     return (
-      <form onSubmit={sendFile} className="space-y-4">
+      <form onSubmit={start} className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          モバイルICOCAの利用履歴（PDF）や領収書の写真を1つ選んで送信してください。
-          送信すると明細を読み取るので、続けて行ごとの割り当てをお願いします。
+          モバイルICOCAの利用履歴（PDF）や領収書の写真を選んで送信してください。まとめて選べます。
+          送信すると1件ずつ明細を読み取るので、続けて行ごとの割り当てをお願いします。
         </p>
 
         <div>
@@ -248,18 +383,34 @@ export default function ExpenseUploadForm({
             id="expense-file"
             ref={inputRef}
             type="file"
+            multiple
             accept="application/pdf,image/*"
             onChange={(e) => {
-              setFile(e.target.files?.[0] ?? null)
+              setFiles(Array.from(e.target.files ?? []))
               setError('')
             }}
             className="w-full rounded border px-3 py-2.5 text-sm file:mr-3 file:min-h-11 file:rounded file:border-0 file:bg-primary file:px-3 file:text-sm file:text-primary-foreground"
           />
         </div>
 
+        {/* 端末によっては入力欄に「3個のファイル」としか出ず、選び間違いに気付けない。
+            開始前に名前を並べて、送る中身を確かめられるようにする。 */}
+        {files.length > 0 && (
+          <div className="rounded-lg border bg-card px-4 py-3">
+            <p className="text-xs font-medium text-muted-foreground">選んだファイル：{files.length}件</p>
+            <ol className="mt-2 space-y-1">
+              {files.map((f, i) => (
+                <li key={`${f.name}-${i}`} className="text-sm break-all">
+                  {i + 1}. {f.name}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
         {error && <p className="text-sm text-danger">{error}</p>}
 
-        <Button type="submit" className="h-11 w-full" disabled={!file || uploading}>
+        <Button type="submit" className="h-11 w-full" disabled={files.length === 0 || uploading}>
           {uploading ? '読み取っています…' : '送信する'}
         </Button>
 
@@ -274,12 +425,47 @@ export default function ExpenseUploadForm({
     )
   }
 
+  // ─── 次のファイルの読み取り待ち ───────────────────────────────
+  // 先読みが間に合っていれば一瞬で次へ進むが、間に合わなかった場合はここで待つことになる。
+  if (uploading) {
+    return (
+      <div className="space-y-3">
+        {progress}
+        <div className="rounded-lg border bg-card px-4 py-6 text-center">
+          <p className="text-sm font-medium">明細を読み取っています…</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            1分ほどかかることがあります。このまま画面を開いたままお待ちください。
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // ─── アップロード自体に失敗した場合 ───────────────────────────────
+  // このファイルは預かれていないので、担当者に別途渡してもらう必要がある。残りのファイルは続けられる。
+  if (uploadError) {
+    return (
+      <div className="space-y-4">
+        {progress}
+        <div className="rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm text-danger">
+          <p className="font-medium">このファイルを送れませんでした</p>
+          <p className="mt-1 break-all">{currentName}</p>
+          <p className="mt-1">{uploadError}</p>
+        </div>
+        {nextButton}
+      </div>
+    )
+  }
+
+  if (!inbox) return null
+
   // ─── 読み取りに失敗した場合 ───────────────────────────────
   // 原因はファイルの中身やAI側の都合で、代表の操作では解決できない。同じファイルを送り直しても
   // 同じ結果になるため、再送は促さず担当者への連絡だけを案内する（ファイル自体は預かり済み）。
   if (inbox.extract_error || items.length === 0) {
     return (
       <div className="space-y-4">
+        {progress}
         <div className="rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm text-danger">
           <p className="font-medium">明細を読み取れませんでした</p>
           <p className="mt-1">
@@ -287,6 +473,7 @@ export default function ExpenseUploadForm({
           </p>
         </div>
         {inbox.extract_error && <p className="text-xs text-muted-foreground">{inbox.extract_error}</p>}
+        {nextButton}
       </div>
     )
   }
@@ -294,6 +481,7 @@ export default function ExpenseUploadForm({
   // ─── 第2段階: 読み取った明細に割り当てる ───────────────────────────────
   return (
     <div className="space-y-4">
+      {progress}
       <div className="rounded-lg border bg-card px-4 py-3">
         <p className="text-sm font-medium break-all">{inbox.file_name}</p>
         <p className="mt-1 text-xs text-muted-foreground">
