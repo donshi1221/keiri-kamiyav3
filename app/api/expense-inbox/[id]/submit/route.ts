@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems } from '@/lib/schema'
 import { verifyExpenseUploadToken } from '@/lib/expense-token'
 import { expenseSubmitSchema, parseBody } from '@/lib/validation'
+import { getResend } from '@/lib/resend'
 
 // 公開エンドポイント（proxy.ts の認証除外）。代表が明細ごとの割り当てを送って経理へ回す。
 // 受付（POST /api/expense-inbox）と同じトークンで入口を絞る。
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
     if (!parsed.ok) return Response.json({ error: parsed.message }, { status: 400 })
 
     const [upload] = await db
-      .select({ id: expenseUploads.id, status: expenseUploads.status })
+      .select({ id: expenseUploads.id, status: expenseUploads.status, file_name: expenseUploads.file_name })
       .from(expenseUploads)
       .where(eq(expenseUploads.id, id))
     if (!upload) return Response.json({ error: 'Not found' }, { status: 404 })
@@ -71,6 +72,34 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
       .from(expenseUploadItems)
       .where(eq(expenseUploadItems.upload_id, id))
       .orderBy(asc(expenseUploadItems.sort_order))
+
+    // 通知は保険であり本業の受付を止めない。宛先未設定や送信失敗があっても経費の送信自体は成功として返す。
+    try {
+      if (!process.env.RESEND_API_KEY || !process.env.NOTIFICATION_EMAIL) {
+        console.warn('[expense-inbox/submit] RESEND_API_KEY または NOTIFICATION_EMAIL が未設定のため通知メールをスキップしました。')
+      } else {
+        const resend = getResend()
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+        const { error: mailErr } = await resend.emails.send({
+          from: 'keiri-v3 <noreply@resend.dev>',
+          to: process.env.NOTIFICATION_EMAIL,
+          subject: `[経費受付] 代表から経費が届きました（${upload.file_name}）`,
+          text: [
+            `代表から経費が届きました。`,
+            '',
+            `ファイル名: ${upload.file_name}`,
+            `明細件数: ${items.length}件`,
+            '',
+            `確認はこちら: ${appUrl}/expense-check`,
+          ].join('\n'),
+        })
+        if (mailErr) {
+          console.error('[expense-inbox/submit] mail send failed:', mailErr)
+        }
+      }
+    } catch (mailErr) {
+      console.error('[expense-inbox/submit] mail send failed:', mailErr)
+    }
 
     return Response.json({ id, status: 'submitted', items })
   } catch (err) {
