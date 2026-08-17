@@ -327,6 +327,10 @@ export const expenseUploads = pgTable('expense_uploads', {
   extract_error: text('extract_error'),
   submitted_at: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),
   reviewed_at: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  // 登録時にGoogleドライブへ保存した原本の控え。drive_file_id が入っていること自体が
+  // 「保存済み」の印になり、null のままなら登録済みでも保存だけやり直せる（請求書側と同じ設計）。
+  drive_file_id: text('drive_file_id'),
+  drive_link: text('drive_link'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

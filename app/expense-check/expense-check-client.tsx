@@ -15,7 +15,13 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import type { ExpenseUploadRow, ExpenseUploadItemRow, ExpenseExtractOutcome } from '@/lib/ui-types'
+import type {
+  ExpenseUploadRow,
+  ExpenseUploadItemRow,
+  ExpenseExtractOutcome,
+  ExpenseApproveResult,
+  GoogleDriveStatus,
+} from '@/lib/ui-types'
 import {
   EXPENSE_KIND_LABEL,
   formatExpenseAmount,
@@ -99,6 +105,7 @@ export default function ExpenseCheckClient() {
   // 消えた理由と次に誰が何をするのかを伝えないと「操作が効かなかった」ように見えるため、
   // エラーとは別枠の案内として出す。
   const [notice, setNotice] = useState<string | null>(null)
+  const [driveConfigured, setDriveConfigured] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [extractingId, setExtractingId] = useState<string | null>(null)
   // 登録は client_expenses を作る取り消せない操作、却下も状態を変える操作なので、
@@ -118,6 +125,15 @@ export default function ExpenseCheckClient() {
   }, [showAll])
 
   useEffect(() => { load() }, [load])
+
+  // ドライブ連携を使っていない運用では drive_file_id が常に null になる。
+  // 設定の有無を知らないと、その全件を「保存失敗」として見せてしまうため、先に設定状況を確かめる。
+  useEffect(() => {
+    fetch('/api/google-drive/status', { cache: 'no-store' })
+      .then((res) => (res.ok ? (res.json() as Promise<GoogleDriveStatus>) : null))
+      .then((status) => setDriveConfigured(!!status?.configured))
+      .catch(() => setDriveConfigured(false))
+  }, [])
 
   // 409（登録済み・却下できない）や400（必須未入力の行）は、経理が次に何をすべきかを
   // サーバーの文言がそのまま説明している。言い換えず、そのまま画面に出す。
@@ -161,6 +177,40 @@ export default function ExpenseCheckClient() {
       if (!res.ok) {
         setError(await readErrorMessage(res, action === 'approve' ? '登録に失敗しました。' : '却下に失敗しました。'))
         return
+      }
+      // ドライブ保存の失敗は登録の失敗ではない。黙って進むと控えが残っていないことに誰も気づかないため、
+      // 「登録は済んでいる」と分かる文言で理由を出す（操作自体は成功しているのでボタンは再試行側に出る）。
+      if (action === 'approve') {
+        const result = (await res.json().catch(() => null)) as ExpenseApproveResult | null
+        if (result && 'error' in result.drive) {
+          setError(`登録は完了しましたが、原本をGoogleドライブへ保存できませんでした。${result.drive.error}（「保存を再試行」でやり直せます）`)
+        }
+      }
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // ドライブ保存だけのやり直し。登録済みかつ未保存の受付に限り、サーバー側が同じ approve を
+  // 「保存の再試行」として扱う（明細には触らないので、押しても二重請求にはならない）。
+  async function retryDriveSave(row: ExpenseUploadRow) {
+    setBusyId(row.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(`/api/expense-uploads/${row.id}/approve`, { method: 'POST' })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, 'ドライブへの保存に失敗しました。'))
+        return
+      }
+      const result = (await res.json().catch(() => null)) as ExpenseApproveResult | null
+      if (result && 'error' in result.drive) {
+        setError(`原本をGoogleドライブへ保存できませんでした。${result.drive.error}`)
+      } else if (result && 'folderName' in result.drive) {
+        setNotice(`「${row.file_name}」をGoogleドライブ（${result.drive.folderName}）に保存しました。`)
       }
       await load()
     } catch {
@@ -405,6 +455,33 @@ export default function ExpenseCheckClient() {
                 )}
                 {row.status === 'draft' && !failed && (
                   <span className="text-xs text-muted-foreground">代表が割当中です</span>
+                )}
+                {/* 登録済みの原本はドライブに控えが残る。保存できていない場合だけ、
+                    控えが無い事実と直し方（再試行）をその場に出す。 */}
+                {row.status === 'registered' && row.drive_link && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-11 md:h-7"
+                    nativeButton={false}
+                    render={<a href={row.drive_link} target="_blank" rel="noopener noreferrer" />}
+                  >
+                    ドライブで開く
+                  </Button>
+                )}
+                {driveConfigured && row.status === 'registered' && !row.drive_file_id && (
+                  <>
+                    <span className="text-xs text-muted-foreground">ドライブ未保存</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11 md:h-7"
+                      onClick={() => retryDriveSave(row)}
+                      disabled={busy}
+                    >
+                      {busyId === row.id ? '保存中…' : '保存を再試行'}
+                    </Button>
+                  </>
                 )}
               </div>
             </div>

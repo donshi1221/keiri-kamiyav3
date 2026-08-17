@@ -234,18 +234,29 @@ async function resolveMonthFolder(
   return { id: created.json.id, name: created.json.name ?? name }
 }
 
-// multipart/related は「メタデータ(JSON)」と「PDF本体(バイナリ)」を1リクエストにまとめる形式。
-// PDFはbase64のまま送ると容量が約1.33倍になるので、境界文字列だけ文字として組み、本体はバイナリで挟む。
-function buildMultipartBody(boundary: string, metadata: unknown, pdfBase64: string): Uint8Array<ArrayBuffer> {
+// ドライブ上のファイル名に使うと表示や検索が壊れる文字（フォルダ区切り等）を落とす。
+// 元のファイル名は外部からアップロードされたもので、何が入っているか保証がない。
+export function sanitizeFileNamePart(value: string): string {
+  return value.replace(/[\\/:*?"<>|\r\n]/g, '_').trim()
+}
+
+// multipart/related は「メタデータ(JSON)」と「ファイル本体(バイナリ)」を1リクエストにまとめる形式。
+// base64のまま送ると容量が約1.33倍になるので、境界文字列だけ文字として組み、本体はバイナリで挟む。
+function buildMultipartBody(
+  boundary: string,
+  metadata: unknown,
+  fileBase64: string,
+  contentType: string
+): Uint8Array<ArrayBuffer> {
   const head = Buffer.from(
     `--${boundary}\r\n` +
       'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
       `${JSON.stringify(metadata)}\r\n` +
       `--${boundary}\r\n` +
-      'Content-Type: application/pdf\r\n\r\n',
+      `Content-Type: ${contentType}\r\n\r\n`,
     'utf8'
   )
-  const media = Buffer.from(pdfBase64, 'base64')
+  const media = Buffer.from(fileBase64, 'base64')
   const tail = Buffer.from(`\r\n--${boundary}--`, 'utf8')
 
   const body = new Uint8Array(head.length + media.length + tail.length)
@@ -255,14 +266,17 @@ function buildMultipartBody(boundary: string, metadata: unknown, pdfBase64: stri
   return body
 }
 
-// PDF（base64）を、親フォルダ配下の「対象月のサブフォルダ」へ保存する。
+// ファイル（base64）を、親フォルダ配下の「対象月のサブフォルダ」へ保存する。
 // 環境変数が未設定なら { disabled: true } を返す＝この機能を使わない運用では静かに何もしない。
 // 一方、設定済みなのに未連携・連携切れのときは error を返す（画面に理由が出て、次にすべきことが分かる）。
-export async function uploadPdfToDrive(
+// mimeType の既定がPDFなのは、経費の原本（写真）まで application/pdf で上げると
+// ドライブ側が開けないファイルとして扱うため。呼び出し元が原本の種類を渡せるようにしてある。
+export async function uploadFileToDrive(
   fileName: string,
-  pdfBase64: string,
+  fileBase64: string,
   year: number,
-  month: number
+  month: number,
+  mimeType = 'application/pdf'
 ): Promise<DriveUploadOutcome> {
   // 秘密情報とアップロード先はデプロイ環境ごとに変わる接続情報のため、config ではなく環境変数から直接読む。
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID
@@ -276,7 +290,7 @@ export async function uploadPdfToDrive(
     if ('error' in folder) return folder
 
     const boundary = `keiri-${randomUUID()}`
-    const body = buildMultipartBody(boundary, { name: fileName, parents: [folder.id] }, pdfBase64)
+    const body = buildMultipartBody(boundary, { name: fileName, parents: [folder.id] }, fileBase64, mimeType)
 
     const res = await fetch(UPLOAD_URL, {
       method: 'POST',

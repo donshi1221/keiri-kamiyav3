@@ -4,29 +4,106 @@ import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems, clientExpenses } from '@/lib/schema'
 import { nextMonthOf } from '@/lib/dates'
+import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
+import type { ExpenseUploadItem } from '@/lib/schema'
+import type { ExpenseApproveResult } from '@/lib/ui-types'
+
+// 関数のタイムアウト上限（秒）。登録時に数MBの原本をGoogleドライブへ転送するため、
+// 既定の短いタイムアウトだと保存中に打ち切られる。ドライブ保存を行う他のAPIと同じ値にする。
+export const maxDuration = 60
+
+// 経費ファイルの明細は原本1件で1か月分あり、月をまたぐこともある。保存先は
+// 「クライアントへ請求する月」で揃える（経理はドライブを請求に乗る月で整理しているため）。
+// 請求に乗る行が無い受付でも原本は残すので、その場合は全明細から、利用日が1件も無ければ受付日時から決める。
+function driveTargetMonth(
+  items: Pick<ExpenseUploadItem, 'kind' | 'item_date'>[],
+  createdAt: string
+): { year: number; month: number } {
+  const billed = items.filter((item) => item.kind === 'client_billed' && item.item_date)
+  const dated = (billed.length > 0 ? billed : items).map((item) => item.item_date).filter((d): d is string => !!d)
+  // 1件の原本が複数月にまたがるときは最も早い月へ入れる。請求の起点になる月に原本があるほうが探しやすい。
+  const earliest = dated.sort()[0]
+  const base = earliest
+    ? { year: Number(earliest.slice(0, 4)), month: Number(earliest.slice(5, 7)) }
+    : { year: new Date(createdAt).getFullYear(), month: new Date(createdAt).getMonth() + 1 }
+  return nextMonthOf(base.year, base.month)
+}
+
+// 「2026-08_経費_ICOCA利用履歴.pdf」の形に揃える。保存先は月別サブフォルダだが、
+// 名前にも対象年月を残すのは、フォルダの外へ移動されても何月分か分かるようにするため。
+function driveFileName(year: number, month: number, originalName: string): string {
+  return `${year}-${String(month).padStart(2, '0')}_経費_${sanitizeFileNamePart(originalName)}`
+}
+
+// 原本をドライブへ保存し、成功したら控えを書き戻す。
+// 原本は1件で数MBになりうるため、実際に保存する時だけ file_data を読み出す。
+async function saveExpenseToDrive(id: string, year: number, month: number): Promise<ExpenseApproveResult['drive']> {
+  const [file] = await db
+    .select({
+      file_name: expenseUploads.file_name,
+      file_data: expenseUploads.file_data,
+      file_type: expenseUploads.file_type,
+    })
+    .from(expenseUploads)
+    .where(eq(expenseUploads.id, id))
+  if (!file) return { error: '原本を取得できませんでした' }
+
+  const saved = await uploadFileToDrive(
+    driveFileName(year, month, file.file_name),
+    file.file_data,
+    year,
+    month,
+    // 端末によっては種類が空で届く。空のまま送るとmultipartの形が壊れるため、汎用の型で埋める。
+    file.file_type || 'application/octet-stream'
+  )
+  if ('fileId' in saved) {
+    await db
+      .update(expenseUploads)
+      .set({ drive_file_id: saved.fileId, drive_link: saved.link })
+      .where(eq(expenseUploads.id, id))
+    return { link: saved.link, folderName: saved.folderName }
+  }
+  // 失敗しても drive_file_id は null のまま残す＝画面から保存だけやり直せる。
+  return saved
+}
 
 // 経理の最終判断（登録）。代表が割り当てた明細のうち、クライアントに請求する分だけを
-// client_expenses（自社が直接払い、クライアントへ請求する経費）へ登録する。
+// client_expenses（自社が直接払い、クライアントへ請求する経費）へ登録し、原本をドライブへ保存する。
 export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-uploads/[id]/approve'>) {
   try {
     const { id } = await ctx.params
 
     const [upload] = await db
-      .select({ id: expenseUploads.id, status: expenseUploads.status })
+      .select({
+        id: expenseUploads.id,
+        status: expenseUploads.status,
+        created_at: expenseUploads.created_at,
+        drive_file_id: expenseUploads.drive_file_id,
+      })
       .from(expenseUploads)
       .where(eq(expenseUploads.id, id))
     if (!upload) return Response.json({ error: 'Not found' }, { status: 404 })
-
-    // 登録済みの再実行は同じ経費をもう一度作ってしまう（＝クライアントへの二重請求）ので必ず止める。
-    if (upload.status === 'registered') {
-      return Response.json({ error: 'この経費ファイルはすでに登録済みです。' }, { status: 409 })
-    }
 
     const items = await db
       .select()
       .from(expenseUploadItems)
       .where(eq(expenseUploadItems.upload_id, id))
       .orderBy(asc(expenseUploadItems.sort_order))
+
+    // 登録は済んでいるがドライブ保存だけ失敗している行は、この再実行を「保存のやり直し」として扱う。
+    // 明細の登録処理へは進ませない（登録済みIDのスキップで二重にはならないが、
+    // 登録内容には一切触らない操作だと呼び出し側にもコード上も明確にするため手前で分ける）。
+    if (upload.status === 'registered' && !upload.drive_file_id) {
+      const { year, month } = driveTargetMonth(items, upload.created_at)
+      const drive = await saveExpenseToDrive(id, year, month)
+      const result: ExpenseApproveResult = { id, status: 'registered', registered: 0, drive }
+      return Response.json(result)
+    }
+
+    // 登録済みの再実行は同じ経費をもう一度作ってしまう（＝クライアントへの二重請求）ので必ず止める。
+    if (upload.status === 'registered') {
+      return Response.json({ error: 'この経費ファイルはすでに登録済みです。' }, { status: 409 })
+    }
 
     // client_billed の明細だけを登録する。
     // company（自社経費）と excluded（対象外）を client_expenses に入れないのは、代表が使った経費は
@@ -87,7 +164,13 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
       .set({ status: 'registered', reviewed_at: new Date().toISOString() })
       .where(eq(expenseUploads.id, id))
 
-    return Response.json({ id, status: 'registered', registered })
+    // ドライブ保存は登録が済んでから。ここで失敗しても登録自体は成立させる
+    //（原本の控えが取れないことと、請求経費として登録したことは別の話のため）。
+    const { year, month } = driveTargetMonth(items, upload.created_at)
+    const drive = await saveExpenseToDrive(id, year, month)
+
+    const result: ExpenseApproveResult = { id, status: 'registered', registered, drive }
+    return Response.json(result)
   } catch (err) {
     return serverError(err)
   }

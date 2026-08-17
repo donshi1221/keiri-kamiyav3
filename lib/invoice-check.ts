@@ -6,7 +6,7 @@ import { checkAssignmentDelivery } from '@/lib/sheets'
 import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delivery-status'
 import { COMPANY_NAME } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
-import { uploadPdfToDrive } from '@/lib/google-drive'
+import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
 import {
   CAUTION_LABEL_SEPARATOR,
@@ -591,12 +591,6 @@ async function applyDeliveryPayouts(
   return { applied, amount }
 }
 
-// ドライブ上のファイル名に使うと表示や検索が壊れる文字（フォルダ区切り等）を落とす。
-// 元のファイル名は外部からアップロードされたもので、何が入っているか保証がない。
-function sanitizeFileNamePart(value: string): string {
-  return value.replace(/[\\/:*?"<>|\r\n]/g, '_').trim()
-}
-
 // 「2026-07_中井美由紀_請求書.pdf」の形に揃える。保存先は月別サブフォルダだが、
 // 名前にも対象年月を残すのは、あとでフォルダの外へ移動されても何月分か分かるようにするため。
 // 委託者名を挟むのは「請求書.pdf」のような同名ファイルが重なっても誰の分か分かるようにするため。
@@ -618,7 +612,7 @@ async function saveInvoiceToDrive(
     .from(invoiceUploads)
     .where(eq(invoiceUploads.id, id))
   if (!file) return { error: 'PDF本体を取得できませんでした' }
-  return uploadPdfToDrive(driveFileName(year, month, contractorName, file.file_name), file.file_data, year, month)
+  return uploadFileToDrive(driveFileName(year, month, contractorName, file.file_name), file.file_data, year, month)
 }
 
 // 受け付けた請求書1件を自動照合し、結果を同じ行に書き戻す。

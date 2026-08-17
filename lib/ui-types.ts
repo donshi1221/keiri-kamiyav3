@@ -294,6 +294,16 @@ export interface ExpenseInboxResponse {
   items: ExpenseUploadItem[]
 }
 
+// 登録API（POST /api/expense-uploads/[id]/approve）の応答。
+// ドライブ保存に失敗しても登録自体は成立させるため、結果は成否ではなく drive に添えて返す
+//（画面は「登録は済んだが控えだけ残せなかった」を出し分けられる）。
+export interface ExpenseApproveResult {
+  id: string
+  status: 'registered'
+  registered: number
+  drive: { link: string; folderName: string } | { error: string } | { disabled: true }
+}
+
 // ─── 役員報酬・給与 ─────────────────────────────
 // 支給区分。列の型から導き、選択肢（lib/config の PAYROLL_KINDS）と1対1に保つ。
 export type PayrollKind = PayrollRecipient['kind']
