@@ -17,7 +17,14 @@ export function getLastDayOfMonth(year: number, month: number): number {
 // 「その月に発生した分を翌月に請求・精算する」という運用がこのアプリの各所にあり
 // （委託者への支払い・クライアントへの請求）、その月ずらしをここに集約する。
 export function nextMonthOf(year: number, month: number): { year: number; month: number } {
-  const d = new Date(year, month, 1)
+  return addMonthsOf(year, month, 1)
+}
+
+// 指定した月数だけずらした年月。「利用月・翌月・翌々月」のように複数の候補を作る場面では
+// nextMonthOf を重ね掛けすると意図が読み取りにくいため、ずらし幅を引数で受ける形をここに置く。
+// 繰り上がり・繰り下がりは nextMonthOf と同じく Date に委ねる（12月→翌年1月を自前で書かない）。
+export function addMonthsOf(year: number, month: number, offset: number): { year: number; month: number } {
+  const d = new Date(year, month - 1 + offset, 1)
   return { year: d.getFullYear(), month: d.getMonth() + 1 }
 }
 

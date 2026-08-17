@@ -212,6 +212,22 @@ export const expenseSubmitSchema = z.object({
   items: z.array(expenseItemAssignSchema).min(1, { message: '明細が1件もありません' }),
 })
 
+// 経理の登録時に、明細ごとの「請求月」を経理が選べるようにするための指定。
+// 利用月と請求月がずれる運用（月末の利用を翌々月に回す等）があり、翌月固定では直せなかったため。
+// items が無い呼び出し（ドライブ保存の再試行）も正当なので配列ごと任意にする。
+// 利用月との整合（利用月〜翌々月に収まっているか）は明細の利用日が要るため、ここではなくAPI側で見る。
+export const expenseApproveSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.uuid({ message: '明細の指定が不正です' }),
+        year: z.coerce.number().int().min(2000).max(2100),
+        month: z.coerce.number().int().min(1).max(12),
+      })
+    )
+    .optional(),
+})
+
 // ─── 役員報酬・給与 ─────────────────────────────
 // 控除額はユーザーが登録した値をそのまま使う（料率表は持たない）ので、検証は「0以上の整数」だけ。
 // pay_day は空欄＝未設定（既定日で扱う）なので null に寄せる。

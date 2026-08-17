@@ -14,7 +14,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
-import { TZ } from '@/lib/dates'
+import { TZ, addMonthsOf, nextMonthOf } from '@/lib/dates'
 import type {
   ExpenseUploadRow,
   ExpenseUploadItemRow,
@@ -93,6 +93,39 @@ function billedTotal(items: ExpenseUploadItemRow[]): number {
   return items.filter((item) => item.kind === 'client_billed').reduce((sum, item) => sum + item.amount, 0)
 }
 
+// 請求月の選択肢は「利用月・翌月・翌々月」の3択。基本は翌月に乗せる運用だが、
+// 締めに間に合わない利用分を翌々月へ回す・利用月にそのまま乗せる、といった調整が実際に起きるため、
+// 登録の直前に経理がその場で選べるようにする（範囲の正本はAPI側にも同じものがある）。
+const BILLING_MONTH_OFFSETS = [0, 1, 2]
+
+type BillingMonth = { year: number; month: number }
+
+// 請求月を選べる明細か。利用日が無い行は基準の月が決まらない（登録時にもエラーで弾かれる）ため出さない。
+function isBillableItem(item: ExpenseUploadItemRow): boolean {
+  return item.kind === 'client_billed' && !!item.item_date
+}
+
+function billingMonthOptions(itemDate: string): BillingMonth[] {
+  const year = Number(itemDate.slice(0, 4))
+  const month = Number(itemDate.slice(5, 7))
+  return BILLING_MONTH_OFFSETS.map((offset) => addMonthsOf(year, month, offset))
+}
+
+// 未選択の行は現行ルール（翌月）のまま登録される。既定を明示しておくことで、
+// 画面に出ている月とサーバーが使う月が必ず一致する。
+function defaultBillingMonth(itemDate: string): BillingMonth {
+  return nextMonthOf(Number(itemDate.slice(0, 4)), Number(itemDate.slice(5, 7)))
+}
+
+function billingMonthLabel(m: BillingMonth): string {
+  return `${m.year}年${m.month}月分`
+}
+
+// select の value は文字列しか持てないため、年月を1つのキーに畳んで往復させる。
+function billingMonthKey(m: BillingMonth): string {
+  return `${m.year}-${m.month}`
+}
+
 async function readErrorMessage(res: Response, fallback: string) {
   const data = (await res.json().catch(() => null)) as { error?: string } | null
   return typeof data?.error === 'string' ? data.error : fallback
@@ -112,6 +145,55 @@ export default function ExpenseCheckClient() {
   // 登録は client_expenses を作る取り消せない操作、却下も状態を変える操作なので、
   // 一覧のボタンを押しただけでは実行せず、確認を挟む。
   const [confirmTarget, setConfirmTarget] = useState<{ row: ExpenseUploadRow; action: 'approve' | 'reject' } | null>(null)
+  // 明細ID => 経理が選んだ請求月。選んでいない行はここに入らず、既定（翌月）で登録される。
+  // 受付をまたいで持てるよう受付単位ではなく明細IDで持つ（IDは受付をまたいで一意）。
+  const [billingMonths, setBillingMonths] = useState<Record<string, BillingMonth>>({})
+
+  function resolveBillingMonth(item: ExpenseUploadItemRow): BillingMonth {
+    return billingMonths[item.id] ?? defaultBillingMonth(item.item_date!)
+  }
+
+  // 表とカードで同じプルダウンを出すため、見た目と挙動をここに1つだけ持つ。
+  function renderBillingMonthSelect(item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <select
+        aria-label="請求月"
+        value={billingMonthKey(resolveBillingMonth(item))}
+        disabled={disabled}
+        onChange={(e) => {
+          const [year, month] = e.target.value.split('-').map(Number)
+          setBillingMonths((prev) => ({ ...prev, [item.id]: { year, month } }))
+        }}
+        className="min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
+      >
+        {billingMonthOptions(item.item_date!).map((option) => (
+          <option key={billingMonthKey(option)} value={billingMonthKey(option)}>
+            {billingMonthLabel(option)}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  // 確認ダイアログ用の一文。どの月の請求に乗るかは登録後に画面から直せないため、押す前に必ず見せる。
+  // 全明細が同じ月なら1つの月として、分かれるときは月ごとの件数を並べる。
+  function billingMonthSummary(row: ExpenseUploadRow): string {
+    const targets = row.items.filter(isBillableItem)
+    if (targets.length === 0) return ''
+    const groups = new Map<string, { month: BillingMonth; count: number }>()
+    for (const item of targets) {
+      const month = resolveBillingMonth(item)
+      const key = billingMonthKey(month)
+      const found = groups.get(key)
+      if (found) found.count += 1
+      else groups.set(key, { month, count: 1 })
+    }
+    const entries = [...groups.values()].sort(
+      (a, b) => a.month.year * 12 + a.month.month - (b.month.year * 12 + b.month.month)
+    )
+    if (entries.length === 1) return `${billingMonthLabel(entries[0].month)}として登録します。`
+    return `請求月は${entries.map((e) => `${billingMonthLabel(e.month)}が${e.count}件`).join('、')}に分かれます。`
+  }
 
   const load = useCallback(async () => {
     try {
@@ -169,12 +251,24 @@ export default function ExpenseCheckClient() {
     }
   }
 
-  async function review(id: string, action: 'approve' | 'reject') {
+  async function review(row: ExpenseUploadRow, action: 'approve' | 'reject') {
+    const id = row.id
     setBusyId(id)
     setError(null)
     setNotice(null)
     try {
-      const res = await fetch(`/api/expense-uploads/${id}/${action}`, { method: 'POST' })
+      // 却下は何も登録しないので請求月は送らない（送っても意味が無く、APIの検証を通す理由も無い）。
+      const init: RequestInit =
+        action === 'approve'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                items: row.items.filter(isBillableItem).map((item) => ({ id: item.id, ...resolveBillingMonth(item) })),
+              }),
+            }
+          : { method: 'POST' }
+      const res = await fetch(`/api/expense-uploads/${id}/${action}`, init)
       if (!res.ok) {
         setError(await readErrorMessage(res, action === 'approve' ? '登録に失敗しました。' : '却下に失敗しました。'))
         return
@@ -283,6 +377,9 @@ export default function ExpenseCheckClient() {
         const extracting = extractingId === row.id
         // 再読み取り中も却下を押せてしまうと、消える予定の明細に対して判断を下すことになるため一緒に止める。
         const busy = busyId === row.id || extracting
+        // 請求月を選べるのは、これから経理が登録する受付（送信済み）に限る。
+        // 登録済み・却下の受付で選択肢を出しても、押した結果が変わらず誤解を招くだけのため。
+        const showBillingMonth = row.status === 'submitted' && row.items.some(isBillableItem)
         return (
           <div key={row.id} className="rounded-lg border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
@@ -323,7 +420,8 @@ export default function ExpenseCheckClient() {
 
             {/* 明細テーブル（PC・タブレット） */}
             <div className={cn('hidden overflow-x-auto', row.items.length > 0 && 'md:block')}>
-              <table className="w-full min-w-[48rem] text-sm">
+              {/* 請求月の列が増えるぶんだけ最小幅も広げる。狭いままだと他の列が潰れて読めなくなる。 */}
+              <table className={cn('w-full text-sm', showBillingMonth ? 'min-w-[57rem]' : 'min-w-[48rem]')}>
                 <thead className="border-b bg-secondary">
                   <tr>
                     <th className="w-[5rem] px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">利用日</th>
@@ -332,6 +430,9 @@ export default function ExpenseCheckClient() {
                     <th className="w-[7rem] px-3 py-2 text-right font-medium whitespace-nowrap text-muted-foreground">金額</th>
                     <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">区分</th>
                     <th className="w-[10rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">クライアント</th>
+                    {showBillingMonth && (
+                      <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">請求月</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -351,6 +452,17 @@ export default function ExpenseCheckClient() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-foreground">{item.client_name ?? '—'}</td>
+                      {/* 請求に乗らない行（自社経費・対象外）は請求月そのものが無いので空欄にする。
+                          登録済みの行は月が確定しているため選び直させない。 */}
+                      {showBillingMonth && (
+                        <td className="px-3 py-2">
+                          {isBillableItem(item) ? (
+                            renderBillingMonthSelect(item, busy || !!item.registered_client_expense_id)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -386,6 +498,14 @@ export default function ExpenseCheckClient() {
                       <div className="flex justify-between gap-3">
                         <span className="shrink-0 text-muted-foreground">内容</span>
                         <span className="text-right text-foreground">{item.description}</span>
+                      </div>
+                    )}
+                    {/* スマホでも同じ判断ができるよう、請求に乗る行にはプルダウンを出す。
+                        幅が狭いので値と同じ列には並べず、ラベルの下に全幅で置く。 */}
+                    {showBillingMonth && isBillableItem(item) && (
+                      <div className="space-y-1 pt-1">
+                        <span className="block text-muted-foreground">請求月</span>
+                        {renderBillingMonthSelect(item, busy || !!item.registered_client_expense_id)}
                       </div>
                     )}
                   </div>
@@ -504,7 +624,7 @@ export default function ExpenseCheckClient() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmTarget?.action === 'approve'
-                ? `「${confirmTarget.row.file_name}」のうち「クライアントに請求」の明細 ${formatExpenseAmount(billedTotal(confirmTarget.row.items))} を請求経費として登録します。登録後は取り消せません。`
+                ? `「${confirmTarget.row.file_name}」のうち「クライアントに請求」の明細 ${formatExpenseAmount(billedTotal(confirmTarget.row.items))} を請求経費として登録します。${billingMonthSummary(confirmTarget.row)}登録後は取り消せません。`
                 : `「${confirmTarget?.row.file_name}」を却下します。経費としては登録されず、記録だけが残ります。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -515,7 +635,7 @@ export default function ExpenseCheckClient() {
               onClick={() => {
                 const target = confirmTarget
                 setConfirmTarget(null)
-                if (target) review(target.row.id, target.action)
+                if (target) review(target.row, target.action)
               }}
             >
               {confirmTarget?.action === 'approve' ? '登録する' : '却下する'}

@@ -283,6 +283,15 @@ export interface ExpenseItemAssignment {
   client_id: string | null
 }
 
+// 経理が登録時に選んだ「その明細をどの月の請求に乗せるか」。検証の正本は
+// lib/validation の expenseApproveSchema で、これは画面側が同じ形を組み立てるための型。
+// 選べるのは利用月〜翌々月の3択（既定は翌月）で、範囲の判定はAPI側が行う。
+export interface ExpenseBillingMonth {
+  id: string
+  year: number
+  month: number
+}
+
 // 受付API（POST /api/expense-inbox）の応答。読み取った明細をそのまま返すのは、
 // 代表が同じ画面で続けて割り当てられるようにするため（IDが無いと送信できない）。
 // 読み取りに失敗しても受付自体は成功扱いなので、理由は extract_error に入って返る。

@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems, clientExpenses } from '@/lib/schema'
-import { nextMonthOf } from '@/lib/dates'
+import { addMonthsOf, nextMonthOf } from '@/lib/dates'
+import { expenseApproveSchema, parseBody } from '@/lib/validation'
 import { autoCheckExpenseTaskIfCleared } from '@/lib/expense-clear'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import type { ExpenseUploadItem } from '@/lib/schema'
@@ -14,7 +15,9 @@ import type { ExpenseApproveResult } from '@/lib/ui-types'
 export const maxDuration = 60
 
 // 経費ファイルの明細は原本1件で1か月分あり、月をまたぐこともある。保存先は
-// 「クライアントへ請求する月」で揃える（経理はドライブを請求に乗る月で整理しているため）。
+// 「決済（利用）した月」で揃える。請求月は明細ごとに経理が選べるようになり、1件の原本の中で
+// 複数の請求月に分かれうるため、請求月を保存先にすると原本の置き場所が決まらない。
+// 決済した月なら原本そのものの事実なので必ず1つに定まり、「いつ払ったか」から原本を探せる。
 // 請求に乗る行が無い受付でも原本は残すので、その場合は全明細から、利用日が1件も無ければ受付日時から決める。
 function driveTargetMonth(
   items: Pick<ExpenseUploadItem, 'kind' | 'item_date'>[],
@@ -22,12 +25,25 @@ function driveTargetMonth(
 ): { year: number; month: number } {
   const billed = items.filter((item) => item.kind === 'client_billed' && item.item_date)
   const dated = (billed.length > 0 ? billed : items).map((item) => item.item_date).filter((d): d is string => !!d)
-  // 1件の原本が複数月にまたがるときは最も早い月へ入れる。請求の起点になる月に原本があるほうが探しやすい。
+  // 1件の原本が複数月にまたがるときは最も早い月へ入れる。決済の起点になる月に原本があるほうが探しやすい。
   const earliest = dated.sort()[0]
-  const base = earliest
+  return earliest
     ? { year: Number(earliest.slice(0, 4)), month: Number(earliest.slice(5, 7)) }
     : { year: new Date(createdAt).getFullYear(), month: new Date(createdAt).getMonth() + 1 }
-  return nextMonthOf(base.year, base.month)
+}
+
+// 経理が明細ごとに選べる請求月は「利用月・翌月・翌々月」の3択。
+// 画面のプルダウンと同じ範囲をサーバー側でも持ち、改ざんされたリクエストで
+// 何年も先の月に請求経費が入る事故を防ぐ。
+const BILLING_MONTH_OFFSETS = [0, 1, 2]
+
+function isAllowedBillingMonth(itemDate: string, year: number, month: number): boolean {
+  const baseYear = Number(itemDate.slice(0, 4))
+  const baseMonth = Number(itemDate.slice(5, 7))
+  return BILLING_MONTH_OFFSETS.some((offset) => {
+    const allowed = addMonthsOf(baseYear, baseMonth, offset)
+    return allowed.year === year && allowed.month === month
+  })
 }
 
 // 「2026-08_経費_ICOCA利用履歴.pdf」の形に揃える。保存先は月別サブフォルダだが、
@@ -70,9 +86,16 @@ async function saveExpenseToDrive(id: string, year: number, month: number): Prom
 
 // 経理の最終判断（登録）。代表が割り当てた明細のうち、クライアントに請求する分だけを
 // client_expenses（自社が直接払い、クライアントへ請求する経費）へ登録し、原本をドライブへ保存する。
-export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-uploads/[id]/approve'>) {
+export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-uploads/[id]/approve'>) {
   try {
     const { id } = await ctx.params
+
+    // ボディは任意。ドライブ保存の再試行は body 無しで呼ばれるため、JSONとして読めなくても
+    // エラーにはせず「指定なし＝従来どおり翌月」として扱う。
+    const rawBody = await req.json().catch(() => undefined)
+    const parsed = parseBody(expenseApproveSchema, rawBody ?? {})
+    if (!parsed.ok) return Response.json({ error: parsed.message }, { status: 400 })
+    const requestedMonths = new Map(parsed.data.items?.map((item) => [item.id, item]) ?? [])
 
     const [upload] = await db
       .select({
@@ -124,17 +147,38 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
       )
     }
 
+    // 請求月の指定は登録の前にまとめて検証する。1行でも不正なら何も登録しない
+    // （一部だけ入ると「どこまで登録したか」が画面から分からなくなるのは未入力チェックと同じ理由）。
+    for (const [itemId, requested] of requestedMonths) {
+      const target = billed.find((item) => item.id === itemId)
+      if (!target) {
+        return Response.json(
+          { error: '請求月を指定できるのは「クライアントに請求」の明細だけです。画面を再読み込みしてやり直してください。' },
+          { status: 400 }
+        )
+      }
+      if (!isAllowedBillingMonth(target.item_date!, requested.year, requested.month)) {
+        const line = target.sort_order + 1
+        return Response.json(
+          { error: `${line}行目の請求月は、利用月から翌々月までの範囲で指定してください。` },
+          { status: 400 }
+        )
+      }
+    }
+
     // neon-http はトランザクションを張れないため、途中で失敗しても再実行できる作りにする。
     // 既にIDが控えられている行は前回の実行で登録済みなので飛ばす（＝再実行しても二重にならない）。
     let registered = 0
     for (const item of billed) {
       if (item.registered_client_expense_id) continue
 
-      // year / month は「どの月の請求に乗せるか」。7月に使った交通費は8月の請求に乗る運用なので、
-      // 利用日の月そのものではなく翌月にする（委託者への支払いが翌月なのと同じ考え方）。
+      // year / month は「どの月の請求に乗せるか」。7月に使った交通費は8月の請求に乗るのが基本なので
+      // 既定は利用月の翌月だが、締めの都合でずれる月もあるため経理が画面で選んだ月を優先する。
       // expense_date には利用日をそのまま残す。いつ移動したのかは請求月とは別に追えるようにするため。
       const itemDate = item.item_date!
-      const { year, month } = nextMonthOf(Number(itemDate.slice(0, 4)), Number(itemDate.slice(5, 7)))
+      const requested = requestedMonths.get(item.id)
+      const { year, month } =
+        requested ?? nextMonthOf(Number(itemDate.slice(0, 4)), Number(itemDate.slice(5, 7)))
 
       // client_expenses には区間・内容の列が無いため、まとめて摘要（note）に残す。
       // 後から「何の経費か」を追えるようにするのが目的。
