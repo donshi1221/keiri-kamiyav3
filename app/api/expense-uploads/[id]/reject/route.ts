@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads } from '@/lib/schema'
+import { autoCheckExpenseTaskIfCleared } from '@/lib/expense-clear'
+import type { ExpenseRejectResult } from '@/lib/ui-types'
 
 // 経理の最終判断（却下）。経費としては登録せず、記録だけ残す。
 export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-uploads/[id]/reject'>) {
@@ -29,7 +31,16 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
       .set({ status: 'rejected', reviewed_at: new Date().toISOString() })
       .where(eq(expenseUploads.id, id))
 
-    return Response.json({ id, status: 'rejected' })
+    // 却下も「経理が片付けた」1件。自動チェックの失敗で却下そのものを失敗にはしない。
+    let autoChecked = false
+    try {
+      autoChecked = await autoCheckExpenseTaskIfCleared()
+    } catch {
+      autoChecked = false
+    }
+
+    const result: ExpenseRejectResult = { id, status: 'rejected', autoChecked }
+    return Response.json(result)
   } catch (err) {
     return serverError(err)
   }

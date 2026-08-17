@@ -20,6 +20,7 @@ import type {
   ExpenseUploadItemRow,
   ExpenseExtractOutcome,
   ExpenseApproveResult,
+  ExpenseRejectResult,
   GoogleDriveStatus,
 } from '@/lib/ui-types'
 import {
@@ -178,13 +179,19 @@ export default function ExpenseCheckClient() {
         setError(await readErrorMessage(res, action === 'approve' ? '登録に失敗しました。' : '却下に失敗しました。'))
         return
       }
+      const result = (await res.json().catch(() => null)) as
+        | ExpenseApproveResult
+        | ExpenseRejectResult
+        | null
       // ドライブ保存の失敗は登録の失敗ではない。黙って進むと控えが残っていないことに誰も気づかないため、
       // 「登録は済んでいる」と分かる文言で理由を出す（操作自体は成功しているのでボタンは再試行側に出る）。
-      if (action === 'approve') {
-        const result = (await res.json().catch(() => null)) as ExpenseApproveResult | null
-        if (result && 'error' in result.drive) {
-          setError(`登録は完了しましたが、原本をGoogleドライブへ保存できませんでした。${result.drive.error}（「保存を再試行」でやり直せます）`)
-        }
+      if (result && 'drive' in result && 'error' in result.drive) {
+        setError(`登録は完了しましたが、原本をGoogleドライブへ保存できませんでした。${result.drive.error}（「保存を再試行」でやり直せます）`)
+      }
+      // 自動チェックは画面に出ない場所（ダッシュボード）が変わる操作なので、必ず知らせる。
+      // ドライブ保存の失敗と同時に起きても、失敗はエラー枠・こちらは案内枠と別々に出るため文言は重ならない。
+      if (result?.autoChecked) {
+        setNotice('経費がすべて処理されたため、グローバルタスクの「社長経費確認」に自動でチェックを入れました。')
       }
       await load()
     } catch {

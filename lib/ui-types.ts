@@ -302,6 +302,15 @@ export interface ExpenseApproveResult {
   status: 'registered'
   registered: number
   drive: { link: string; folderName: string } | { error: string } | { disabled: true }
+  // この登録で未処理の経費が無くなり、当月の「社長経費確認」に自動でチェックを入れたか。
+  autoChecked: boolean
+}
+
+// 却下API（POST /api/expense-uploads/[id]/reject）の応答。
+export interface ExpenseRejectResult {
+  id: string
+  status: 'rejected'
+  autoChecked: boolean
 }
 
 // ─── 役員報酬・給与 ─────────────────────────────

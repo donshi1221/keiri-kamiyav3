@@ -4,6 +4,7 @@ import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems, clientExpenses } from '@/lib/schema'
 import { nextMonthOf } from '@/lib/dates'
+import { autoCheckExpenseTaskIfCleared } from '@/lib/expense-clear'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import type { ExpenseUploadItem } from '@/lib/schema'
 import type { ExpenseApproveResult } from '@/lib/ui-types'
@@ -96,7 +97,8 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
     if (upload.status === 'registered' && !upload.drive_file_id) {
       const { year, month } = driveTargetMonth(items, upload.created_at)
       const drive = await saveExpenseToDrive(id, year, month)
-      const result: ExpenseApproveResult = { id, status: 'registered', registered: 0, drive }
+      // 保存のやり直しでは登録状態が変わらないため、自動チェックの判定はしない。
+      const result: ExpenseApproveResult = { id, status: 'registered', registered: 0, drive, autoChecked: false }
       return Response.json(result)
     }
 
@@ -164,12 +166,22 @@ export async function POST(_req: NextRequest, ctx: RouteContext<'/api/expense-up
       .set({ status: 'registered', reviewed_at: new Date().toISOString() })
       .where(eq(expenseUploads.id, id))
 
+    // 自動チェックはドライブ保存より先に行う。保存は外部APIで失敗も遅延もありうるのに対し、
+    // 「未処理が無くなったか」は今の登録で確定しているため、保存の成否に巻き込ませない。
+    // 失敗しても登録は成立させたいので、結果を返すだけにとどめる。
+    let autoChecked = false
+    try {
+      autoChecked = await autoCheckExpenseTaskIfCleared()
+    } catch {
+      autoChecked = false
+    }
+
     // ドライブ保存は登録が済んでから。ここで失敗しても登録自体は成立させる
     //（原本の控えが取れないことと、請求経費として登録したことは別の話のため）。
     const { year, month } = driveTargetMonth(items, upload.created_at)
     const drive = await saveExpenseToDrive(id, year, month)
 
-    const result: ExpenseApproveResult = { id, status: 'registered', registered, drive }
+    const result: ExpenseApproveResult = { id, status: 'registered', registered, drive, autoChecked }
     return Response.json(result)
   } catch (err) {
     return serverError(err)
