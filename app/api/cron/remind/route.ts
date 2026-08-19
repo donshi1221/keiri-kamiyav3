@@ -39,8 +39,16 @@ async function sendSlackExpenseReminder(year: number, month: number, day: number
   // メンションは <@メンバーID> 形式でないと通知が飛ばない（@名前 の文字列では飾りにしかならない）。
   // 誰に付けるかは運用の話なのでコードに固定せず、環境変数（未設定ならメンション無し）にする。
   const mentionId = process.env.SLACK_EXPENSE_REMINDER_MENTION_ID
-  const mention = mentionId ? `<@${mentionId}> ` : ''
-  const text = `${mention}【経費提出のお願い】${month}月分の経費（レシート・交通費明細など）の提出をお願いします。毎月10日までにお願いします。\n提出はこちら: ${appUrl}/expense/${token}`
+  // メンションは独立した行にする。本文と繋げると通知プレビューで文頭が読めなくなるため。
+  const mention = mentionId ? `<@${mentionId}>\n` : ''
+  const text = [
+    `${mention}*【経費提出のお願い】*`,
+    '',
+    `${month}月分の経費（レシート・交通費明細など）の提出をお願いします。`,
+    '期日：毎月10日',
+    '',
+    `提出はこちら：${appUrl}/expense/${token}`,
+  ].join('\n')
 
   try {
     const res = await fetch(webhookUrl, {
