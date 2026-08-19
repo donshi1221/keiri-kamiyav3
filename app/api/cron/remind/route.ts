@@ -1,15 +1,60 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords } from '@/lib/schema'
-import { and, eq } from 'drizzle-orm'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords, expenseUploads } from '@/lib/schema'
+import { and, eq, gte, lt } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
-import { nowJST, getLastDayOfMonth, isInReminderWindow } from '@/lib/dates'
+import { nowJST, getLastDayOfMonth, isInReminderWindow, TZ } from '@/lib/dates'
+import { fromZonedTime } from 'date-fns-tz'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
 import { computeCarryOver } from '@/lib/carry-over'
 import { recordCronSuccess, checkCronStale } from '@/lib/cron-monitor'
 import { payrollAmountsOfRecord, payrollTransferAmount } from '@/lib/payroll'
+import { peekExpenseUploadToken } from '@/lib/expense-token'
 import { CRON_STALE_ALERT_DAYS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
+
+// 代表への「経費未提出」Slack催促。メール本文の要否（送るべき中身の有無）とは無関係の別チャンネルなので、
+// メール側の early return（201行目付近）より前で判定する。失敗しても cron 全体は落とさない。
+async function sendSlackExpenseReminder(year: number, month: number, day: number): Promise<'sent' | 'skipped'> {
+  const webhookUrl = process.env.SLACK_EXPENSE_REMINDER_WEBHOOK_URL
+  if (!webhookUrl) return 'skipped'
+  if (!isInReminderWindow(day, 10)) return 'skipped'
+
+  // 当月（JST）に提出済みの経費が1件でもあれば、もう催促する必要がない。
+  // submitted_at は timestamptz なので、JST の月初〜翌月初をUTCへ変換した範囲で絞り込む。
+  const monthStartUtc = fromZonedTime(new Date(year, month - 1, 1), TZ)
+  const monthEndUtc = fromZonedTime(new Date(year, month, 1), TZ)
+  const [submitted] = await db
+    .select({ id: expenseUploads.id })
+    .from(expenseUploads)
+    .where(and(gte(expenseUploads.submitted_at, monthStartUtc.toISOString()), lt(expenseUploads.submitted_at, monthEndUtc.toISOString())))
+    .limit(1)
+  if (submitted) return 'skipped'
+
+  // 受付URLを配る前に催促しても意味が無いため、未発行なら送らない（トークンはここでは発行しない）。
+  const token = await peekExpenseUploadToken()
+  if (!token) return 'skipped'
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  // メンションは <@メンバーID> 形式でないと通知が飛ばない（@名前 の文字列では飾りにしかならない）。
+  // 誰に付けるかは運用の話なのでコードに固定せず、環境変数（未設定ならメンション無し）にする。
+  const mentionId = process.env.SLACK_EXPENSE_REMINDER_MENTION_ID
+  const mention = mentionId ? `<@${mentionId}> ` : ''
+  const text = `${mention}【経費提出のお願い】${month}月分の経費（レシート・交通費明細など）の提出をお願いします。毎月10日までにお願いします。\n提出はこちら: ${appUrl}/expense/${token}`
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    // WebhookのURL失効などはHTTPエラーで返る。通信例外と同じく、催促失敗でcronは落とさずログだけ残す。
+    if (!res.ok) console.error('[remind] slack expense reminder failed:', res.status, await res.text())
+  } catch (err) {
+    console.error('[remind] slack expense reminder failed:', err)
+  }
+  return 'sent'
+}
 
 // 関数のタイムアウト上限（秒）。委託者・クライアントを全件走査しメール送信まで行うため、
 // 既定の短いタイムアウトだと途中で切れうる。Vercel の仕様上リテラルで指定する必要がある。
@@ -197,10 +242,13 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // メール本文の要否とは無関係に、Slack催促は毎日判定する（早期returnより前に置く）。
+    const slackExpenseReminder = await sendSlackExpenseReminder(year, month, day)
+
     // 送るべき中身（タスク or 監視アラート）が何も無ければ送信しない。
     if (sections.length === 0 && !alertMsg) {
       await recordCronSuccess('remind')
-      return Response.json({ ok: true, skipped: true, reason: 'no pending tasks in reminder window' })
+      return Response.json({ ok: true, skipped: true, reason: 'no pending tasks in reminder window', slackExpenseReminder })
     }
 
     const totalCount = sections.reduce((acc, s) => acc + (s.match(/□/g)?.length ?? 0), 0)
@@ -229,7 +277,7 @@ export async function GET(req: NextRequest) {
       return Response.json({ error: 'リマインドメールの送信に失敗しました。' }, { status: 500 })
     }
     await recordCronSuccess('remind')
-    return Response.json({ ok: true, sent: true, totalCount })
+    return Response.json({ ok: true, sent: true, totalCount, slackExpenseReminder })
   } catch (err) {
     return serverError(err)
   }

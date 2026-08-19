@@ -29,6 +29,13 @@ async function readToken(): Promise<string | null> {
   return row?.value ?? null
 }
 
+// 現在のトークンを読むだけで、未発行でも発行しない。
+// cronからの催促（Slackリマインド）はURLを配った後にだけ意味があるため、
+// 未発行の状態で催促のためだけにトークンを確定させてしまわないようにする。
+export async function peekExpenseUploadToken(): Promise<string | null> {
+  return readToken()
+}
+
 // 現在のトークンを返す。未発行なら発行して保存してから返す。
 export async function getOrCreateExpenseUploadToken(): Promise<string> {
   const existing = await readToken()
