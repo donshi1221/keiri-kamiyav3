@@ -760,14 +760,31 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
           </ul>
         )}
 
-        <div className="flex items-center justify-between rounded border bg-secondary px-3 py-2 text-sm">
-          <span className="text-muted-foreground">立替合計</span>
-          <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
+        {/* 合計の帯の左側は、フォームを開いていないときは空く。項目は経路や店名で一番長くなる欄なので、
+            この空きに置いて残り幅を全部渡す（合計は右端の小さな表示で足りるため）。 */}
+        <div className="flex items-end gap-3 rounded border bg-secondary px-3 py-2">
+          {formOpen && (
+            <div className="min-w-0 flex-1">
+              <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-description">項目</label>
+              <input
+                id="reimbursement-description"
+                type="text"
+                value={form.description}
+                onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="例: 新大阪→東京 特急券"
+                className="w-full rounded border border-border bg-card px-2 py-2 text-sm"
+              />
+            </div>
+          )}
+          <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap py-2">
+            <span className="text-xs text-muted-foreground">立替合計</span>
+            <span className="text-sm font-semibold text-foreground">¥{total.toLocaleString()}</span>
+          </div>
         </div>
 
         {formOpen ? (
           <div className="space-y-2 rounded border p-3">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[9rem_1fr_8rem]">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_8rem]">
               <div>
                 <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-date">利用日（任意）</label>
                 <input
@@ -775,17 +792,6 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
                   type="date"
                   value={form.item_date}
                   onChange={(e) => setForm((prev) => ({ ...prev, item_date: e.target.value }))}
-                  className="w-full rounded border border-border px-2 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-description">項目</label>
-                <input
-                  id="reimbursement-description"
-                  type="text"
-                  value={form.description}
-                  onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-                  placeholder="例: 新大阪→東京 特急券"
                   className="w-full rounded border border-border px-2 py-2 text-sm"
                 />
               </div>
