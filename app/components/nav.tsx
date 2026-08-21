@@ -43,15 +43,17 @@ export default function Nav() {
   }
 
   // 未ログイン時はどのリンクを押してもログイン画面へ戻されるだけなので、ナビ自体を出さない。
-  // 請求書・経費のアップロードは社外の人や代表が開く公開画面なので、社内向けの導線を見せない。
-  // 「/invoice」「/expense」だけを対象にするのは、前方一致にすると社内画面（/invoice-check・
-  // /expense-check）まで巻き込んでナビが消えてしまうため。
+  // 請求書・経費・振込依頼のアップロードは社外の人や代表が開く公開画面なので、社内向けの導線を見せない。
+  // 「/invoice」「/expense」「/payment」だけを対象にするのは、前方一致にすると社内画面（/invoice-check・
+  // /expense-check・/payment-check）まで巻き込んでナビが消えてしまうため。
   if (
     pathname === '/login' ||
     pathname === '/invoice' ||
     pathname.startsWith('/invoice/') ||
     pathname === '/expense' ||
-    pathname.startsWith('/expense/')
+    pathname.startsWith('/expense/') ||
+    pathname === '/payment' ||
+    pathname.startsWith('/payment/')
   ) {
     return null
   }

@@ -144,6 +144,13 @@ export default function MasterPage() {
         pathPrefix="/expense"
         onError={showError}
       />
+      <UploadUrlSection
+        title="振込依頼の受付URL"
+        description="代表にこのURLを渡すと、ログインなしで振込してほしい請求書を送ってもらえます。"
+        endpoint="/api/master/payment-token"
+        pathPrefix="/payment"
+        onError={showError}
+      />
       {/* ドライブ連携も受付URLと同じく請求書まわりの全体設定なので、続けて並べる。 */}
       <GoogleDriveSection onError={showError} />
     </div>
