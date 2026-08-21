@@ -126,6 +126,12 @@ function billingMonthKey(m: BillingMonth): string {
   return `${m.year}-${m.month}`
 }
 
+// 立替精算（代表へ返すお金）に乗せられる明細か。「対象外」はどこにも計上しない区分なので、
+// 返金の対象にもならない。クライアント請求分・自社経費分はどちらも代表が立て替えていれば返す。
+function isReimbursableItem(item: ExpenseUploadItemRow): boolean {
+  return item.kind !== null && item.kind !== 'excluded'
+}
+
 async function readErrorMessage(res: Response, fallback: string) {
   const data = (await res.json().catch(() => null)) as { error?: string } | null
   return typeof data?.error === 'string' ? data.error : fallback
@@ -148,9 +154,33 @@ export default function ExpenseCheckClient() {
   // 明細ID => 経理が選んだ請求月。選んでいない行はここに入らず、既定（翌月）で登録される。
   // 受付をまたいで持てるよう受付単位ではなく明細IDで持つ（IDは受付をまたいで一意）。
   const [billingMonths, setBillingMonths] = useState<Record<string, BillingMonth>>({})
+  // 明細ID => 立替精算に含めるか。既定はON（代表が自分の財布から払っているのが通常のため）で、
+  // 会社カード決済など返金の要らない明細だけを経理が外す。ここに入っていない行はONとして扱う。
+  const [reimburse, setReimburse] = useState<Record<string, boolean>>({})
 
   function resolveBillingMonth(item: ExpenseUploadItemRow): BillingMonth {
     return billingMonths[item.id] ?? defaultBillingMonth(item.item_date!)
+  }
+
+  function isReimburseChecked(item: ExpenseUploadItemRow): boolean {
+    return reimburse[item.id] ?? true
+  }
+
+  // 表とカードで同じチェックボックスを出すため、見た目と挙動をここに1つだけ持つ。
+  function renderReimburseCheckbox(item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <label className="flex min-h-11 items-center gap-2 md:min-h-0">
+        <input
+          type="checkbox"
+          aria-label="立替精算に含める"
+          checked={isReimburseChecked(item)}
+          disabled={disabled}
+          onChange={(e) => setReimburse((prev) => ({ ...prev, [item.id]: e.target.checked }))}
+          className="size-4"
+        />
+        <span className="text-xs text-muted-foreground md:hidden">立替精算に含める</span>
+      </label>
+    )
   }
 
   // 表とカードで同じプルダウンを出すため、見た目と挙動をここに1つだけ持つ。
@@ -193,6 +223,14 @@ export default function ExpenseCheckClient() {
     )
     if (entries.length === 1) return `${billingMonthLabel(entries[0].month)}として登録します。`
     return `請求月は${entries.map((e) => `${billingMonthLabel(e.month)}が${e.count}件`).join('、')}に分かれます。`
+  }
+
+  // 立替精算は代表へ返す実際の振込額になるため、請求額と同じく押す前に必ず見せる。
+  function reimbursementSummary(row: ExpenseUploadRow): string {
+    const targets = row.items.filter((item) => isReimbursableItem(item) && isReimburseChecked(item))
+    if (targets.length === 0) return '立替精算に含める明細はありません。'
+    const total = targets.reduce((sum, item) => sum + item.amount, 0)
+    return `うち ${formatExpenseAmount(total)}（${targets.length}件）を代表への立替精算として、利用月の翌月の役員報酬に上乗せします。`
   }
 
   const load = useCallback(async () => {
@@ -265,6 +303,7 @@ export default function ExpenseCheckClient() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 items: row.items.filter(isBillableItem).map((item) => ({ id: item.id, ...resolveBillingMonth(item) })),
+                reimburseItemIds: row.items.filter((item) => isReimbursableItem(item) && isReimburseChecked(item)).map((item) => item.id),
               }),
             }
           : { method: 'POST' }
@@ -277,16 +316,31 @@ export default function ExpenseCheckClient() {
         | ExpenseApproveResult
         | ExpenseRejectResult
         | null
+      // 「登録は成立したが付随処理だけ失敗した」種類の警告は同時に起こりうる。
+      // setError を個別に呼ぶと後から来た方だけが残って片方が消えるため、まとめて1つの枠に出す。
+      const warnings: string[] = []
       // ドライブ保存の失敗は登録の失敗ではない。黙って進むと控えが残っていないことに誰も気づかないため、
       // 「登録は済んでいる」と分かる文言で理由を出す（操作自体は成功しているのでボタンは再試行側に出る）。
       if (result && 'drive' in result && 'error' in result.drive) {
-        setError(`登録は完了しましたが、原本をGoogleドライブへ保存できませんでした。${result.drive.error}（「保存を再試行」でやり直せます）`)
+        warnings.push(`登録は完了しましたが、原本をGoogleドライブへ保存できませんでした。${result.drive.error}（「保存を再試行」でやり直せます）`)
       }
+      // 立替精算を作れなかったときは、経費の登録自体は成立している一方で「代表への返金だけが
+      // 手当てされていない」状態になる。黙って進むと振込漏れになるため、理由と対処先を必ず出す。
+      if (result && 'reimbursement' in result && 'skipped' in result.reimbursement) {
+        warnings.push(`${result.reimbursement.skipped}マスタで役員を1名だけ有効にしたうえで、ダッシュボードの「立替明細」から手入力してください。`)
+      }
+      if (warnings.length > 0) setError(warnings.join('\n'))
       // 自動チェックは画面に出ない場所（ダッシュボード）が変わる操作なので、必ず知らせる。
       // ドライブ保存の失敗と同時に起きても、失敗はエラー枠・こちらは案内枠と別々に出るため文言は重ならない。
-      if (result?.autoChecked) {
-        setNotice('経費がすべて処理されたため、グローバルタスクの「社長経費確認」に自動でチェックを入れました。')
+      // 立替精算はダッシュボード側に現れるため、ここで作ったことを伝えないと気づかれない。
+      const notices: string[] = []
+      if (result && 'reimbursement' in result && 'created' in result.reimbursement && result.reimbursement.created > 0) {
+        notices.push(`立替精算の明細を${result.reimbursement.created}件作成しました（利用月の翌月の役員報酬に上乗せされます）。`)
       }
+      if (result?.autoChecked) {
+        notices.push('経費がすべて処理されたため、グローバルタスクの「社長経費確認」に自動でチェックを入れました。')
+      }
+      if (notices.length > 0) setNotice(notices.join('\n'))
       await load()
     } catch {
       setError('通信に失敗しました。接続を確認して再度お試しください。')
@@ -329,6 +383,10 @@ export default function ExpenseCheckClient() {
           代表から届いた経費ファイルの明細です。「クライアントに請求」の行だけが、登録すると
           そのクライアントへの請求経費になります。自社経費・対象外の行は記録だけが残ります。
         </p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          「立替精算」にチェックが入った行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。
+          会社カードで払った分など、返金の要らない行はチェックを外してください。
+        </p>
       </div>
 
       <div className="flex items-center justify-between gap-3">
@@ -346,14 +404,15 @@ export default function ExpenseCheckClient() {
         </Button>
       </div>
 
+      {/* 警告は複数を改行でつないで渡すため、改行をそのまま行として見せる（案内枠も同じ）。 */}
       {error && (
-        <div className="rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm text-danger">
+        <div className="rounded-lg border border-danger-subtle bg-danger-subtle px-4 py-3 text-sm whitespace-pre-line text-danger">
           {error}
         </div>
       )}
 
       {notice && (
-        <div className="rounded-lg border border-info-subtle bg-info-subtle px-4 py-3 text-sm leading-relaxed text-info">
+        <div className="rounded-lg border border-info-subtle bg-info-subtle px-4 py-3 text-sm leading-relaxed whitespace-pre-line text-info">
           {notice}
         </div>
       )}
@@ -380,6 +439,8 @@ export default function ExpenseCheckClient() {
         // 請求月を選べるのは、これから経理が登録する受付（送信済み）に限る。
         // 登録済み・却下の受付で選択肢を出しても、押した結果が変わらず誤解を招くだけのため。
         const showBillingMonth = row.status === 'submitted' && row.items.some(isBillableItem)
+        // 立替精算の選択も、これから登録する受付（送信済み）のときだけ意味を持つ。
+        const showReimburse = row.status === 'submitted' && row.items.some(isReimbursableItem)
         return (
           <div key={row.id} className="rounded-lg border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
@@ -421,7 +482,13 @@ export default function ExpenseCheckClient() {
             {/* 明細テーブル（PC・タブレット） */}
             <div className={cn('hidden overflow-x-auto', row.items.length > 0 && 'md:block')}>
               {/* 請求月の列が増えるぶんだけ最小幅も広げる。狭いままだと他の列が潰れて読めなくなる。 */}
-              <table className={cn('w-full text-sm', showBillingMonth ? 'min-w-[57rem]' : 'min-w-[48rem]')}>
+              <table
+                className={cn(
+                  'w-full text-sm',
+                  showBillingMonth ? 'min-w-[57rem]' : 'min-w-[48rem]',
+                  showReimburse && 'min-w-[64rem]'
+                )}
+              >
                 <thead className="border-b bg-secondary">
                   <tr>
                     <th className="w-[5rem] px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">利用日</th>
@@ -432,6 +499,9 @@ export default function ExpenseCheckClient() {
                     <th className="w-[10rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">クライアント</th>
                     {showBillingMonth && (
                       <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">請求月</th>
+                    )}
+                    {showReimburse && (
+                      <th className="w-[7rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">立替精算</th>
                     )}
                   </tr>
                 </thead>
@@ -458,6 +528,16 @@ export default function ExpenseCheckClient() {
                         <td className="px-3 py-2">
                           {isBillableItem(item) ? (
                             renderBillingMonthSelect(item, busy || !!item.registered_client_expense_id)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      )}
+                      {/* 対象外の行は返金の対象にならないため、選択肢そのものを出さない。 */}
+                      {showReimburse && (
+                        <td className="px-3 py-2">
+                          {isReimbursableItem(item) ? (
+                            renderReimburseCheckbox(item, busy)
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
@@ -507,6 +587,9 @@ export default function ExpenseCheckClient() {
                         <span className="block text-muted-foreground">請求月</span>
                         {renderBillingMonthSelect(item, busy || !!item.registered_client_expense_id)}
                       </div>
+                    )}
+                    {showReimburse && isReimbursableItem(item) && (
+                      <div className="pt-1">{renderReimburseCheckbox(item, busy)}</div>
                     )}
                   </div>
                 </div>
@@ -624,7 +707,7 @@ export default function ExpenseCheckClient() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmTarget?.action === 'approve'
-                ? `「${confirmTarget.row.file_name}」のうち「クライアントに請求」の明細 ${formatExpenseAmount(billedTotal(confirmTarget.row.items))} を請求経費として登録します。${billingMonthSummary(confirmTarget.row)}登録後は取り消せません。`
+                ? `「${confirmTarget.row.file_name}」のうち「クライアントに請求」の明細 ${formatExpenseAmount(billedTotal(confirmTarget.row.items))} を請求経費として登録します。${billingMonthSummary(confirmTarget.row)}${reimbursementSummary(confirmTarget.row)}登録後は取り消せません。`
                 : `「${confirmTarget?.row.file_name}」を却下します。経費としては登録されず、記録だけが残ります。`}
             </AlertDialogDescription>
           </AlertDialogHeader>

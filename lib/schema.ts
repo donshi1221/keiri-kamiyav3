@@ -363,6 +363,44 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
+// 代表から届く「振込してほしい請求書」の受け皿。
+// 経費（expense_uploads）と違い明細を1行ずつ扱う必要がなく、経理が知りたいのは
+// 「どこへ・いくら・いつまでに振り込むか」の3点だけなので、子テーブルを持たず1行に収める。
+// file_type を残すのはPDFと画像の両方を受けるから。原本を返すときのContent-Typeに使う。
+export const paymentRequests = pgTable('payment_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  file_name: text('file_name').notNull(),
+  file_data: text('file_data').notNull(),
+  file_type: text('file_type').notNull(),
+  // 代表が任意で添えるメモ（用途・急ぎかどうかなど）。書かずに送ることも多いので任意。
+  note: text('note'),
+  // 振込の進み具合。
+  //   pending  … 受付済み（経理の確認待ち）
+  //   reserved … 振込予約済み（銀行に予約を入れた）
+  //   paid     … 振込済み
+  //   rejected … 却下（振込不要と判断）
+  // enum ではなく text にしているのは、運用に合わせて区分を足すときにDBの型変更を伴わせないため
+  // （expense_uploads.status と同じ流儀）。
+  status: text('status').notNull().default('pending'),
+  // AI読み取りの結果。読めなかった項目は個別に null になる（1項目でも読めれば残りは活かす）。
+  extracted_payee: text('extracted_payee'), //     振込先（口座名義・会社名）
+  extracted_amount: integer('extracted_amount'), // 振込額（円）
+  extracted_due_date: date('extracted_due_date', { mode: 'string' }), // 支払期日（YYYY-MM-DD）
+  // 読み取り失敗の理由（人間向け）。成功時は null に戻す＝再読み取りの成否がそのまま残る。
+  extract_error: text('extract_error'),
+  extracted_at: timestamp('extracted_at', { withTimezone: true, mode: 'string' }),
+  // 状態が変わった時刻。チェックを外して前の状態へ戻したときは対応する時刻も null に戻すため、
+  // 「今どの段階か」だけでなく「いつその段階になったか」が常に status と一致する。
+  reserved_at: timestamp('reserved_at', { withTimezone: true, mode: 'string' }),
+  paid_at: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
+  rejected_at: timestamp('rejected_at', { withTimezone: true, mode: 'string' }),
+  // 受付時にGoogleドライブへ保存した原本の控え。drive_file_id が入っていること自体が
+  // 「保存済み」の印になり、null のままなら保存だけやり直せる（経費・請求書側と同じ設計）。
+  drive_file_id: text('drive_file_id'),
+  drive_link: text('drive_link'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
 // 役員報酬・給与の支給対象者（役員1名＋従業員1名）。
 // 保険料率表・源泉徴収税額表はアプリに持たず、控除額はここに登録された値をそのまま使う
 // （料率は毎年変わるうえ、等級の判定まで抱えると保守しきれないため。改定時は人がこの値を直す）。
@@ -402,16 +440,35 @@ export const monthlyPayrollRecords = pgTable('monthly_payroll_records', {
   employment_insurance_snapshot: integer('employment_insurance_snapshot').notNull().default(0),
   income_tax_snapshot: integer('income_tax_snapshot').notNull().default(0),
   resident_tax_snapshot: integer('resident_tax_snapshot').notNull().default(0),
-  // 立替経費の実費精算（円）。給与と一緒に振り込むが、性質はまったく別物。
-  // 立替の払い戻しは「本人が先に払ったお金を返すだけ」で所得ではないため非課税で、
-  // 社会保険料・源泉所得税・住民税のどの計算対象にも入らない。
-  // そのため控除の計算（lib/payroll の payrollNet）には一切通さず、
-  // 手取りが確定したあとに振込額へ足すだけにしている
-  // （snapshot 側の額面に混ぜると、翌月以降の源泉税まで狂ってしまうため）。
-  expense_reimbursement: integer('expense_reimbursement').notNull().default(0),
   paid_at: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.recipient_id)])
+
+// 立替経費の実費精算の明細（1件＝1つの立替）。給与と一緒に振り込むが、性質はまったく別物。
+// 立替の払い戻しは「本人が先に払ったお金を返すだけ」で所得ではないため非課税で、
+// 社会保険料・源泉所得税・住民税のどの計算対象にも入らない。そのため控除の計算
+// （lib/payroll の payrollNet）には一切通さず、手取りが確定したあとに振込額へ足すだけにしている
+// （snapshot 側の額面に混ぜると、翌月以降の源泉税まで狂ってしまうため）。
+//
+// 月次レコード（monthly_payroll_records）ではなく (recipient_id, year, month) にぶら下げるのは、
+// 「利用月の翌月に精算する」運用があり、その月の月次レコードがまだ生成されていない時点でも
+// 明細を積めるようにするため。月次レコード側の合計列は廃止し、この明細の合計だけを正本にする
+// （合計と明細の二重管理は、片方だけ直したときに画面ごとに金額が食い違う事故になる）。
+export const payrollReimbursementItems = pgTable('payroll_reimbursement_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recipient_id: uuid('recipient_id').notNull().references(() => payrollRecipients.id),
+  // どの月の給与に乗せるか。item_date（実際に立て替えた日）とは別に持つ。
+  year: integer('year').notNull(),
+  month: integer('month').notNull(),
+  item_date: date('item_date', { mode: 'string' }),
+  description: text('description').notNull(),
+  amount: integer('amount').notNull(),
+  // 経費チェックの明細から自動生成した行の出どころ。一意制約を付けているのは、
+  // 同じ経費明細から二重に立替精算が作られる（＝本人へ二重払い）のを DB 側で止めるため。
+  // 手入力の行は出どころが無いので null（Postgres の unique は null 同士を重複と見なさない）。
+  expense_upload_item_id: uuid('expense_upload_item_id').unique(),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 
@@ -497,11 +554,19 @@ export const expenseUploadItemsRelations = relations(expenseUploadItems, ({ one 
 
 export const payrollRecipientsRelations = relations(payrollRecipients, ({ many }) => ({
   monthly_payroll_records: many(monthlyPayrollRecords),
+  reimbursement_items: many(payrollReimbursementItems),
 }))
 
 export const monthlyPayrollRecordsRelations = relations(monthlyPayrollRecords, ({ one }) => ({
   payroll_recipients: one(payrollRecipients, {
     fields: [monthlyPayrollRecords.recipient_id],
+    references: [payrollRecipients.id],
+  }),
+}))
+
+export const payrollReimbursementItemsRelations = relations(payrollReimbursementItems, ({ one }) => ({
+  payroll_recipients: one(payrollRecipients, {
+    fields: [payrollReimbursementItems.recipient_id],
     references: [payrollRecipients.id],
   }),
 }))
@@ -538,6 +603,8 @@ export type AppSetting = typeof appSettings.$inferSelect
 export type InvoiceUpload = typeof invoiceUploads.$inferSelect
 export type ExpenseUpload = typeof expenseUploads.$inferSelect
 export type ExpenseUploadItem = typeof expenseUploadItems.$inferSelect
+export type PaymentRequest = typeof paymentRequests.$inferSelect
 export type GoogleDriveToken = typeof googleDriveTokens.$inferSelect
 export type PayrollRecipient = typeof payrollRecipients.$inferSelect
 export type MonthlyPayrollRecord = typeof monthlyPayrollRecords.$inferSelect
+export type PayrollReimbursementItem = typeof payrollReimbursementItems.$inferSelect

@@ -1,4 +1,4 @@
-import type { MonthlyPayrollRecord, PayrollRecipient } from './schema'
+import type { MonthlyPayrollRecord, PayrollRecipient, PayrollReimbursementItem } from './schema'
 import type { PayrollAmounts, PayrollKind } from './ui-types'
 
 // 役員報酬・給与の金額計算を1か所に集める。
@@ -57,6 +57,24 @@ export function payrollNet(a: PayrollAmounts): number {
 // 画面・明細・リマインドが同じ足し算を各所に書くと片方だけ足し忘れるため、この1本に寄せる。
 export function payrollTransferAmount(a: PayrollAmounts, expenseReimbursement: number): number {
   return payrollNet(a) + expenseReimbursement
+}
+
+// 立替経費の合計。合計値の列は持たず、毎回この明細の足し算で出す
+// （合計と明細を別々に持つと、片方だけ直したときに画面ごとに金額が食い違うため）。
+export function payrollReimbursementTotal(items: Pick<PayrollReimbursementItem, 'amount'>[]): number {
+  return items.reduce((sum, item) => sum + item.amount, 0)
+}
+
+// 明細を (recipient_id) ごとに畳んだ合計表。画面・明細書・リマインドは人ごとの合計しか使わないため、
+// 取得側が毎回 filter を書かずに済むようにここで1度だけまとめる。
+export function payrollReimbursementTotalsByRecipient(
+  items: Pick<PayrollReimbursementItem, 'recipient_id' | 'amount'>[]
+): Record<string, number> {
+  const totals: Record<string, number> = {}
+  for (const item of items) {
+    totals[item.recipient_id] = (totals[item.recipient_id] ?? 0) + item.amount
+  }
+  return totals
 }
 
 export const PAYROLL_KIND_LABEL: Record<PayrollKind, string> = {

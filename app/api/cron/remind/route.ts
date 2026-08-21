@@ -1,7 +1,7 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords, expenseUploads } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords, payrollReimbursementItems, expenseUploads } from '@/lib/schema'
 import { and, eq, gte, lt } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow, TZ } from '@/lib/dates'
@@ -9,7 +9,7 @@ import { fromZonedTime } from 'date-fns-tz'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
 import { computeCarryOver } from '@/lib/carry-over'
 import { recordCronSuccess, checkCronStale } from '@/lib/cron-monitor'
-import { payrollAmountsOfRecord, payrollTransferAmount } from '@/lib/payroll'
+import { payrollAmountsOfRecord, payrollReimbursementTotalsByRecipient, payrollTransferAmount } from '@/lib/payroll'
 import { peekExpenseUploadToken } from '@/lib/expense-token'
 import { CRON_STALE_ALERT_DAYS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 
@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
     const remindDay25 = isInReminderWindow(day, 25)
     const remindLastDay = isInReminderWindow(day, lastDay)
 
-    const [records, clientRecords, globalTask, customTasks, payrollRecords] = await Promise.all([
+    const [records, clientRecords, globalTask, customTasks, payrollRecords, payrollReimbursements] = await Promise.all([
       db.query.monthlyRecords.findMany({
         where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
         columns: { invoice_received_at: true, payment_reserved_at: true, contractor_paid_at: true },
@@ -140,7 +140,17 @@ export async function GET(req: NextRequest) {
         where: and(eq(monthlyPayrollRecords.year, year), eq(monthlyPayrollRecords.month, month)),
         with: { payroll_recipients: { columns: { name: true, pay_day: true } } },
       }),
+      // 立替経費の精算。振込額は明細の合計を足した金額なので、リマインドでも必ず同じ足し算をする
+      //（メールの金額だけ立替を落とすと、振込作業がそのまま不足額で実行されてしまう）。
+      db
+        .select({
+          recipient_id: payrollReimbursementItems.recipient_id,
+          amount: payrollReimbursementItems.amount,
+        })
+        .from(payrollReimbursementItems)
+        .where(and(eq(payrollReimbursementItems.year, year), eq(payrollReimbursementItems.month, month))),
     ])
+    const reimbursementTotals = payrollReimbursementTotalsByRecipient(payrollReimbursements)
 
     // 監視アラート: 月次生成cronがしばらく成功していなければ、メール冒頭で知らせる。
     const alertMsg = await checkCronStale('generate-monthly', CRON_STALE_ALERT_DAYS, today)
@@ -226,7 +236,7 @@ export async function GET(req: NextRequest) {
       .filter(({ dueDay }) => isInReminderWindow(day, dueDay))
     if (unpaidPayroll.length > 0) {
       const lines = unpaidPayroll.map(({ p, dueDay }) =>
-        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollTransferAmount(payrollAmountsOfRecord(p), p.expense_reimbursement).toLocaleString()}）${overdueMark(day, dueDay)}`
+        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollTransferAmount(payrollAmountsOfRecord(p), reimbursementTotals[p.recipient_id] ?? 0).toLocaleString()}）${overdueMark(day, dueDay)}`
       )
       sections.push(`■ 役員報酬・給与 — 振込\n${lines.join('\n')}`)
     }

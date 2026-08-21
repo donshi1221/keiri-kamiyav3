@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EXPENSE_ITEM_KINDS, PAYROLL_KINDS } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS, PAYROLL_KINDS, PAYMENT_REQUEST_STATUSES } from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -226,6 +226,10 @@ export const expenseApproveSchema = z.object({
       })
     )
     .optional(),
+  // 代表が立て替えた分として、役員の立替精算に乗せる明細のID。
+  // 請求月（items）とは無関係に決まる（請求はクライアントへの話、精算は本人へ返す話で相手が違う）ため
+  // 別の配列で受ける。会社カード決済など返金が要らない明細は経理が外すので、指定が無い＝1件も乗せない。
+  reimburseItemIds: z.array(z.uuid({ message: '明細の指定が不正です' })).optional(),
 })
 
 // ─── 役員報酬・給与 ─────────────────────────────
@@ -264,8 +268,38 @@ export const payrollSnapshotPatchSchema = z.object({
   employment_insurance_snapshot: moneyInt.optional(),
   income_tax_snapshot: moneyInt.optional(),
   resident_tax_snapshot: moneyInt.optional(),
-  // 立替経費の実費精算。控除の計算には関わらず、手取りに足すだけの項目。
-  expense_reimbursement: moneyInt.optional(),
+})
+
+// 立替経費の精算明細。金額は0円を許さない（0円の立替は精算する意味が無く、
+// 打ち間違いで入った空行が振込額の内訳を汚すだけのため）。
+// year/month は「どの月の給与に乗せるか」で、item_date（立て替えた日）とは別に持つ。
+export const payrollReimbursementCreateSchema = z.object({
+  recipient_id: z.uuid({ message: '支給対象者の指定が不正です' }),
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+  item_date: z.preprocess(
+    (v) => (v === '' || v === undefined ? null : v),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: '利用日はYYYY-MM-DD形式で入力してください' }).nullable()
+  ).optional(),
+  description: z.string().trim().min(1, { message: '項目は必須です' }),
+  amount: z.coerce
+    .number()
+    .refine((n) => Number.isFinite(n), { message: '金額には数値を入力してください' })
+    .transform((n) => Math.round(n))
+    .refine((n) => n >= 1, { message: '金額は1円以上で入力してください' }),
+})
+
+// 編集は送られてきた項目だけを更新する。対象者・月は行を作り直す方が事故が少ないので変更させない。
+export const payrollReimbursementPatchSchema = payrollReimbursementCreateSchema
+  .partial()
+  .omit({ recipient_id: true, year: true, month: true })
+
+// 振込依頼の状態変更（PATCH /api/payment-requests/[id]）。
+// 状態は text 列だが、任意の文字列を入れられると画面のバッジも件数の集計も破綻するため、
+// 受け付ける値を選択肢（lib/config）に限る。時刻列（reserved_at 等）はサーバーが状態から導くので受け取らない
+//（クライアントに時刻を決めさせると、状態と時刻が食い違った行が作れてしまう）。
+export const paymentRequestPatchSchema = z.object({
+  status: z.enum(PAYMENT_REQUEST_STATUSES, { message: '状態の指定が不正です' }),
 })
 
 export const snapshotBackfillSchema = z.object({

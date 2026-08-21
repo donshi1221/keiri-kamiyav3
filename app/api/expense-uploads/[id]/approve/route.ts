@@ -1,8 +1,14 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { expenseUploads, expenseUploadItems, clientExpenses } from '@/lib/schema'
+import {
+  expenseUploads,
+  expenseUploadItems,
+  clientExpenses,
+  payrollRecipients,
+  payrollReimbursementItems,
+} from '@/lib/schema'
 import { addMonthsOf, nextMonthOf } from '@/lib/dates'
 import { expenseApproveSchema, parseBody } from '@/lib/validation'
 import { autoCheckExpenseTaskIfCleared } from '@/lib/expense-clear'
@@ -84,6 +90,68 @@ async function saveExpenseToDrive(id: string, year: number, month: number): Prom
   return saved
 }
 
+// 経費の明細を人が読める1行の文にする。client_expenses の摘要と立替精算の項目名は
+// どちらも「何の経費か」を後から追うためのものなので、同じ作り方を使い回す。
+function itemLabel(item: Pick<ExpenseUploadItem, 'from_place' | 'to_place' | 'description'>): string {
+  const route = [item.from_place, item.to_place].filter(Boolean).join('→')
+  return [route, item.description].filter(Boolean).join(' ')
+}
+
+// 代表が立て替えた分を、役員報酬に上乗せする実費返金として積む。
+// 乗せる月は利用月の翌月に固定する（クライアントへの請求月は経理が選べるが、本人への返金は
+// 「使った翌月の給与で返す」運用で固定されており、相手も目的も別物のため連動させない）。
+// 利用日が無い明細は基準の月が決まらないので、原本の保存先と同じ「決済した月」を基準にする。
+async function createReimbursements(
+  items: ExpenseUploadItem[],
+  targetIds: Set<string>,
+  fallbackMonth: { year: number; month: number }
+): Promise<ExpenseApproveResult['reimbursement']> {
+  const targets = items.filter((item) => targetIds.has(item.id) && item.kind !== 'excluded')
+  if (targets.length === 0) return { created: 0 }
+
+  // 誰に返すかは役員（＝代表）1人に定まることが前提。0人・2人以上は経理が決めるべき話で、
+  // システムが当てずっぽうで選ぶと本人以外へ振り込む事故になるため作らずに理由を返す。
+  const executives = await db
+    .select({ id: payrollRecipients.id })
+    .from(payrollRecipients)
+    .where(and(eq(payrollRecipients.active, true), eq(payrollRecipients.kind, 'executive')))
+  if (executives.length !== 1) {
+    return {
+      skipped:
+        executives.length === 0
+          ? '立替精算の対象となる役員がマスタに登録されていないため、立替明細は作成していません。'
+          : '立替精算の対象となる役員が複数登録されているため、対象を1人に決められず立替明細は作成していません。',
+    }
+  }
+  const recipientId = executives[0].id
+
+  let created = 0
+  for (const item of targets) {
+    const base = item.item_date
+      ? { year: Number(item.item_date.slice(0, 4)), month: Number(item.item_date.slice(5, 7)) }
+      : fallbackMonth
+    const { year, month } = nextMonthOf(base.year, base.month)
+
+    // 出どころ（expense_upload_item_id）の一意制約で二重取り込みを止める。同じ受付を登録し直しても
+    // 既にある行はここで無視され、本人への二重払いにはならない。
+    const inserted = await db
+      .insert(payrollReimbursementItems)
+      .values({
+        recipient_id: recipientId,
+        year,
+        month,
+        item_date: item.item_date,
+        description: itemLabel(item) || '立替経費',
+        amount: item.amount,
+        expense_upload_item_id: item.id,
+      })
+      .onConflictDoNothing({ target: payrollReimbursementItems.expense_upload_item_id })
+      .returning({ id: payrollReimbursementItems.id })
+    created += inserted.length
+  }
+  return { created }
+}
+
 // 経理の最終判断（登録）。代表が割り当てた明細のうち、クライアントに請求する分だけを
 // client_expenses（自社が直接払い、クライアントへ請求する経費）へ登録し、原本をドライブへ保存する。
 export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-uploads/[id]/approve'>) {
@@ -96,6 +164,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-upl
     const parsed = parseBody(expenseApproveSchema, rawBody ?? {})
     if (!parsed.ok) return Response.json({ error: parsed.message }, { status: 400 })
     const requestedMonths = new Map(parsed.data.items?.map((item) => [item.id, item]) ?? [])
+    const reimburseItemIds = new Set(parsed.data.reimburseItemIds ?? [])
 
     const [upload] = await db
       .select({
@@ -120,8 +189,15 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-upl
     if (upload.status === 'registered' && !upload.drive_file_id) {
       const { year, month } = driveTargetMonth(items, upload.created_at)
       const drive = await saveExpenseToDrive(id, year, month)
-      // 保存のやり直しでは登録状態が変わらないため、自動チェックの判定はしない。
-      const result: ExpenseApproveResult = { id, status: 'registered', registered: 0, drive, autoChecked: false }
+      // 保存のやり直しでは登録状態が変わらないため、自動チェック・立替精算の判定はしない。
+      const result: ExpenseApproveResult = {
+        id,
+        status: 'registered',
+        registered: 0,
+        drive,
+        autoChecked: false,
+        reimbursement: { created: 0 },
+      }
       return Response.json(result)
     }
 
@@ -205,6 +281,10 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-upl
       registered += 1
     }
 
+    // 立替精算はクライアントへの請求登録とは独立に決まる（自社経費でも代表が立て替えていれば返金は要る）。
+    // 原本の保存先と同じ「決済した月」を、利用日が無い明細の基準として渡す。
+    const reimbursement = await createReimbursements(items, reimburseItemIds, driveTargetMonth(items, upload.created_at))
+
     await db
       .update(expenseUploads)
       .set({ status: 'registered', reviewed_at: new Date().toISOString() })
@@ -225,7 +305,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-upl
     const { year, month } = driveTargetMonth(items, upload.created_at)
     const drive = await saveExpenseToDrive(id, year, month)
 
-    const result: ExpenseApproveResult = { id, status: 'registered', registered, drive, autoChecked }
+    const result: ExpenseApproveResult = { id, status: 'registered', registered, drive, autoChecked, reimbursement }
     return Response.json(result)
   } catch (err) {
     return serverError(err)

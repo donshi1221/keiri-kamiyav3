@@ -1,13 +1,14 @@
 import { notFound } from 'next/navigation'
 import { db } from '@/lib/db'
-import { monthlyPayrollRecords } from '@/lib/schema'
-import { eq } from 'drizzle-orm'
+import { monthlyPayrollRecords, payrollReimbursementItems } from '@/lib/schema'
+import { and, asc, eq } from 'drizzle-orm'
 import { getLastDayOfMonth } from '@/lib/dates'
 import { COMPANY_NAME, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import {
   PAYROLL_KIND_LABEL,
   payrollAmountsOfRecord,
   payrollDeductions,
+  payrollReimbursementTotal,
   payrollTransferAmount,
 } from '@/lib/payroll'
 import PrintButton from './print-button'
@@ -53,6 +54,20 @@ export default async function PayrollSlipPage({
   })
   if (!record) notFound()
 
+  // 立替は月次レコードではなく (対象者, 年, 月) にぶら下がるので、レコードとは別に読む。
+  const reimbursements = await db
+    .select()
+    .from(payrollReimbursementItems)
+    .where(
+      and(
+        eq(payrollReimbursementItems.recipient_id, record.recipient_id),
+        eq(payrollReimbursementItems.year, record.year),
+        eq(payrollReimbursementItems.month, record.month)
+      )
+    )
+    .orderBy(asc(payrollReimbursementItems.created_at))
+  const reimbursementTotal = payrollReimbursementTotal(reimbursements)
+
   const amounts = payrollAmountsOfRecord(record)
   const kind = record.payroll_recipients?.kind ?? 'employee'
   const isExecutive = kind === 'executive'
@@ -64,9 +79,9 @@ export default async function PayrollSlipPage({
     getLastDayOfMonth(record.year, record.month)
   )
 
-  const gross = amounts.gross + record.expense_reimbursement
+  const gross = amounts.gross + reimbursementTotal
   const deductions = payrollDeductions(amounts)
-  const transfer = payrollTransferAmount(amounts, record.expense_reimbursement)
+  const transfer = payrollTransferAmount(amounts, reimbursementTotal)
 
   return (
     <div className="mx-auto w-full max-w-[210mm] space-y-4 print:max-w-none">
@@ -98,8 +113,8 @@ export default async function PayrollSlipPage({
           <section className="rounded border border-border">
             <h2 className="border-b border-border bg-secondary px-3 py-2 text-sm font-semibold text-foreground">支給</h2>
             <Row label={isExecutive ? '役員報酬' : '基本給'} value={amounts.gross} />
-            {record.expense_reimbursement > 0 && (
-              <Row label="立替経費精算" note="（非課税）" value={record.expense_reimbursement} />
+            {reimbursementTotal > 0 && (
+              <Row label="立替経費精算" note="（非課税）" value={reimbursementTotal} />
             )}
             <TotalRow label="支給合計" value={gross} />
           </section>
@@ -117,6 +132,39 @@ export default async function PayrollSlipPage({
             <TotalRow label="控除合計" value={deductions} />
           </section>
         </div>
+
+        {/* 立替経費の内訳。合計だけを渡すと本人が「何の分か」を確かめられず、
+            違算の問い合わせが必ず経理に戻ってくるため、明細をそのまま紙に載せる。
+            立替が無い月は行ごと出さない（従来どおり）。 */}
+        {reimbursements.length > 0 && (
+          <section className="mt-4 rounded border border-border">
+            <h2 className="border-b border-border bg-secondary px-3 py-2 text-sm font-semibold text-foreground">
+              立替経費精算の内訳<span className="ml-1 text-xs font-normal text-muted-foreground">（非課税）</span>
+            </h2>
+            {/* 幅の狭い端末でも項目名を潰さずに読めるよう、表そのものを横スクロールさせる。 */}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[20rem] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-xs text-muted-foreground">
+                    <th className="w-[7rem] px-3 py-1.5 text-left font-medium">利用日</th>
+                    <th className="px-3 py-1.5 text-left font-medium">項目</th>
+                    <th className="w-[7rem] px-3 py-1.5 text-right font-medium">金額</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reimbursements.map((item) => (
+                    <tr key={item.id} className="border-b border-border last:border-b-0">
+                      <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{item.item_date ?? '—'}</td>
+                      <td className="px-3 py-1.5 break-words text-foreground">{item.description}</td>
+                      <td className="px-3 py-1.5 text-right whitespace-nowrap text-foreground">{yen(item.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <TotalRow label="立替経費精算 合計" value={reimbursementTotal} />
+          </section>
+        )}
 
         <div className="mt-4 flex flex-wrap items-baseline justify-between gap-2 rounded border border-border bg-secondary px-4 py-3">
           <span className="text-sm font-semibold text-foreground">差引支給額（振込額）</span>

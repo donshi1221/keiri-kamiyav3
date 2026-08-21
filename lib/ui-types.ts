@@ -10,10 +10,12 @@ import type {
   ExpenseUploadItem,
   PayrollRecipient,
   MonthlyPayrollRecord,
+  PayrollReimbursementItem,
+  PaymentRequest,
 } from './schema'
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
 // import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
-import type { EXPENSE_ITEM_KINDS } from './config'
+import type { EXPENSE_ITEM_KINDS, PAYMENT_REQUEST_STATUSES } from './config'
 
 // ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
 // 以前はコンポーネント側にコピペされ、実クエリと形が食い違ったまま `as any` で握りつぶされていた。
@@ -313,6 +315,10 @@ export interface ExpenseApproveResult {
   drive: { link: string; folderName: string } | { error: string } | { disabled: true }
   // この登録で未処理の経費が無くなり、当月の「社長経費確認」に自動でチェックを入れたか。
   autoChecked: boolean
+  // 立替精算（役員報酬に上乗せする実費返金）を何件作ったか。対象の役員を1人に決められない
+  // （未登録・複数登録）ときは作らずに理由を返す。経費の登録自体は成立させたうえで、
+  // 「返金だけ手当てが要る」ことを画面から気づけるようにするため成否ではなく理由を持たせる。
+  reimbursement: { created: number } | { skipped: string }
 }
 
 // 却下API（POST /api/expense-uploads/[id]/reject）の応答。
@@ -320,6 +326,40 @@ export interface ExpenseRejectResult {
   id: string
   status: 'rejected'
   autoChecked: boolean
+}
+
+// ─── 振込依頼受付（代表から届く「振込してほしい請求書」）─────────────────────────────
+// 取りうる状態。列は text（enum ではない）ため、値の正本は lib/config の PAYMENT_REQUEST_STATUSES に置く。
+export type PaymentRequestStatus = (typeof PAYMENT_REQUEST_STATUSES)[number]
+
+// AI読み取り（lib/payment-extract）が返す3項目。列（payment_requests.extracted_*）と1対1に対応させ、
+// AIに返させるJSONのキー・DBに入る形・画面で扱う形を揃える。
+// どれも null を許すのは、1項目でも読めれば残りは人が手で補えるため（行ごと失敗にはしない）。
+export interface PaymentExtracted {
+  payee: string | null //     振込先（口座名義・会社名）
+  amount: number | null //    振込額（円）
+  due_date: string | null //  支払期日（YYYY-MM-DD）。年が特定できなければ null
+}
+
+// 読み取りは失敗しても例外にせず、理由を持ち回って payment_requests.extract_error に保存する
+//（請求書の InvoiceExtractOutcome と同じ流儀）。
+export type PaymentExtractOutcome = PaymentExtracted | { error: string }
+
+// 一覧APIが返す1件。原本（file_data）は1件で数MBになりうるので列ごと外し、
+// 必要なときだけ /api/payment-requests/[id]/file から取り出す。
+export type PaymentRequestRow = Omit<PaymentRequest, 'file_data'>
+
+// 受付API（POST /api/payment-inbox）の応答。代表の画面では読み取り結果を見せないため
+// （経理が確認する前提で、代表には「受け付けた」ことだけ伝える）、返すのはIDだけにする。
+export interface PaymentInboxResponse {
+  id: string
+}
+
+// ダッシュボードの注意カード用の件数。人の対応が必要な区分だけを数える
+// （振込済み・却下は対応不要。両方0ならカード自体を出さないため、この型ごと null になる）。
+export interface PaymentAlertCounts {
+  pending: number
+  reserved: number
 }
 
 // ─── 役員報酬・給与 ─────────────────────────────
@@ -342,6 +382,17 @@ export interface PayrollAmounts {
 // 種別ラベルと支払日はマスタ側にしか無いため（月次には控えていない）、結合して渡す。
 export type PayrollRecordWithRecipient = MonthlyPayrollRecord & {
   payroll_recipients: Pick<PayrollRecipient, 'id' | 'name' | 'kind' | 'pay_day'> | null
+}
+
+// 立替経費の精算明細1行。画面が扱う形とDBの列を1対1に保つため、列の型をそのまま再輸出する。
+export type PayrollReimbursement = PayrollReimbursementItem
+
+// 明細の新規作成・編集で画面が送る値。検証の正本は lib/validation の
+// payrollReimbursementCreateSchema で、これは画面側が同じ形を組み立てるための型。
+export interface PayrollReimbursementInput {
+  item_date: string | null
+  description: string
+  amount: number
 }
 
 // ─── Googleドライブ保存（lib/google-drive）─────────────────────────────

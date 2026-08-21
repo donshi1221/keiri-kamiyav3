@@ -10,9 +10,9 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PayrollRecordWithRecipient } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
-import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount } from '@/lib/payroll'
+import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
@@ -32,6 +32,12 @@ const INVOICE_ALERT_KINDS: { key: keyof InvoiceAlertCounts; label: string }[] = 
   { key: 'ng', label: 'NG' },
   { key: 'hold', label: '保留' },
   { key: 'pending', label: '未チェック' },
+]
+
+// 振込依頼の注意カードに並べる区分。0件の区分は文言から落とすため、順番と呼び名だけをここに持つ。
+const PAYMENT_ALERT_KINDS: { key: keyof PaymentAlertCounts; label: string }[] = [
+  { key: 'pending', label: '未対応' },
+  { key: 'reserved', label: '振込予約済み' },
 ]
 
 function rowDueState(states: DueState[]): DueState {
@@ -519,22 +525,21 @@ const PAYROLL_FIELDS = [
   { key: 'employment_insurance_snapshot', label: '雇用保険' },
   { key: 'income_tax_snapshot', label: '源泉所得税' },
   { key: 'resident_tax_snapshot', label: '住民税' },
-  // 立替経費は控除の対象外（非課税の実費返金）なので、他の6項目とは足し引きの向きが違う。
-  // 見た目でも区別できるようラベルに「＋」を付けて最後に置く。
-  { key: 'expense_reimbursement', label: '＋ 立替経費精算（非課税）' },
 ] as const
 type PayrollField = (typeof PAYROLL_FIELDS)[number]['key']
 
-function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
+function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose, onSave }: {
   record: PayrollRecordWithRecipient | null
   monthLabel: string
+  // 立替は別ダイアログ（明細管理）で編集するが、振込額の見え方はここでも同じでないと
+  // 「保存したら思っていた額と違った」になるため、確認用の合計だけ受け取って足す。
+  reimbursementTotal: number
   onClose: () => void
   onSave: (id: string, values: Record<PayrollField, number>) => Promise<void>
 }) {
   const [values, setValues] = useState<Record<PayrollField, string>>(() => ({
     gross_snapshot: '', health_insurance_snapshot: '', pension_snapshot: '',
     employment_insurance_snapshot: '', income_tax_snapshot: '', resident_tax_snapshot: '',
-    expense_reimbursement: '',
   }))
   const [saving, setSaving] = useState(false)
 
@@ -547,7 +552,6 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
       employment_insurance_snapshot: String(record.employment_insurance_snapshot),
       income_tax_snapshot: String(record.income_tax_snapshot),
       resident_tax_snapshot: String(record.resident_tax_snapshot),
-      expense_reimbursement: String(record.expense_reimbursement),
     })
   }, [record])
 
@@ -561,7 +565,7 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
     employment_insurance: toNum(values.employment_insurance_snapshot),
     income_tax: toNum(values.income_tax_snapshot),
     resident_tax: toNum(values.resident_tax_snapshot),
-  }, toNum(values.expense_reimbursement))
+  }, reimbursementTotal)
 
   async function submit() {
     if (!record) return
@@ -573,7 +577,6 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
       employment_insurance_snapshot: toNum(values.employment_insurance_snapshot),
       income_tax_snapshot: toNum(values.income_tax_snapshot),
       resident_tax_snapshot: toNum(values.resident_tax_snapshot),
-      expense_reimbursement: toNum(values.expense_reimbursement),
     })
     setSaving(false)
   }
@@ -605,13 +608,215 @@ function PayrollAmountsDialog({ record, monthLabel, onClose, onSave }: {
           ))}
         </div>
         <div className="rounded border px-3 py-2 text-sm">
-          振込額（手取り＋立替） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+          振込額（手取り＋立替 ¥{reimbursementTotal.toLocaleString()}） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">立替経費は「立替明細」から追加・修正します。</span>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
           <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving}>
             {saving ? '保存中…' : '保存'}
           </Button>
+        </div>
+      </div>
+    </FormDialog>
+  )
+}
+
+// 立替経費の精算明細（人×月）を管理する小さなダイアログ。
+// 合計だけを1つの欄で持っていた頃は「何をいくら立て替えたのか」が本人にも経理にも残らず、
+// 金額が合わない時に原本まで遡るしかなかった。行単位で持つことで明細書にもそのまま出せる。
+function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCreate, onUpdate, onDelete }: {
+  target: PayrollRecordWithRecipient | null
+  monthLabel: string
+  items: PayrollReimbursement[]
+  onClose: () => void
+  onCreate: (recipientId: string, input: PayrollReimbursementInput) => Promise<boolean>
+  onUpdate: (id: string, input: PayrollReimbursementInput) => Promise<boolean>
+  onDelete: (id: string) => Promise<void>
+}) {
+  // 編集中の行ID（null は新規行）。1行ずつしか開かないので単一の状態で足りる。
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState<{ item_date: string; description: string; amount: string }>({
+    item_date: '', description: '', amount: '',
+  })
+  const [busy, setBusy] = useState(false)
+  // 削除は取り消せないので、他のチェック操作と同じく一度確認を挟む。
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+
+  // 対象が変わったら編集中の状態を畳む。前の人の入力が残ったまま別の人に保存される事故を防ぐ。
+  useEffect(() => {
+    setEditingId(null)
+    setAdding(false)
+    setPendingDelete(null)
+    setForm({ item_date: '', description: '', amount: '' })
+  }, [target])
+
+  if (!target) return null
+  const recipientId = target.recipient_id
+  const total = payrollReimbursementTotal(items)
+
+  function openAdd() {
+    setEditingId(null)
+    setPendingDelete(null)
+    setForm({ item_date: '', description: '', amount: '' })
+    setAdding(true)
+  }
+
+  function openEdit(item: PayrollReimbursement) {
+    setAdding(false)
+    setPendingDelete(null)
+    setEditingId(item.id)
+    setForm({ item_date: item.item_date ?? '', description: item.description, amount: String(item.amount) })
+  }
+
+  function closeForm() {
+    setAdding(false)
+    setEditingId(null)
+  }
+
+  async function submitForm() {
+    setBusy(true)
+    const input: PayrollReimbursementInput = {
+      item_date: form.item_date.trim() === '' ? null : form.item_date,
+      description: form.description.trim(),
+      amount: form.amount.trim() === '' ? 0 : Number(form.amount),
+    }
+    const ok = editingId ? await onUpdate(editingId, input) : await onCreate(recipientId, input)
+    setBusy(false)
+    if (ok) closeForm()
+  }
+
+  const formOpen = adding || editingId !== null
+
+  return (
+    <FormDialog
+      open
+      onClose={onClose}
+      title={`${monthLabel}の立替明細（${target.payroll_recipients?.name ?? '?'}）`}
+    >
+      <div className="space-y-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          本人が立て替えた実費を返すための明細です。非課税なので控除の計算には入らず、手取りに足して振り込みます。
+        </p>
+
+        {items.length === 0 ? (
+          <p className="rounded border border-dashed px-3 py-4 text-center text-sm text-muted-foreground">
+            立替の明細はありません。
+          </p>
+        ) : (
+          <ul className="divide-y rounded border">
+            {items.map((item) => (
+              <li key={item.id} className="px-3 py-2">
+                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm break-words text-foreground">{item.description}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {item.item_date ?? '日付なし'}
+                      {/* 経費チェックから取り込んだ行は、経理が原本まで遡らずに出どころを判断できるようにする。 */}
+                      {item.expense_upload_item_id && <span className="ml-2 text-info">経費チェックから</span>}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-medium text-foreground">¥{item.amount.toLocaleString()}</span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(item)}
+                      className="flex h-11 items-center text-xs text-info hover:underline md:h-6"
+                    >
+                      修正
+                    </button>
+                    {pendingDelete === item.id ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={async () => { setPendingDelete(null); await onDelete(item.id) }}
+                          className="flex h-11 items-center text-xs text-danger hover:underline md:h-6"
+                        >
+                          削除する
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingDelete(null)}
+                          className="flex h-11 items-center text-xs text-muted-foreground hover:underline md:h-6"
+                        >
+                          やめる
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setPendingDelete(item.id)}
+                        aria-label={`${item.description}を削除`}
+                        className={`flex h-11 items-center text-muted-foreground hover:text-danger md:h-6 ${TAP_ICON_BUTTON}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex items-center justify-between rounded border bg-secondary px-3 py-2 text-sm">
+          <span className="text-muted-foreground">立替合計</span>
+          <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
+        </div>
+
+        {formOpen ? (
+          <div className="space-y-2 rounded border p-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[9rem_1fr_8rem]">
+              <div>
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-date">利用日（任意）</label>
+                <input
+                  id="reimbursement-date"
+                  type="date"
+                  value={form.item_date}
+                  onChange={(e) => setForm((prev) => ({ ...prev, item_date: e.target.value }))}
+                  className="w-full rounded border border-border px-2 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-description">項目</label>
+                <input
+                  id="reimbursement-description"
+                  type="text"
+                  value={form.description}
+                  onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                  placeholder="例: 新大阪→東京 特急券"
+                  className="w-full rounded border border-border px-2 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-amount">金額</label>
+                <input
+                  id="reimbursement-amount"
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  value={form.amount}
+                  onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  className="w-full rounded border border-border px-2 py-2 text-right text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={closeForm}>キャンセル</Button>
+              <Button size="sm" className="h-11 md:h-7" type="button" onClick={submitForm} disabled={busy}>
+                {busy ? '保存中…' : '保存'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={openAdd}>
+            ＋明細を追加
+          </Button>
+        )}
+
+        <div className="flex justify-end pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>閉じる</Button>
         </div>
       </div>
     </FormDialog>
@@ -642,12 +847,16 @@ interface Props {
   carryOver: CarryOverGroup[]
   // 対応が必要な請求書が1件も無ければ null（カードごと出さない）。
   invoiceAlert: InvoiceAlertCounts | null
+  // 未対応・振込予約済みの振込依頼が1件も無ければ null（カードごと出さない）。
+  paymentAlert: PaymentAlertCounts | null
   // 役員報酬・給与の当月分。対象者が未登録なら空配列（カードごと出さない）。
   payrollRecords: PayrollRecordWithRecipient[]
+  // 当月に精算する立替経費の明細（全対象者分）。振込額はこの合計から出す。
+  payrollReimbursements: PayrollReimbursement[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, payrollRecords,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -671,6 +880,8 @@ export default function DashboardClient({
   // 振込済みチェックを外すときの確認待ち（金銭に関わるチェックと同じ誤タップ防止）。
   const [pendingPayrollUncheck, setPendingPayrollUncheck] = useState<string | null>(null)
   const [payrollEditTarget, setPayrollEditTarget] = useState<PayrollRecordWithRecipient | null>(null)
+  const [localReimbursements, setLocalReimbursements] = useState(payrollReimbursements)
+  const [reimbursementTarget, setReimbursementTarget] = useState<PayrollRecordWithRecipient | null>(null)
   const [localGlobal, setLocalGlobal] = useState(globalTask)
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
   const [oneTimeTasks, setOneTimeTasks] = useState(initialOneTimeTasks)
@@ -1031,6 +1242,61 @@ export default function DashboardClient({
     }
   }
 
+  // ─── 立替経費の精算明細 ─────────────────────────────
+  // 立替は「いくら返すか」がそのまま振込額に効くため、楽観更新はせずサーバーの結果だけを取り込む
+  // （失敗したのに画面上は増えている、という状態を作らない）。
+  async function createReimbursement(recipientId: string, input: PayrollReimbursementInput): Promise<boolean> {
+    try {
+      const res = await fetch('/api/payroll-reimbursements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient_id: recipientId, year, month, ...input }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        showError(data?.error ?? '立替明細の保存に失敗しました。')
+        return false
+      }
+      const created = (await res.json()) as PayrollReimbursement
+      setLocalReimbursements((prev) => [...prev, created])
+      return true
+    } catch {
+      showError('立替明細の保存に失敗しました。もう一度お試しください。')
+      return false
+    }
+  }
+
+  async function updateReimbursement(id: string, input: PayrollReimbursementInput): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/payroll-reimbursements/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        showError(data?.error ?? '立替明細の保存に失敗しました。')
+        return false
+      }
+      const updated = (await res.json()) as PayrollReimbursement
+      setLocalReimbursements((prev) => prev.map((r) => (r.id === id ? updated : r)))
+      return true
+    } catch {
+      showError('立替明細の保存に失敗しました。もう一度お試しください。')
+      return false
+    }
+  }
+
+  async function deleteReimbursement(id: string) {
+    try {
+      const res = await fetch(`/api/payroll-reimbursements/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+      setLocalReimbursements((prev) => prev.filter((r) => r.id !== id))
+    } catch {
+      showError('立替明細の削除に失敗しました。もう一度お試しください。')
+    }
+  }
+
   async function toggleGlobal(field: 'expense_confirmed_at' | 'payment_report_confirmed_at' | 'withholding_confirmed_at') {
     if (!localGlobal) return
     const prevValue = localGlobal[field]
@@ -1092,6 +1358,11 @@ export default function DashboardClient({
     isCurrentMonth ? getDueState(day, payrollDueDay(r), r.paid_at) : (r.paid_at ? 'done' : 'upcoming')
   // 源泉所得税は毎月まとめて納付するため、給与分の合計を1か所に出す（納付額を人が数え直さずに済む）。
   const payrollIncomeTaxTotal = localPayrollRecords.reduce((s, r) => s + r.income_tax_snapshot, 0)
+  // 立替は人ごとに畳んでおく。行の描画とダイアログの両方で使うため、毎回 filter を書かずに済ませる。
+  const reimbursementTotals = payrollReimbursementTotalsByRecipient(localReimbursements)
+  const reimbursementTotalOf = (recipientId: string): number => reimbursementTotals[recipientId] ?? 0
+  const reimbursementItemsOf = (recipientId: string): PayrollReimbursement[] =>
+    localReimbursements.filter((r) => r.recipient_id === recipientId)
 
   async function syncMFExpenses() {
     setIsSyncing(true)
@@ -1946,6 +2217,25 @@ export default function DashboardClient({
         </div>
       )}
 
+      {/* 代表から届いた振込依頼。請求書チェックと同じく月に紐づかないため、表示中の月に関係なく出す。 */}
+      {paymentAlert && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/40 bg-warning-subtle px-4 py-2.5 text-sm text-warning">
+          <span>
+            ⚠ 振込依頼:{' '}
+            {PAYMENT_ALERT_KINDS
+              .filter((k) => paymentAlert[k.key] > 0)
+              .map((k) => `${k.label} ${paymentAlert[k.key]}件`)
+              .join(' / ')}
+          </span>
+          <Link
+            href="/payment-check"
+            className="flex h-11 shrink-0 items-center font-medium text-warning underline underline-offset-2 md:h-auto"
+          >
+            確認する
+          </Link>
+        </div>
+      )}
+
       {/* 委託者 — 請求書受領・支払管理 */}
       <section ref={contractorSectionRef} className="scroll-mt-24 rounded-lg border bg-card">
         <SectionHeader
@@ -2742,6 +3032,8 @@ export default function DashboardClient({
               const state = payrollDueState(p)
               const name = p.payroll_recipients?.name ?? '?'
               const kindLabel = PAYROLL_KIND_LABEL[p.payroll_recipients?.kind ?? 'employee']
+              const reimbursement = reimbursementTotalOf(p.recipient_id)
+              const reimbursementCount = reimbursementItemsOf(p.recipient_id).length
               return (
                 <div
                   key={p.id}
@@ -2767,6 +3059,13 @@ export default function DashboardClient({
                       >
                         この月の金額を修正
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setReimbursementTarget(p)}
+                        className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+                      >
+                        立替明細{reimbursementCount > 0 && `（${reimbursementCount}件）`}
+                      </button>
                       {/* 明細は印刷して本人へ渡す使い方なので、別タブで開いてダッシュボードを閉じさせない。 */}
                       <a
                         href={`/payroll/${p.id}/slip`}
@@ -2780,12 +3079,12 @@ export default function DashboardClient({
                   </div>
                   <div className="shrink-0 text-right">
                     <span className="text-base font-semibold text-foreground">
-                      ¥{payrollTransferAmount(amounts, p.expense_reimbursement).toLocaleString()}
+                      ¥{payrollTransferAmount(amounts, reimbursement).toLocaleString()}
                     </span>
                     {/* 立替がある月だけ内訳を出す。無い月に「給与◯円＋立替0円」と書いても読む手間が増えるだけ。 */}
-                    {p.expense_reimbursement > 0 && (
+                    {reimbursement > 0 && (
                       <span className="block text-xs text-muted-foreground">
-                        内訳: {kindLabel} ¥{payrollNet(amounts).toLocaleString()} ＋ 立替 ¥{p.expense_reimbursement.toLocaleString()}
+                        内訳: {kindLabel} ¥{payrollNet(amounts).toLocaleString()} ＋ 立替 ¥{reimbursement.toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -2816,8 +3115,19 @@ export default function DashboardClient({
       <PayrollAmountsDialog
         record={payrollEditTarget}
         monthLabel={`${year}年${month}月`}
+        reimbursementTotal={payrollEditTarget ? reimbursementTotalOf(payrollEditTarget.recipient_id) : 0}
         onClose={() => setPayrollEditTarget(null)}
         onSave={savePayrollAmounts}
+      />
+
+      <PayrollReimbursementDialog
+        target={reimbursementTarget}
+        monthLabel={`${year}年${month}月`}
+        items={reimbursementTarget ? reimbursementItemsOf(reimbursementTarget.recipient_id) : []}
+        onClose={() => setReimbursementTarget(null)}
+        onCreate={createReimbursement}
+        onUpdate={updateReimbursement}
+        onDelete={deleteReimbursement}
       />
 
       {/* グローバルタスク（常時表示） */}

@@ -1,7 +1,7 @@
 import { db } from '@/lib/db'
-import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords } from '@/lib/schema'
+import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords, payrollReimbursementItems, paymentRequests } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
-import type { InvoiceAlertCounts } from '@/lib/ui-types'
+import type { InvoiceAlertCounts, PaymentAlertCounts } from '@/lib/ui-types'
 import { nowJST } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
@@ -34,7 +34,9 @@ export default async function DashboardPage({
     monthExpenses,
     monthClientExpenses,
     invoiceStatusCountRows,
+    paymentStatusCountRows,
     payrollRecords,
+    payrollReimbursements,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -112,6 +114,12 @@ export default async function DashboardPage({
       status: invoiceUploads.status,
       count: sql<number>`count(*)`,
     }).from(invoiceUploads).groupBy(invoiceUploads.status),
+    // 受け付けた振込依頼の状態別件数。振込依頼も請求書と同じく月に紐づかない
+    //（支払期日が読み取れない行もある）ため、表示中の月では絞らず全件を数える。
+    db.select({
+      status: paymentRequests.status,
+      count: sql<number>`count(*)`,
+    }).from(paymentRequests).groupBy(paymentRequests.status),
     // 役員報酬・給与。種別ラベルと支払日はマスタ側にしか無いため対象者を結合して取る。
     db.query.monthlyPayrollRecords.findMany({
       where: and(eq(monthlyPayrollRecords.year, year), eq(monthlyPayrollRecords.month, month)),
@@ -120,6 +128,12 @@ export default async function DashboardPage({
         payroll_recipients: { columns: { id: true, name: true, kind: true, pay_day: true } },
       },
     }),
+    // 立替経費の精算明細。振込額は明細の合計で出すため、月次レコードとは別に必ず読む。
+    db
+      .select()
+      .from(payrollReimbursementItems)
+      .where(and(eq(payrollReimbursementItems.year, year), eq(payrollReimbursementItems.month, month)))
+      .orderBy(asc(payrollReimbursementItems.created_at)),
   ])
 
   const carryOver = computeCarryOver(
@@ -170,6 +184,17 @@ export default async function DashboardPage({
       ? invoiceAlertCounts
       : null
 
+  // 振込依頼も同じ考え方で、経理がまだ振り込み終えていない分だけを数える
+  // （paid / rejected は対応不要なので数えず、両方0ならカードごと出さない）。
+  const paymentCounts: Record<string, number> = {}
+  for (const row of paymentStatusCountRows) paymentCounts[row.status] = Number(row.count)
+  const paymentAlertCounts: PaymentAlertCounts = {
+    pending: paymentCounts.pending ?? 0,
+    reserved: paymentCounts.reserved ?? 0,
+  }
+  const paymentAlert =
+    paymentAlertCounts.pending + paymentAlertCounts.reserved > 0 ? paymentAlertCounts : null
+
   // トークンの行が存在するだけでは「連携中」と言えない（リフレッシュトークン失効時も行は残る）。
   // 実際に有効なアクセストークンを取得できるかで連携状態を判定する。
   const mfHasToken = mfToken.length > 0
@@ -204,7 +229,9 @@ export default async function DashboardPage({
       mfJustConnected={params.mf_connected === '1'}
       carryOver={carryOver}
       invoiceAlert={invoiceAlert}
+      paymentAlert={paymentAlert}
       payrollRecords={payrollRecords}
+      payrollReimbursements={payrollReimbursements}
     />
   )
 }

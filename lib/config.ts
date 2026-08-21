@@ -128,6 +128,16 @@ export const EXPENSE_ITEM_KINDS = ['client_billed', 'company', 'excluded'] as co
 // 画像はサブタイプが機種でまちまち（jpeg / heic / webp）なので前方一致で判定する。
 export const EXPENSE_UPLOAD_MIME_PREFIXES = ['application/pdf', 'image/'] as const
 
+// ─── 振込依頼受付（代表から届く「振込してほしい請求書」）─────────────────────────────
+// 振込の進み具合。DB列は text（enum ではない）ため、取りうる値の正本をここに置く。
+// 画面のバッジ・サーバー側の検証（zod）で同じ一覧を使うためここ1か所にまとめる
+//（片方だけ増やすと「画面では押せるのに保存で弾かれる」食い違いが起きるため）。
+export const PAYMENT_REQUEST_STATUSES = ['pending', 'reserved', 'paid', 'rejected'] as const
+
+// 受け付けるファイル種別。請求書はPDFで届くことが多いが、代表がスマホで撮った写真で
+// 送ってくることもあるため両方を許す（経費受付と同じ理由・同じ前方一致の判定）。
+export const PAYMENT_REQUEST_MIME_PREFIXES = ['application/pdf', 'image/'] as const
+
 // ─── 役員報酬・給与 ─────────────────────────────
 // 支給対象の区分。金額の扱いは同じだが、画面の呼び名（役員報酬／給与）が変わる。
 // 画面のプルダウンとサーバー側の検証（zod）で同じ一覧を使うためここ1か所に置く
