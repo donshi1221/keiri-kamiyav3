@@ -9,6 +9,14 @@ function intFromEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
+// JPEG品質のような「0〜1の小数」を扱う設定値用。intFromEnv は 0 を弾いてしまうため分けている。
+function floatFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : fallback
+}
+
 // Gemini のモデル名（税務AIチャットが直接使い、下の切り替え一覧の先頭にもなる）。
 // 固定バージョン名は提供終了で 429/404 になった実績があるため、常に最新を指す別名を既定にする。
 export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest'
@@ -158,3 +166,9 @@ export const DELIVERY_COL_DEADLINE = intFromEnv('DELIVERY_COL_DEADLINE', 0) // A
 export const DELIVERY_COL_URL = intFromEnv('DELIVERY_COL_URL', 3) //          D列: 納品URL
 // 先頭の見出し行を読み飛ばす行数。既定1（1行目が「納品〆切, 本数, 動画のNo, 納品URL」の見出し）。
 export const DELIVERY_HEADER_ROWS = intFromEnv('DELIVERY_HEADER_ROWS', 1)
+
+// ─── 受付時のHEIC→JPEG変換（lib/image-convert）─────────────────────────────
+// iPhoneで撮った領収書がHEIC形式のまま届くと、ブラウザが表示できず「原本を開く」がダウンロードに
+// なってしまう。受付時にJPEGへ変換しておけば、表示・Googleドライブ保存・AI読み取りの全てで
+// 同じJPEGを使い回せる。品質は「見た目の劣化が分からない程度に軽くする」落とし所として0.85を既定にする。
+export const HEIC_CONVERT_QUALITY = floatFromEnv('HEIC_CONVERT_QUALITY', 0.85)

@@ -5,6 +5,7 @@ import { paymentRequests } from '@/lib/schema'
 import { verifyPaymentRequestToken } from '@/lib/payment-token'
 import { extractPaymentAndSave } from '@/lib/payment-extract'
 import { savePaymentRequestToDrive } from '@/lib/payment-drive'
+import { normalizeUploadImage } from '@/lib/image-convert'
 import { getResend } from '@/lib/resend'
 import { UPLOAD_MAX_BYTES, PAYMENT_REQUEST_MIME_PREFIXES } from '@/lib/config'
 import type { PaymentInboxResponse } from '@/lib/ui-types'
@@ -48,11 +49,14 @@ export async function POST(req: NextRequest) {
     const rawNote = formData.get('note')
     const note = typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim() : null
 
-    const buffer = Buffer.from(await file.arrayBuffer())
+    // HEIC/HEIFはこの時点でJPEGへ変換する。以降のDB保存・AI読み取り・ドライブ保存・通知メールは
+    // すべてこの変換後の値（buffer/fileType/fileName）で統一する。
+    const rawBuffer = Buffer.from(await file.arrayBuffer())
+    const { buffer, fileType, fileName } = await normalizeUploadImage(rawBuffer, file.type, file.name)
     const fileData = buffer.toString('base64')
     const [row] = await db
       .insert(paymentRequests)
-      .values({ file_name: file.name, file_data: fileData, file_type: file.type, note })
+      .values({ file_name: fileName, file_data: fileData, file_type: fileType, note })
       .returning({ id: paymentRequests.id, created_at: paymentRequests.created_at })
 
     // 保存後にAI読み取りを行うが、失敗しても受付は成功（201）として扱う。
@@ -63,7 +67,7 @@ export async function POST(req: NextRequest) {
     let amount: number | null = null
     let extractError: string | null = null
     try {
-      const outcome = await extractPaymentAndSave(row.id, fileData, file.type, file.name)
+      const outcome = await extractPaymentAndSave(row.id, fileData, fileType, fileName)
       if ('error' in outcome) extractError = outcome.error
       else {
         payee = outcome.payee
@@ -80,7 +84,7 @@ export async function POST(req: NextRequest) {
     // 後回しにすると読み取り失敗の分だけ控えが残らない、という抜けが生まれるため。
     // 失敗しても受付は成功（drive_file_id は null のままで、再読み取り時にやり直せる）。
     try {
-      const saved = await savePaymentRequestToDrive(row.id, file.name, fileData, file.type, dueDate, row.created_at)
+      const saved = await savePaymentRequestToDrive(row.id, fileName, fileData, fileType, dueDate, row.created_at)
       if ('error' in saved) console.error('[payment-inbox:drive]', saved.error)
     } catch (err) {
       console.error('[payment-inbox:drive]', err)
@@ -96,11 +100,11 @@ export async function POST(req: NextRequest) {
         const { error: mailErr } = await resend.emails.send({
           from: 'keiri-v3 <noreply@resend.dev>',
           to: process.env.NOTIFICATION_EMAIL,
-          subject: `[振込依頼] 代表から振込依頼が届きました（${file.name}）`,
+          subject: `[振込依頼] 代表から振込依頼が届きました（${fileName}）`,
           text: [
             '代表から振込依頼が届きました。',
             '',
-            `ファイル名: ${file.name}`,
+            `ファイル名: ${fileName}`,
             `振込先: ${payee ?? '（読み取れませんでした）'}`,
             `金額: ${formatAmount(amount)}`,
             `支払期日: ${dueDate ?? '（読み取れませんでした）'}`,

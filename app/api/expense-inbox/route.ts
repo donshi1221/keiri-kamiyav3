@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems } from '@/lib/schema'
 import { verifyExpenseUploadToken } from '@/lib/expense-token'
 import { extractExpenseAndSave } from '@/lib/expense-extract'
+import { normalizeUploadImage } from '@/lib/image-convert'
 import { UPLOAD_MAX_BYTES, EXPENSE_UPLOAD_MIME_PREFIXES } from '@/lib/config'
 
 // 関数のタイムアウト上限（秒）。受付のたびに外部AI（Gemini）へファイルを渡して読み取るため、
@@ -36,11 +37,14 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: `ファイルサイズが上限（${maxMb}MB）を超えています` }, { status: 413 })
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer())
+    // HEIC/HEIFはこの時点でJPEGへ変換する。以降のDB保存・AI読み取り・画面表示は
+    // すべてこの変換後の値（buffer/fileType/fileName）で統一する。
+    const rawBuffer = Buffer.from(await file.arrayBuffer())
+    const { buffer, fileType, fileName } = await normalizeUploadImage(rawBuffer, file.type, file.name)
     const fileData = buffer.toString('base64')
     const [upload] = await db
       .insert(expenseUploads)
-      .values({ file_name: file.name, file_data: fileData, file_type: file.type })
+      .values({ file_name: fileName, file_data: fileData, file_type: fileType })
       .returning({ id: expenseUploads.id })
 
     // 保存後にAI読み取りを行うが、失敗しても受付は成功（201）として扱う。
@@ -48,7 +52,7 @@ export async function POST(req: NextRequest) {
     // 明細が空でも代表が手で足せる（既存の invoice-inbox と同じ方針）。
     let extractError: string | null = null
     try {
-      const outcome = await extractExpenseAndSave(upload.id, fileData, file.type, file.name)
+      const outcome = await extractExpenseAndSave(upload.id, fileData, fileType, fileName)
       if ('error' in outcome) extractError = outcome.error
     } catch (err) {
       // 読み取り結果の書き戻しに失敗しても、預かったファイルは既に保存済み。
@@ -66,7 +70,7 @@ export async function POST(req: NextRequest) {
       .orderBy(asc(expenseUploadItems.sort_order))
 
     return Response.json(
-      { id: upload.id, file_name: file.name, file_type: file.type, extract_error: extractError, items },
+      { id: upload.id, file_name: fileName, file_type: fileType, extract_error: extractError, items },
       { status: 201 }
     )
   } catch (err) {

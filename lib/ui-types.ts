@@ -349,6 +349,15 @@ export type PaymentExtractOutcome = PaymentExtracted | { error: string }
 // 必要なときだけ /api/payment-requests/[id]/file から取り出す。
 export type PaymentRequestRow = Omit<PaymentRequest, 'file_data'>
 
+// 受付時の画像正規化（lib/image-convert）が返す形。HEIC/HEIFはそのままだとブラウザで表示できず
+// 「原本を開く」がダウンロードになってしまうため、受付時にJPEGへ変換した結果をこの形で持ち回る
+// （経費受付・振込依頼受付のどちらも、以降のDB保存・AI読み取り・ドライブ保存・通知メールで同じ値を使う）。
+export interface NormalizedUploadImage {
+  buffer: Buffer
+  fileType: string
+  fileName: string
+}
+
 // 受付API（POST /api/payment-inbox）の応答。代表の画面では読み取り結果を見せないため
 // （経理が確認する前提で、代表には「受け付けた」ことだけ伝える）、返すのはIDだけにする。
 export interface PaymentInboxResponse {
