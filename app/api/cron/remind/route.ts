@@ -109,7 +109,10 @@ export async function GET(req: NextRequest) {
     const remindDay10 = isInReminderWindow(day, 10)
     const remindDay15 = isInReminderWindow(day, 15)
     const remindDay20 = isInReminderWindow(day, 20)
-    const remindDay25 = isInReminderWindow(day, 25)
+    // クライアントの入金確認だけは期日（25日）の前倒しで出さず、当日以降に限る。
+    // 入金は相手の振込を待つものなので、期日前に「未確認」と並べても経理にできることが無く、
+    // 他の催促と混ざって本当に手を付けるべき項目が読みにくくなるため。
+    const remindDay25 = day >= 25
     const remindLastDay = isInReminderWindow(day, lastDay)
 
     const [records, clientRecords, globalTask, customTasks, payrollRecords, payrollReimbursements] = await Promise.all([
