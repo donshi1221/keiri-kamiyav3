@@ -294,6 +294,27 @@ export const payrollReimbursementPatchSchema = payrollReimbursementCreateSchema
   .partial()
   .omit({ recipient_id: true, year: true, month: true })
 
+// 毎月の定額立替のマスタ。金額は明細と同じく0円を許さない（0円の立替は精算する意味が無いうえ、
+// 毎月0円の行が自動で積まれると明細が読めなくなるため）。
+// 開始月の上限を2100年にしているのは、打ち間違い（例: 20255年）でその設定が永遠に生成されなくなるのを防ぐため。
+export const recurringReimbursementCreateSchema = z.object({
+  recipient_id: z.uuid({ message: '支給対象者の指定が不正です' }),
+  description: z.string().trim().min(1, { message: '項目は必須です' }),
+  amount: z.coerce
+    .number()
+    .refine((n) => Number.isFinite(n), { message: '金額には数値を入力してください' })
+    .transform((n) => Math.round(n))
+    .refine((n) => n >= 1, { message: '金額は1円以上で入力してください' }),
+  start_year: z.coerce.number().int().min(2000).max(2100, { message: '開始年は2000〜2100の範囲で入力してください' }),
+  start_month: z.coerce.number().int().min(1).max(12, { message: '開始月は1〜12の範囲で入力してください' }),
+  active: z.boolean().optional(),
+})
+
+// 対象者だけは変更させない（別の人に付け替えると、生成済みの明細と誰の立替なのかが食い違うため）。
+export const recurringReimbursementPatchSchema = recurringReimbursementCreateSchema
+  .partial()
+  .omit({ recipient_id: true })
+
 // 振込依頼の状態変更（PATCH /api/payment-requests/[id]）。
 // 状態は text 列だが、任意の文字列を入れられると画面のバッジも件数の集計も破綻するため、
 // 受け付ける値を選択肢（lib/config）に限る。時刻列（reserved_at 等）はサーバーが状態から導くので受け取らない

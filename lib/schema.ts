@@ -467,6 +467,33 @@ export const payrollReimbursementItems = pgTable('payroll_reimbursement_items', 
   // 同じ経費明細から二重に立替精算が作られる（＝本人へ二重払い）のを DB 側で止めるため。
   // 手入力の行は出どころが無いので null（Postgres の unique は null 同士を重複と見なさない）。
   expense_upload_item_id: uuid('expense_upload_item_id').unique(),
+  // 毎月の定額立替（payroll_recurring_reimbursements）から自動生成した行の出どころ。
+  // expense_upload_item_id と同じく外部キー参照は張らない。定額設定を消しても
+  // 生成済みの明細（＝過去月の振込額の内訳）を道連れにしたくないため。
+  recurring_id: uuid('recurring_id'),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (t) => [
+  // 同じ定額設定から同じ月に二重生成されないようにする。月次生成は毎月1日のcronだけでなく
+  // マスタ更新のたびにも走る（＝同じ月に何度も呼ばれる）ので、冪等性はDB側で担保する。
+  // Postgres の UNIQUE は NULL 同士を重複と見なさないため、recurring_id が NULL の既存行
+  // （手入力・経費チェック由来）はこの制約の影響を一切受けない＝同じ月に何行でも積める。
+  unique().on(t.recurring_id, t.year, t.month),
+])
+
+// 毎月の定額立替経費のマスタ（例: 毎月の通信費・駐車場代など、金額が決まっている立替）。
+// 毎月1日の月次生成で payroll_reimbursement_items へ1行ずつ写す。
+// 終了月・回数を持たないのは、止めるタイミングが事前に決まらない性質のものだから
+// （契約期間のある請求内訳とは違う）。止めるときは active=false にする。
+// 金額が違う月は、生成された明細の側を直す＝マスタは「毎月の既定値」だけを持つ。
+export const payrollRecurringReimbursements = pgTable('payroll_recurring_reimbursements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recipient_id: uuid('recipient_id').notNull().references(() => payrollRecipients.id),
+  description: text('description').notNull(),
+  amount: integer('amount').notNull(),
+  // この月から生成対象にする。過去に遡って作らないための下限で、上限（終了月）は持たない。
+  start_year: integer('start_year').notNull(),
+  start_month: integer('start_month').notNull(),
+  active: boolean('active').notNull().default(true),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
@@ -608,3 +635,4 @@ export type GoogleDriveToken = typeof googleDriveTokens.$inferSelect
 export type PayrollRecipient = typeof payrollRecipients.$inferSelect
 export type MonthlyPayrollRecord = typeof monthlyPayrollRecords.$inferSelect
 export type PayrollReimbursementItem = typeof payrollReimbursementItems.$inferSelect
+export type PayrollRecurringReimbursement = typeof payrollRecurringReimbursements.$inferSelect

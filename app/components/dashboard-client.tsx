@@ -698,6 +698,7 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
       <div className="space-y-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           本人が立て替えた実費を返すための明細です。非課税なので控除の計算には入らず、手取りに足して振り込みます。
+          「毎月の立替」の行も、この月だけ金額や項目を直せます（マスタの設定は変わりません）。
         </p>
 
         {items.length === 0 ? (
@@ -715,6 +716,9 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
                       {item.item_date ?? '日付なし'}
                       {/* 経費チェックから取り込んだ行は、経理が原本まで遡らずに出どころを判断できるようにする。 */}
                       {item.expense_upload_item_id && <span className="ml-2 text-info">経費チェックから</span>}
+                      {/* マスタの定額設定から毎月自動で作られた行。手入力の行と見分けが付かないと、
+                          「消しても来月また出てくる」理由が分からず何度も消す操作になるため印を付ける。 */}
+                      {item.recurring_id && <span className="ml-2 text-info">毎月の立替</span>}
                     </p>
                   </div>
                   <span className="shrink-0 text-sm font-medium text-foreground">¥{item.amount.toLocaleString()}</span>

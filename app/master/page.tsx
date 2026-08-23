@@ -17,7 +17,7 @@ import ErrorToast from '@/app/components/error-toast'
 import { FormDialog } from '@/app/components/form-dialog'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Contractor, Client, Assignment, ClientBillingItem, PayrollRecipient } from '@/lib/schema'
-import type { GoogleDriveStatus, PayrollKind } from '@/lib/ui-types'
+import type { GoogleDriveStatus, PayrollKind, RecurringReimbursementWithRecipient } from '@/lib/ui-types'
 import { PAYROLL_KINDS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecipient, payrollDeductions, payrollNet } from '@/lib/payroll'
 
@@ -224,6 +224,7 @@ function PayrollSection({ onError }: { onError: (msg: string) => void }) {
   }
 
   return (
+    <>
     <div className="rounded-lg border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
         <div className="min-w-[12rem] flex-1">
@@ -336,6 +337,11 @@ function PayrollSection({ onError }: { onError: (msg: string) => void }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+
+    {/* 毎月の定額立替は「誰に返すか」が役員報酬・給与の対象者そのものなので、続けて並べる。
+        対象者の一覧はここで取得済みなので、選択肢としてそのまま渡す（二重に取りに行かない）。 */}
+    <RecurringReimbursementSection recipients={recipients} onError={onError} />
+    </>
   )
 }
 
@@ -497,6 +503,328 @@ function PayrollFormDialog({ open, onClose, onSaved, onError, initial }: {
             振込リマインドの期日になります。未入力のときは{PAYROLL_DEFAULT_PAY_DAY}日として扱います。
           </p>
         </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
+// ─────────────────────────────────────────────
+// 毎月の定額立替経費
+// ─────────────────────────────────────────────
+// 毎月きまった額を本人が立て替えている分（通信費・駐車場代など）を毎月手で入力すると、
+// 入れ忘れれば返金漏れ、二度入れれば二重払いになる。ここに一度登録しておけば
+// 月次生成（毎月1日）が同じ内容の明細を自動で作るので、どちらの事故も起きない。
+function RecurringReimbursementSection({ recipients, onError }: {
+  recipients: PayrollRecipient[]
+  onError: (msg: string) => void
+}) {
+  const [items, setItems] = useState<RecurringReimbursementWithRecipient[]>([])
+  const [loading, setLoading] = useState(true)
+  const [addOpen, setAddOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<RecurringReimbursementWithRecipient | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<RecurringReimbursementWithRecipient | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/master/recurring-reimbursements')
+      if (!res.ok) throw new Error(await readErrorMessage(res, '毎月の立替経費の読み込みに失敗しました。'))
+      setItems(await res.json())
+    } catch (err) {
+      onError(err instanceof Error ? err.message : '毎月の立替経費の読み込みに失敗しました。')
+    } finally {
+      setLoading(false)
+    }
+  }, [onError])
+
+  useEffect(() => { load() }, [load])
+
+  async function setActive(id: string, active: boolean) {
+    try {
+      const res = await fetch(`/api/master/recurring-reimbursements/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '状態の変更に失敗しました。'))
+        return
+      }
+      load()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      const res = await fetch(`/api/master/recurring-reimbursements/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '削除に失敗しました。'))
+        return
+      }
+      load()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  // 選択肢に出すのは在籍中（active）の対象者だけ。非アクティブの人には月次生成が明細を作らないので、
+  // 選べてしまうと「登録したのに毎月出てこない」設定が作れてしまう。
+  const activeRecipients = recipients.filter((r) => r.active)
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <div className="min-w-[12rem] flex-1">
+          <h2 className="font-medium">毎月の立替経費</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ここに登録すると、毎月1日にその月の立替明細が自動で作られます。金額が違う月は、ダッシュボードの立替明細から直せます。
+          </p>
+        </div>
+        <Button
+          size="sm"
+          className="h-11 md:h-7"
+          onClick={() => setAddOpen(true)}
+          disabled={activeRecipients.length === 0}
+        >
+          + 毎月の立替を追加
+        </Button>
+      </div>
+
+      <div className="px-4 py-3">
+        {loading ? (
+          <p className="text-sm text-muted-foreground">読み込み中…</p>
+        ) : activeRecipients.length === 0 ? (
+          <p className="text-sm text-muted-foreground">先に「役員報酬・給与」で対象者を登録してください</p>
+        ) : items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">毎月の立替は登録されていません</p>
+        ) : (
+          <div className="space-y-2">
+            {items.map((it) => (
+              <div key={it.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-2 last:border-b-0 last:pb-0">
+                <span className={`min-w-[6rem] text-sm ${it.active ? 'text-muted-foreground' : 'text-muted-foreground line-through'}`}>
+                  {it.payroll_recipients?.name ?? '(対象者不明)'}
+                </span>
+                <span className={`min-w-[8rem] flex-1 text-sm font-medium ${it.active ? '' : 'text-muted-foreground line-through'}`}>
+                  {it.description}
+                </span>
+                <span className="text-sm font-semibold text-foreground">¥{it.amount.toLocaleString()}</span>
+                <span className="text-xs text-muted-foreground">{it.start_year}年{it.start_month}月から</span>
+                {/* 停止中は「登録は残っているが今月から作られない」状態。消したのと見分けが付かないと
+                    再開の操作にたどり着けないため、行に必ず状態を出す。 */}
+                <span className={`rounded px-2 py-0.5 text-xs ${it.active ? 'bg-success-subtle text-success' : 'bg-secondary text-muted-foreground'}`}>
+                  {it.active ? '有効' : '停止中'}
+                </span>
+                <button onClick={() => setEditTarget(it)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
+                {it.active ? (
+                  <button onClick={() => setActive(it.id, false)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>停止</button>
+                ) : (
+                  <button onClick={() => setActive(it.id, true)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>再開</button>
+                )}
+                <button onClick={() => setDeleteTarget(it)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <RecurringReimbursementFormDialog
+        open={addOpen}
+        recipients={activeRecipients}
+        onClose={() => setAddOpen(false)}
+        onSaved={() => { setAddOpen(false); load() }}
+        onError={onError}
+        initial={null}
+      />
+      <RecurringReimbursementFormDialog
+        open={!!editTarget}
+        recipients={activeRecipients}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => { setEditTarget(null); load() }}
+        onError={onError}
+        initial={editTarget}
+      />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>毎月の立替を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.description}」を削除すると、来月からは自動で作られなくなります。
+              すでに登録済みの明細は消えません（過去月の振込額が後から変わらないようにするためです）。
+              一時的に止めたいだけなら「停止」を使ってください。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteTarget) remove(deleteTarget.id)
+                setDeleteTarget(null)
+              }}
+            >
+              削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// 開始月は type="month"（YYYY-MM）で受け取り、DBの start_year / start_month に分けて送る。
+// 年と月を別々の入力欄にすると「2026年13月」のような組み合わせが作れてしまうため、
+// ブラウザ標準の月ピッカーに任せる（既存の契約開始月と同じ流儀）。
+function monthInputValue(year: number, month: number) {
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
+function RecurringReimbursementFormDialog({ open, recipients, onClose, onSaved, onError, initial }: {
+  open: boolean
+  recipients: PayrollRecipient[]
+  onClose: () => void
+  onSaved: () => void
+  onError: (msg: string) => void
+  initial: RecurringReimbursementWithRecipient | null
+}) {
+  const [recipientId, setRecipientId] = useState('')
+  const [description, setDescription] = useState('')
+  const [amount, setAmount] = useState('')
+  const [startMonth, setStartMonth] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setRecipientId(initial?.recipient_id ?? recipients[0]?.id ?? '')
+    setDescription(initial?.description ?? '')
+    setAmount(initial ? String(initial.amount) : '')
+    if (initial) {
+      setStartMonth(monthInputValue(initial.start_year, initial.start_month))
+    } else {
+      // 既定は今月。「今月から始める」が大半で、過去に遡って作りたい場面はほぼ無いため。
+      const today = new Date()
+      setStartMonth(monthInputValue(today.getFullYear(), today.getMonth() + 1))
+    }
+  }, [open, initial, recipients])
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    const [startYearStr, startMonthStr] = startMonth.split('-')
+    if (!startYearStr || !startMonthStr) {
+      onError('開始月を入力してください。')
+      return
+    }
+    setSaving(true)
+    // 編集では対象者を送らない（サーバー側も受け取らない）。付け替えを許すと、
+    // 生成済みの明細が「誰の立替か」と食い違うため。
+    const payload = initial
+      ? {
+          description,
+          amount: amount.trim() === '' ? 0 : Number(amount),
+          start_year: Number(startYearStr),
+          start_month: Number(startMonthStr),
+        }
+      : {
+          recipient_id: recipientId,
+          description,
+          amount: amount.trim() === '' ? 0 : Number(amount),
+          start_year: Number(startYearStr),
+          start_month: Number(startMonthStr),
+        }
+    try {
+      const res = initial
+        ? await fetch(`/api/master/recurring-reimbursements/${initial.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+        : await fetch('/api/master/recurring-reimbursements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '毎月の立替経費の保存に失敗しました。'))
+        return
+      }
+      onSaved()
+    } catch {
+      // 通信断でも fetch は例外になる。setSaving を戻さないと「保存中…」で固着する。
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <FormDialog open={open} onClose={onClose} title={initial ? '毎月の立替を編集' : '毎月の立替を追加'}>
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <label className="mb-1 block text-sm font-medium">対象者 <span className="text-danger">*</span></label>
+          <select
+            required
+            value={recipientId}
+            onChange={(e) => setRecipientId(e.target.value)}
+            disabled={!!initial}
+            className="w-full rounded border px-3 py-2 text-sm disabled:text-muted-foreground"
+          >
+            {recipients.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}（{PAYROLL_KIND_LABEL[r.kind]}）</option>
+            ))}
+          </select>
+          {initial && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              対象者は変更できません。別の人に付け替えたいときは、この設定を削除して登録し直してください。
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium">項目名 <span className="text-danger">*</span></label>
+          <input
+            required
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="例: 携帯電話料金（業務利用分）"
+            className="w-full rounded border px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">毎月の立替明細に、この名前でそのまま並びます。</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium">金額 <span className="text-danger">*</span></label>
+            <input
+              required
+              type="number"
+              inputMode="numeric"
+              min="1"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="例: 5000"
+              className="w-full rounded border px-3 py-2 text-right text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">開始月 <span className="text-danger">*</span></label>
+            <input
+              required
+              type="month"
+              value={startMonth}
+              onChange={(e) => setStartMonth(e.target.value)}
+              className="w-full rounded border px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          開始月より前の月には作られません。止めるときは一覧の「停止」を押してください（終了月は登録しません）。
+        </p>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>

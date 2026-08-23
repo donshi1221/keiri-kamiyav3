@@ -11,6 +11,7 @@ import type {
   PayrollRecipient,
   MonthlyPayrollRecord,
   PayrollReimbursementItem,
+  PayrollRecurringReimbursement,
   PaymentRequest,
 } from './schema'
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
@@ -394,6 +395,7 @@ export type PayrollRecordWithRecipient = MonthlyPayrollRecord & {
 }
 
 // 立替経費の精算明細1行。画面が扱う形とDBの列を1対1に保つため、列の型をそのまま再輸出する。
+// recurring_id（毎月の定額立替から自動生成された行の印）も、この再輸出でそのまま画面に伝わる。
 export type PayrollReimbursement = PayrollReimbursementItem
 
 // 明細の新規作成・編集で画面が送る値。検証の正本は lib/validation の
@@ -402,6 +404,22 @@ export interface PayrollReimbursementInput {
   item_date: string | null
   description: string
   amount: number
+}
+
+// 毎月の定額立替のマスタ1行。一覧では誰の分かが分からないと選べないので、対象者名を結合して返す。
+export type RecurringReimbursementWithRecipient = PayrollRecurringReimbursement & {
+  payroll_recipients: Pick<PayrollRecipient, 'id' | 'name' | 'kind' | 'active'> | null
+}
+
+// マスタ画面の登録・編集フォームが送る値。検証の正本は lib/validation の
+// recurringReimbursementCreateSchema で、これは画面側が同じ形を組み立てるための型。
+export interface RecurringReimbursementInput {
+  recipient_id: string
+  description: string
+  amount: number
+  start_year: number
+  start_month: number
+  active?: boolean
 }
 
 // ─── Googleドライブ保存（lib/google-drive）─────────────────────────────

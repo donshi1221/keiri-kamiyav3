@@ -1,6 +1,6 @@
 import { db } from './db'
-import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords } from './schema'
-import { eq } from 'drizzle-orm'
+import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords, payrollRecurringReimbursements, payrollReimbursementItems } from './schema'
+import { and, eq } from 'drizzle-orm'
 
 function isPaymentActiveForMonth(
   assignment: { payment_start_month: string | null; payment_count: number | null },
@@ -103,5 +103,50 @@ export async function generateMonthlyRecords(year: number, month: number) {
     .values({ year, month })
     .onConflictDoNothing()
 
-  return { assignmentCount: payableAssignments.length, clientCount: activeItems.length, payrollCount: activeRecipients.length }
+  // 毎月の定額立替。役員報酬と同じく「在籍している限り毎月発生する」ものだが、
+  // 開始月より前の月には作らない（登録した瞬間に過去の月まで振込額が増えると事故になるため）。
+  // 対象者が active=false（＝在籍していない）なら生成しない。退職・辞任した人に返す立替は発生せず、
+  // 気付かないまま毎月の振込額に積み上がる方が危ないため、対象者の在籍を生成の前提条件にする。
+  //
+  // ここを最後に置くのは、後から足した生成が既存の生成（支払い・請求・給与・月次タスク）を
+  // 巻き添えにしないため。このブロックで例外が出ても、上の4つはすでに書き込み済みで残る。
+  const activeRecurring = await db
+    .select({
+      id: payrollRecurringReimbursements.id,
+      recipient_id: payrollRecurringReimbursements.recipient_id,
+      description: payrollRecurringReimbursements.description,
+      amount: payrollRecurringReimbursements.amount,
+      start_year: payrollRecurringReimbursements.start_year,
+      start_month: payrollRecurringReimbursements.start_month,
+    })
+    .from(payrollRecurringReimbursements)
+    .innerJoin(payrollRecipients, eq(payrollRecurringReimbursements.recipient_id, payrollRecipients.id))
+    .where(and(eq(payrollRecurringReimbursements.active, true), eq(payrollRecipients.active, true)))
+
+  // 年月の大小は「年×12＋月」の通し番号にして比べる（年をまたぐ比較を場合分けせずに済む）。
+  const targetIndex = year * 12 + month
+  const dueRecurring = activeRecurring.filter((r) => r.start_year * 12 + r.start_month <= targetIndex)
+
+  if (dueRecurring.length > 0) {
+    // item_date（実際に立て替えた日）は定額設定には無いので null。日付が要る立替は手入力の行で足す。
+    // 二重生成は (recurring_id, year, month) の一意制約が止めるので、ここは何度呼ばれても増えない。
+    await db.insert(payrollReimbursementItems)
+      .values(dueRecurring.map((r) => ({
+        recipient_id: r.recipient_id,
+        year,
+        month,
+        item_date: null,
+        description: r.description,
+        amount: r.amount,
+        recurring_id: r.id,
+      })))
+      .onConflictDoNothing()
+  }
+
+  return {
+    assignmentCount: payableAssignments.length,
+    clientCount: activeItems.length,
+    payrollCount: activeRecipients.length,
+    recurringReimbursementCount: dueRecurring.length,
+  }
 }
