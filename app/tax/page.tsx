@@ -351,7 +351,9 @@ function ChatPanel({ sessionId, messages, streaming, setMessages, setStreaming, 
     }
 
     if (streamError) {
-      setErrorMsg('AI応答の生成中にエラーが発生しました。もう一度お試しください。')
+      // サーバーが返した文言をそのまま見せる。混雑・クォータ超過のときは「待てば直る」と分かる
+      // 文面が届くため、汎用文言で塗りつぶすと利用者が原因を判断できなくなる。
+      setErrorMsg(streamError || 'AI応答の生成中にエラーが発生しました。もう一度お試しください。')
     }
     if (isFirstMessage) {
       onFirstMessageSent()

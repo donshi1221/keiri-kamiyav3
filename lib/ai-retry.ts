@@ -88,6 +88,37 @@ export async function withRequestTimeout<T>(timeoutMs: number, call: () => Promi
   }
 }
 
+// withRequestTimeout の「ストリーミング版」。制限時間を SDK の timeout ではなく、
+// こちらが握る中断スイッチ（AbortSignal）で与える。
+//
+// なぜ分けるのか:
+// SDK の requestOptions.timeout は「時間が来たら fetch ごと中断する」仕組みで、本文を受け取っている
+// 最中でも容赦なく切る。1回で答えが返る読み取り（generateContent）ならそれで構わないが、
+// 少しずつ本文が届くストリーミングでは、長い回答が途中でぶつ切りになってしまう。
+// signal を自分で持てば「返事が来ない間だけ見張り、届いたら見張りを解く」ができる。
+// call が返った時点で見張りを解除するので、呼び出し側は「ここまで来たら打ち切らないでほしい」地点で
+// resolve すればよい（税務チャットでは最初の本文が届いた時点）。解除後も signal は中断されないため、
+// 残りの本文は最後まで流れる。
+//
+// signal は自分のタイマーからしか中断しないので、ここで観測できる中断は制限時間によるものだと
+// 言い切れる。だから withRequestTimeout と同じく「制限時間切れ」に置き換えてよい
+// （置き換えると isTransientAiError が一時的な失敗と判定し、次のモデルへの切り替えにつながる）。
+export async function withAbortSignalTimeout<T>(
+  timeoutMs: number,
+  call: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await call(controller.signal)
+  } catch (err) {
+    if (isSdkAbortError(err)) throw new AiRequestTimeoutError(timeoutMs, { cause: err })
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // 「やり直せば直るかもしれない失敗」かどうか。
 export function isTransientAiError(err: unknown): boolean {
   // 制限時間切れは「相手が遅かった」だけで、こちらの入力に問題があったわけではない。
@@ -102,6 +133,21 @@ export function isTransientAiError(err: unknown): boolean {
   // （400番台のメッセージにたまたま timeout 等の語が混ざっていても再試行しないため）。
   if (status !== null) return RETRYABLE_STATUSES.has(status)
   return err instanceof Error && NETWORK_ERROR_PATTERN.test(err.message)
+}
+
+// 「AI側が混んでいる・枠を使い切っている」ことが原因の失敗かどうか。
+// 利用者に見せる文言を分けるために使う。原因の分からない汎用の文言だけだと
+// 「自分の書き方が悪いのか、待てば直るのか」が判断できず、同じ失敗を何度も繰り返すことになる。
+// isTransientAiError と違って通信エラー（相手に届いていない）は含めない。あれは待っても直らず、
+// 「混み合っています」と案内すると利用者を誤った対処へ誘導してしまう。
+// 制限時間切れを含めるのは、混雑したモデルが「失敗を返さず黙り込む」形で詰まるのを実測しているため
+// （lib/config.ts の AI_REQUEST_TIMEOUT_MS のコメント参照）。利用者への案内も「待って再試行」で同じ。
+export function isAiBusyError(err: unknown): boolean {
+  if (err instanceof AiRequestTimeoutError) return true
+  if (err instanceof Error && err.name === 'AiRequestTimeoutError') return true
+
+  const status = statusFromError(err)
+  return status !== null && RETRYABLE_STATUSES.has(status)
 }
 
 function sleep(ms: number): Promise<void> {

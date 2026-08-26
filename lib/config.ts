@@ -17,16 +17,16 @@ function floatFromEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 && n <= 1 ? n : fallback
 }
 
-// Gemini のモデル名（税務AIチャットが直接使い、下の切り替え一覧の先頭にもなる）。
+// Gemini のモデル名。まずこれを試し、駄目なら下の切り替え一覧の続きへ移る。
 // 固定バージョン名は提供終了で 429/404 になった実績があるため、常に最新を指す別名を既定にする。
 export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-flash-latest'
 
-// 書類の読み取り（lib/expense-extract・lib/invoice-extract）が使う、上から順に試すモデル名の一覧。
+// AI呼び出しが上から順に試すモデル名の一覧。
+// 書類の読み取り（lib/expense-extract・lib/invoice-extract・lib/payment-extract）と
+// 税務AIチャット（app/api/tax/chat）が共通で使う。
 // 実測で、同時刻・同じプロンプトでもモデルごとに可用性が違った:
 //   gemini-flash-latest → 503（混雑） / gemini-flash-lite-latest → 200 / gemini-pro-latest → 429（クォータ超過）
 // つまり混雑しているモデルを待って粘るより、別のモデルへ移ったほうが速く読める。
-// 税務AIチャットは対話的で利用者がその場でやり直せるため切り替えの対象にしておらず、
-// GEMINI_MODEL を直接参照し続ける。そちらの挙動を変えないよう一覧はここに別途持つ。
 const GEMINI_MODEL_FALLBACKS_RAW =
   process.env.GEMINI_MODEL_FALLBACKS?.trim() || `${GEMINI_MODEL},gemini-flash-lite-latest`
 // 重複を取り除くのは、GEMINI_MODEL を lite に切り替えたときに同じモデルを2回試して
