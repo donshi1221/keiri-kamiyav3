@@ -167,6 +167,12 @@ export const invoiceExtractedPatchSchema = z.object({
   extracted_month: nullableIntField(1, 12, '対象月は1〜12の範囲で入力してください'),
 })
 
+// 保留の手動OK。納品シートの照合を飛ばし、人が確認した金額を月次レコードの実支払額として確定する。
+// 金額以外は請求書側の値をそのまま使うため、受け取る入力はこの1項目だけ。
+export const invoiceManualApproveSchema = z.object({
+  amount: moneyInt,
+})
+
 // 注意行の「確認済みにする / 取り消す」。key は画面が注意行の本文から復元したキー
 // （lib/invoice-match の cautionKeyOf）で、invoice_uploads.confirmed_cautions に貯める。
 export const cautionConfirmSchema = z.object({

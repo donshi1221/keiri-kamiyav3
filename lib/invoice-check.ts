@@ -1,7 +1,7 @@
 import 'server-only'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { assignments, contractors, expenses, invoiceUploads, monthlyRecords } from '@/lib/schema'
+import { assignments, clients, contractors, expenses, invoiceUploads, monthlyRecords } from '@/lib/schema'
 import { checkAssignmentDelivery } from '@/lib/sheets'
 import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delivery-status'
 import { COMPANY_NAME } from '@/lib/config'
@@ -536,6 +536,34 @@ async function resolveContractor(issuer: string): Promise<{ contractor: Contract
   return { contractor: matched[0] }
 }
 
+// 委託者の有効なアサインにぶら下がる、指定した支払月の月次レコードを引く。
+// 「請求書1件に対応する月次レコードはどれか」の答えを1か所にまとめるための関数。
+// 受領チェックの自動付与（markInvoiceReceived）と、保留の手動OK（app/api/invoice-check/[id]/approve）が
+// 別々の条件で行を探すと、片方だけ当たって食い違うため共用する。
+export async function findPayoutMonthlyRecords(
+  contractorId: string,
+  year: number,
+  month: number
+): Promise<{ id: string; clientName: string; actualPayoutAmount: number | null }[]> {
+  return db
+    .select({
+      id: monthlyRecords.id,
+      clientName: clients.name,
+      actualPayoutAmount: monthlyRecords.actual_payout_amount,
+    })
+    .from(monthlyRecords)
+    .innerJoin(assignments, eq(monthlyRecords.assignment_id, assignments.id))
+    .innerJoin(clients, eq(assignments.client_id, clients.id))
+    .where(
+      and(
+        eq(assignments.contractor_id, contractorId),
+        eq(assignments.active, true),
+        eq(monthlyRecords.year, year),
+        eq(monthlyRecords.month, month)
+      )
+    )
+}
+
 // 照合OK＝「その委託者からその月の請求書が正しく届いた」ということなので、
 // 月次レコードの受領チェックを人手を介さず付ける。
 // 既に日時が入っている行は上書きしない（画面のトグルAPIと同じく「最初にチェックした日時」を正とする）。
@@ -546,24 +574,18 @@ async function markInvoiceReceived(
   year: number,
   month: number
 ): Promise<{ marked: number; total: number }> {
-  const assignmentRows = await db
-    .select({ id: assignments.id })
-    .from(assignments)
-    .where(and(eq(assignments.contractor_id, contractorId), eq(assignments.active, true)))
-  if (assignmentRows.length === 0) return { marked: 0, total: 0 }
-
-  const target = and(
-    inArray(monthlyRecords.assignment_id, assignmentRows.map((a) => a.id)),
-    eq(monthlyRecords.year, year),
-    eq(monthlyRecords.month, month)
-  )
-  const existing = await db.select({ id: monthlyRecords.id }).from(monthlyRecords).where(target)
+  const existing = await findPayoutMonthlyRecords(contractorId, year, month)
   if (existing.length === 0) return { marked: 0, total: 0 }
 
   const updated = await db
     .update(monthlyRecords)
     .set({ invoice_received_at: new Date().toISOString() })
-    .where(and(target, isNull(monthlyRecords.invoice_received_at)))
+    .where(
+      and(
+        inArray(monthlyRecords.id, existing.map((r) => r.id)),
+        isNull(monthlyRecords.invoice_received_at)
+      )
+    )
     .returning({ id: monthlyRecords.id })
 
   return { marked: updated.length, total: existing.length }

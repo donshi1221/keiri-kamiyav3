@@ -731,6 +731,82 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
   )
 }
 
+// ─── 保留の手動OK ───────────────────────────────────────────────
+// 納品シートを読めない・本数が揃わないといった理由で保留のまま止まる行がある。金額そのものは
+// 人が納品状況を見れば確認できるため、実支払額を入力して照合をやり直せる口をここに置く。
+
+function ManualApproveDialog({ target, onClose, onApproved, onError }: {
+  target: InvoiceCheckRow | null
+  onClose: () => void
+  onApproved: (skipped: string | null) => void
+  onError: (msg: string) => void
+}) {
+  const [amount, setAmount] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setSaving(false)
+    // 多くの場合「請求書のとおりに支払う」ため、請求額をそのまま初期値にする。
+    setAmount(target.extracted_amount === null ? '' : String(target.extracted_amount))
+  }, [target])
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!target) return
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/invoice-check/${target.id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: Number(amount) }),
+      })
+      setSaving(false)
+      if (!res.ok) {
+        onError(await readErrorMessage(res, '手動でのOKに失敗しました。'))
+        return
+      }
+      // 照合を行わなかった場合は一覧に何も出ないため、理由を呼び出し側へ渡して画面に出す。
+      const data = (await res.json().catch(() => null)) as { skipped?: string } | null
+      onApproved(typeof data?.skipped === 'string' ? data.skipped : null)
+    } catch {
+      setSaving(false)
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  return (
+    <FormDialog open={!!target} onClose={onClose} title="手動でOKにする">
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          「{target?.file_name}」について、納品シートの照合をスキップし、入力した金額を実支払額として確定します。
+          確定後は入力した金額で自動照合をやり直すため、請求額と合っていなければNGになります。
+        </p>
+        <div>
+          <label className="text-sm font-medium block mb-1">実支払額</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="0"
+          />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || amount.trim() === ''}>
+            {saving ? '確定中…' : 'OKにする'}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
 export default function InvoiceCheckClient() {
   const [rows, setRows] = useState<InvoiceCheckRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -739,6 +815,7 @@ export default function InvoiceCheckClient() {
   const [deleteTarget, setDeleteTarget] = useState<InvoiceCheckRow | null>(null)
   const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
   const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
+  const [approveTarget, setApproveTarget] = useState<InvoiceCheckRow | null>(null)
   const [cautionBusyId, setCautionBusyId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -838,6 +915,13 @@ export default function InvoiceCheckClient() {
 
   async function handleEdited(skipped: string | null) {
     setEditTarget(null)
+    setError(skipped)
+    await load()
+  }
+
+  // 手動OKはサーバー側で照合まで済ませて返るため、一覧を取り直すだけでよい。
+  async function handleApproved(skipped: string | null) {
+    setApproveTarget(null)
     setError(skipped)
     await load()
   }
@@ -1000,6 +1084,17 @@ export default function InvoiceCheckClient() {
                         >
                           {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                         </button>
+                        {/* 保留は納品シート照合が原因のことが多い。金額を人が入れれば進められるため、保留の行にだけ出す。 */}
+                        {r.status === 'hold' && (
+                          <button
+                            type="button"
+                            onClick={() => setApproveTarget(r)}
+                            disabled={busy(r.id)}
+                            className="whitespace-nowrap text-info hover:underline disabled:text-muted-foreground"
+                          >
+                            手動でOKにする
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(r)}
@@ -1121,6 +1216,17 @@ export default function InvoiceCheckClient() {
                   >
                     {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                   </Button>
+                  {r.status === 'hold' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11"
+                      onClick={() => setApproveTarget(r)}
+                      disabled={busy(r.id)}
+                    >
+                      手動でOKにする
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" className="h-11 text-danger" onClick={() => setDeleteTarget(r)}>
                     削除
                   </Button>
@@ -1142,6 +1248,13 @@ export default function InvoiceCheckClient() {
         target={expenseTarget}
         onClose={() => setExpenseTarget(null)}
         onRegistered={handleExpensesRegistered}
+        onError={setError}
+      />
+
+      <ManualApproveDialog
+        target={approveTarget}
+        onClose={() => setApproveTarget(null)}
+        onApproved={handleApproved}
         onError={setError}
       />
 
