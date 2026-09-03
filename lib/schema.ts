@@ -65,6 +65,10 @@ export const clientBillingItems = pgTable('client_billing_items', {
   // 月あたりの動画本数。サービス（内訳）ごとに本数が異なるため内訳側に持つ。
   // 例: 同じクライアントでも「Instagram運用代行 8本」「YouTube運用代行 4本」。
   monthly_video_count: integer('monthly_video_count').notNull().default(0),
+  // 初回のみ請求する内訳（初期費用・初回制作費など）の印。
+  // true のとき contract_start の月にだけ請求が立つ（contract_months は 1 に固定する）。
+  // 「1ヶ月だけの継続契約」と区別が付かないと、クライアントの月額合計に初期費用が混ざるため列で持つ。
+  one_time: boolean('one_time').notNull().default(false),
   contract_start: date('contract_start', { mode: 'string' }),
   contract_months: integer('contract_months'),
   active: boolean('active').notNull().default(true),

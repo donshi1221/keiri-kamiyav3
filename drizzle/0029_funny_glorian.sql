@@ -1,0 +1,1 @@
+ALTER TABLE "client_billing_items" ADD COLUMN "one_time" boolean DEFAULT false NOT NULL;

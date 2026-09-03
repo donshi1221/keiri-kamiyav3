@@ -21,6 +21,7 @@ export async function PATCH(
     if (v.label !== undefined) patch.label = v.label?.trim() ?? ''
     if (v.billing_amount !== undefined) patch.billing_amount = v.billing_amount
     if (v.monthly_video_count !== undefined) patch.monthly_video_count = v.monthly_video_count
+    if (v.one_time !== undefined) patch.one_time = v.one_time
     if (v.contract_start !== undefined) patch.contract_start = v.contract_start ?? null
     if (v.contract_months !== undefined) patch.contract_months = v.contract_months
     if (v.active !== undefined) patch.active = v.active
@@ -28,6 +29,24 @@ export async function PATCH(
 
     if (Object.keys(patch).length === 0) {
       return Response.json({ error: '更新する項目がありません。' }, { status: 400 })
+    }
+
+    // 初回のみ（初期費用）かどうかは、今回の送信内容だけでは判定できない。
+    // 例えば one_time を送らずに契約期間だけ更新されると、既存の初期費用が毎月請求に化けてしまう。
+    // 未送信の項目は既存行の値を使って判定する。
+    const [current] = await db.select().from(clientBillingItems).where(eq(clientBillingItems.id, id))
+    if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
+
+    const oneTime = v.one_time ?? current.one_time
+    if (oneTime) {
+      const contractStart = v.contract_start !== undefined ? (v.contract_start ?? null) : current.contract_start
+      // 請求月が無いと毎月請求が立ち続けるため、初期費用としては保存させない。
+      if (!contractStart) {
+        return Response.json({ error: '初回のみの内訳には請求月が必要です。' }, { status: 400 })
+      }
+      // 初回のみ＝請求月の1ヶ月だけ有効。動画の本数も持たない。
+      patch.contract_months = 1
+      patch.monthly_video_count = 0
     }
 
     const [data] = await db.update(clientBillingItems).set(patch).where(eq(clientBillingItems.id, id)).returning()

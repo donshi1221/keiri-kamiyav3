@@ -59,6 +59,9 @@ export const billingItemCreateSchema = z.object({
   label: z.string().trim().nullish(),
   billing_amount: moneyInt.optional(),
   monthly_video_count: countInt.optional(),
+  // 初回のみ（初期費用）。項目間の整合（契約期間=1・本数=0・請求月の必須）はAPI側で守る。
+  // ここで .refine() を使うと billingItemPatchSchema の .partial() が呼べなくなるため。
+  one_time: z.boolean().optional(),
   contract_start: z.string().nullish(),
   contract_months: monthsField.optional(),
   active: z.boolean().optional(),

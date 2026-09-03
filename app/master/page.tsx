@@ -20,6 +20,7 @@ import type { Contractor, Client, Assignment, ClientBillingItem, PayrollRecipien
 import type { GoogleDriveStatus, PayrollKind, RecurringReimbursementWithRecipient } from '@/lib/ui-types'
 import { PAYROLL_KINDS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecipient, payrollDeductions, payrollNet } from '@/lib/payroll'
+import { nowJST } from '@/lib/dates'
 
 type AssignmentWithRelations = Assignment & {
   contractors: Pick<Contractor, 'id' | 'name' | 'contractor_type'> | null
@@ -43,12 +44,33 @@ function clientVideoCount(cl: ClientWithItems): number {
 // 広げた分は負マージンで打ち消して行の高さ（＝文字の高さ）を変えない。md 以上は元の詰めた表示に戻す。
 const TAP_TEXT_LINK = 'inline-flex min-h-11 items-center px-2 -my-3.5 md:min-h-0 md:p-0 md:my-0'
 
+// 請求内訳の種類。「毎月請求」＝契約期間のあいだ毎月、「初回のみ」＝請求月の1回だけ（初期費用など）。
+const BILLING_KINDS = [
+  { oneTime: false, label: '毎月請求' },
+  { oneTime: true, label: '初回のみ' },
+] as const
+// 「初回のみ」へ切り替えたときに内訳名が空なら入れる既定値。
+const ONE_TIME_DEFAULT_LABEL = '初期費用'
+
+// 当月（YYYY-MM）。月次記録は当月ぶんしか生成されないため、初回のみの請求月は当月以降に限る。
+function currentMonthValue(): string {
+  const d = nowJST()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+// 「2026-09-01」→「2026年9月」。初回のみの内訳は年月だけ分かればよいので日は落とす。
+function formatBillingMonth(contractStart: string): string {
+  const [year, month] = contractStart.split('-')
+  return `${year}年${Number(month)}月`
+}
+
 // フォーム内で編集中の内訳1行。既存はid付き、新規追加はid未設定（保存時にPOSTで採番）。
 type ItemDraft = {
   id?: string
   label: string
   billing_amount: string
   monthly_video_count: string
+  one_time: boolean
   contract_start: string
   contract_months: string
   active: boolean
@@ -1394,7 +1416,13 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
           const myAssignments = assignments.filter((a) => a.client_id === cl.id)
           const items = cl.billing_items ?? []
           const activeItems = items.filter((it) => it.active)
-          const totalBilling = activeItems.reduce((sum, it) => sum + it.billing_amount, 0)
+          // 毎月入ってくる額（月額）と1回だけの額（初期費用）は性質が違うので分けて出す。
+          const monthlyBilling = activeItems.filter((it) => !it.one_time).reduce((sum, it) => sum + it.billing_amount, 0)
+          // 請求済み（請求月が過去）の初期費用を出し続けると、これから入るお金と誤解するため当月以降だけ。
+          const thisMonth = currentMonthValue()
+          const oneTimeBilling = activeItems
+            .filter((it) => it.one_time && it.contract_start && it.contract_start.slice(0, 7) >= thisMonth)
+            .reduce((sum, it) => sum + it.billing_amount, 0)
           const totalVideoCount = clientVideoCount(cl)
           return (
             <div key={cl.id} className="rounded-lg border bg-card">
@@ -1403,8 +1431,11 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                 {totalVideoCount > 0 && (
                   <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">月{totalVideoCount}本</span>
                 )}
-                {totalBilling > 0 && (
-                  <span className="text-sm text-muted-foreground">¥{totalBilling.toLocaleString()}</span>
+                {monthlyBilling > 0 && (
+                  <span className="text-sm text-muted-foreground">月額 ¥{monthlyBilling.toLocaleString()}</span>
+                )}
+                {oneTimeBilling > 0 && (
+                  <span className="text-sm text-muted-foreground">初期費用 ¥{oneTimeBilling.toLocaleString()}</span>
                 )}
                 <button onClick={() => setEditClient(cl)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
                 <button onClick={() => setDeleteTarget(cl)} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
@@ -1422,10 +1453,15 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                         <span className={!it.active ? 'text-muted-foreground' : 'text-muted-foreground'}>
                           {it.billing_amount > 0 ? `¥${it.billing_amount.toLocaleString()}` : '—'}
                         </span>
-                        {it.monthly_video_count > 0 && (
+                        {!it.one_time && it.monthly_video_count > 0 && (
                           <span className="text-xs text-muted-foreground">月{it.monthly_video_count}本</span>
                         )}
-                        {it.contract_start && (
+                        {it.one_time && (
+                          <span className="text-xs text-muted-foreground">
+                            初回のみ{it.contract_start ? `・${formatBillingMonth(it.contract_start)}` : ''}
+                          </span>
+                        )}
+                        {!it.one_time && it.contract_start && (
                           <span className="text-xs text-muted-foreground">
                             {it.contract_start.slice(0, 7)}
                             {it.contract_months ? `〜${it.contract_months}ヶ月` : '〜'}
@@ -1712,18 +1748,20 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
 // ─────────────────────────────────────────────
 // 内訳ドラフトの空行を作る。
 function emptyItemDraft(): ItemDraft {
-  return { label: '', billing_amount: '', monthly_video_count: '', contract_start: '', contract_months: '', active: true }
+  return { label: '', billing_amount: '', monthly_video_count: '', one_time: false, contract_start: '', contract_months: '', active: true }
 }
 
 // APIへ送る内訳ペイロードを組み立てる。
 // 契約開始は type="month"（YYYY-MM）で受け取り、date列に入れられるよう「月初(YYYY-MM-01)」へ正規化する。
+// 初回のみは本数を持たず請求月の1ヶ月だけ有効。サーバ側でも同じ値に正すが、画面からも揃えて送る。
 function itemPayload(d: ItemDraft) {
   return {
     label: d.label.trim(),
     billing_amount: d.billing_amount ? Number(d.billing_amount) : 0,
-    monthly_video_count: d.monthly_video_count ? Number(d.monthly_video_count) : 0,
+    monthly_video_count: d.one_time ? 0 : (d.monthly_video_count ? Number(d.monthly_video_count) : 0),
+    one_time: d.one_time,
     contract_start: d.contract_start ? `${d.contract_start}-01` : null,
-    contract_months: d.contract_months ? Number(d.contract_months) : null,
+    contract_months: d.one_time ? 1 : (d.contract_months ? Number(d.contract_months) : null),
     active: d.active,
   }
 }
@@ -1759,6 +1797,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           label: it.label,
           billing_amount: it.billing_amount ? it.billing_amount.toString() : '',
           monthly_video_count: it.monthly_video_count ? it.monthly_video_count.toString() : '',
+          one_time: it.one_time,
           contract_start: it.contract_start ? it.contract_start.slice(0, 7) : '',
           contract_months: it.contract_months ? it.contract_months.toString() : '',
           active: it.active,
@@ -1772,6 +1811,21 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
 
   function updateItem(index: number, patch: Partial<ItemDraft>) {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)))
+  }
+
+  // 「初回のみ」へ切り替えたときは、初期費用として必要な値を先に埋めておく（入力済みなら触らない）。
+  // 請求月は必須かつ当月以降なので、空なら当月を入れて選び直すだけで済むようにする。
+  function setItemKind(index: number, oneTime: boolean) {
+    setItems((prev) => prev.map((it, i) => {
+      if (i !== index) return it
+      if (!oneTime) return { ...it, one_time: false }
+      return {
+        ...it,
+        one_time: true,
+        label: it.label.trim() ? it.label : ONE_TIME_DEFAULT_LABEL,
+        contract_start: it.contract_start || currentMonthValue(),
+      }
+    }))
   }
 
   function addItem() {
@@ -1926,6 +1980,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           <p className="mb-2 text-xs text-muted-foreground">
             内訳ごとに金額・月本数・契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
             月本数は編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。
+            初期費用のように1回だけ請求するものは「初回のみ」を選ぶと、その請求月にだけ請求が立ちます。
           </p>
 
           <div className="space-y-3">
@@ -1949,23 +2004,54 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                     </button>
                   )}
                 </div>
+                <div className="flex flex-wrap items-center gap-x-4">
+                  {BILLING_KINDS.map((kind) => (
+                    <label key={kind.label} className="inline-flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground md:min-h-0">
+                      <input
+                        type="radio"
+                        name={`billing-kind-${index}`}
+                        checked={it.one_time === kind.oneTime}
+                        onChange={() => setItemKind(index, kind.oneTime)}
+                        className="size-4"
+                      />
+                      {kind.label}
+                    </label>
+                  ))}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs text-muted-foreground block mb-1">請求額</label>
                     <input type="number" inputMode="numeric" value={it.billing_amount} onChange={(e) => updateItem(index, { billing_amount: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
                   </div>
+                  {/* 初回のみ（初期費用）に動画の本数と契約期間は無いので、欄ごと出さない。 */}
+                  {!it.one_time && (
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">月本数</label>
+                      <input type="number" inputMode="numeric" min="0" value={it.monthly_video_count} onChange={(e) => updateItem(index, { monthly_video_count: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
+                    </div>
+                  )}
                   <div>
-                    <label className="text-xs text-muted-foreground block mb-1">月本数</label>
-                    <input type="number" inputMode="numeric" min="0" value={it.monthly_video_count} onChange={(e) => updateItem(index, { monthly_video_count: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
+                    <label className="text-xs text-muted-foreground block mb-1">{it.one_time ? '請求月' : '契約開始月'}</label>
+                    {/* 当月以降の縛りは新規追加の行（idがまだ無い）だけに掛ける。既存の内訳は請求済みで
+                        請求月が過去になるのが正常で、minを掛けるとそのクライアントを保存し直せなくなるため。 */}
+                    <input
+                      type="month"
+                      required={it.one_time}
+                      min={it.one_time && !it.id ? currentMonthValue() : undefined}
+                      value={it.contract_start}
+                      onChange={(e) => updateItem(index, { contract_start: e.target.value })}
+                      className="w-full border rounded px-2 py-1.5 text-sm"
+                    />
+                    {it.one_time && !it.id && (
+                      <p className="mt-1 text-xs text-muted-foreground">当月以降を選んでください。</p>
+                    )}
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground block mb-1">契約開始月</label>
-                    <input type="month" value={it.contract_start} onChange={(e) => updateItem(index, { contract_start: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground block mb-1">契約期間（月）</label>
-                    <input type="number" inputMode="numeric" value={it.contract_months} onChange={(e) => updateItem(index, { contract_months: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="なし" min="1" />
-                  </div>
+                  {!it.one_time && (
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">契約期間（月）</label>
+                      <input type="number" inputMode="numeric" value={it.contract_months} onChange={(e) => updateItem(index, { contract_months: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="なし" min="1" />
+                    </div>
+                  )}
                 </div>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <input type="checkbox" checked={it.active} onChange={(e) => updateItem(index, { active: e.target.checked })} />
