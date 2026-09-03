@@ -53,11 +53,12 @@ export const clientCreateSchema = z.object({
 })
 export const clientPatchSchema = clientCreateSchema.partial()
 
-// 請求内訳（明細）。金額と契約期間を内訳ごとに個別に持つ。
+// 請求内訳（明細）。金額・月本数・契約期間を内訳ごとに個別に持つ。
 export const billingItemCreateSchema = z.object({
   client_id: z.uuid({ message: 'クライアントの選択が不正です' }),
   label: z.string().trim().nullish(),
   billing_amount: moneyInt.optional(),
+  monthly_video_count: countInt.optional(),
   contract_start: z.string().nullish(),
   contract_months: monthsField.optional(),
   active: z.boolean().optional(),

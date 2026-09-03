@@ -32,6 +32,13 @@ type AssignmentWithRelations = Assignment & {
 // GET /api/master/clients はクライアントに請求内訳(billing_items)をぶら下げて返す。
 type ClientWithItems = Client & { billing_items: ClientBillingItem[] }
 
+// クライアントの月本数は請求内訳ごとに持つため、有効な内訳の合計を「そのクライアントの月本数」として扱う。
+function clientVideoCount(cl: ClientWithItems): number {
+  return (cl.billing_items ?? [])
+    .filter((it) => it.active)
+    .reduce((sum, it) => sum + (it.monthly_video_count ?? 0), 0)
+}
+
 // 「編集」「削除」などのテキストリンク用。スマホでは実効タップ領域を 44px 高にし、
 // 広げた分は負マージンで打ち消して行の高さ（＝文字の高さ）を変えない。md 以上は元の詰めた表示に戻す。
 const TAP_TEXT_LINK = 'inline-flex min-h-11 items-center px-2 -my-3.5 md:min-h-0 md:p-0 md:my-0'
@@ -41,6 +48,7 @@ type ItemDraft = {
   id?: string
   label: string
   billing_amount: string
+  monthly_video_count: string
   contract_start: string
   contract_months: string
   active: boolean
@@ -1041,7 +1049,7 @@ function GoogleDriveSection({ onError }: { onError: (msg: string) => void }) {
 function ContractorTab({ contractors, assignments, clients, onRefresh, onError }: {
   contractors: Contractor[]
   assignments: AssignmentWithRelations[]
-  clients: Client[]
+  clients: ClientWithItems[]
   onRefresh: () => void
   onError: (msg: string) => void
 }) {
@@ -1151,7 +1159,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                       // 編集者のフル納品額 = 委託者の単価 × 担当クライアントの月本数。
                       // 保存はせず表示のたびに計算する（マスタ変更時の再計算漏れを防ぐ）。
                       const assignClient = clients.find((cl) => cl.id === a.client_id)
-                      const videoCount = assignClient?.monthly_video_count ?? 0
+                      const videoCount = assignClient ? clientVideoCount(assignClient) : 0
                       const fullDelivery =
                         c.contractor_type === 'video_editor' && c.unit_price > 0 && videoCount > 0
                           ? c.unit_price * videoCount
@@ -1310,6 +1318,8 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
 }) {
   const [addClientOpen, setAddClientOpen] = useState(false)
   const [editClient, setEditClient] = useState<ClientWithItems | null>(null)
+  // 新規登録したクライアント。登録直後に担当者もそのまま登録できるよう、続けてアサイン追加を開く。
+  const [followUpAssign, setFollowUpAssign] = useState<{ id: string; name: string } | null>(null)
   const [addAssignOpen, setAddAssignOpen] = useState<string | null>(null)
   const [editAssign, setEditAssign] = useState<AssignmentWithRelations | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
@@ -1385,12 +1395,13 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
           const items = cl.billing_items ?? []
           const activeItems = items.filter((it) => it.active)
           const totalBilling = activeItems.reduce((sum, it) => sum + it.billing_amount, 0)
+          const totalVideoCount = clientVideoCount(cl)
           return (
             <div key={cl.id} className="rounded-lg border bg-card">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b">
                 <span className="font-medium flex-1 min-w-[8rem]">{cl.name}</span>
-                {cl.monthly_video_count > 0 && (
-                  <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">月{cl.monthly_video_count}本</span>
+                {totalVideoCount > 0 && (
+                  <span className="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">月{totalVideoCount}本</span>
                 )}
                 {totalBilling > 0 && (
                   <span className="text-sm text-muted-foreground">¥{totalBilling.toLocaleString()}</span>
@@ -1411,6 +1422,9 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                         <span className={!it.active ? 'text-muted-foreground' : 'text-muted-foreground'}>
                           {it.billing_amount > 0 ? `¥${it.billing_amount.toLocaleString()}` : '—'}
                         </span>
+                        {it.monthly_video_count > 0 && (
+                          <span className="text-xs text-muted-foreground">月{it.monthly_video_count}本</span>
+                        )}
                         {it.contract_start && (
                           <span className="text-xs text-muted-foreground">
                             {it.contract_start.slice(0, 7)}
@@ -1439,7 +1453,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                       const assignContractor = contractors.find((c) => c.id === a.contractor_id)
                       const unitPrice = assignContractor?.contractor_type === 'video_editor' ? assignContractor.unit_price : 0
                       const fullDelivery =
-                        unitPrice > 0 && cl.monthly_video_count > 0 ? unitPrice * cl.monthly_video_count : null
+                        unitPrice > 0 && totalVideoCount > 0 ? unitPrice * totalVideoCount : null
                       return (
                         <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
                           <span className={`flex-1 min-w-[10rem] ${!a.active ? 'text-muted-foreground line-through' : ''}`}>
@@ -1447,7 +1461,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                             {a.contractor_payout_amount > 0 && ` ¥${a.contractor_payout_amount.toLocaleString()}`}
                             {fullDelivery !== null && (
                               <span className="text-xs text-muted-foreground">
-                                {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{unitPrice.toLocaleString()}×{cl.monthly_video_count}本）
+                                {' '}フル納品 ¥{fullDelivery.toLocaleString()}（¥{unitPrice.toLocaleString()}×{totalVideoCount}本）
                               </span>
                             )}
                           </span>
@@ -1469,7 +1483,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
       <ClientFormDialog
         open={addClientOpen}
         onClose={() => setAddClientOpen(false)}
-        onSaved={() => { setAddClientOpen(false); onRefresh() }}
+        onSaved={(created) => { setAddClientOpen(false); onRefresh(); if (created) setFollowUpAssign(created) }}
         onError={onError}
         initial={null}
       />
@@ -1502,6 +1516,20 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
           contractors={contractors}
           fixedClientId={editAssign.client_id}
           initial={editAssign}
+        />
+      )}
+      {followUpAssign && (
+        <AssignFormDialog
+          open
+          onClose={() => setFollowUpAssign(null)}
+          onSaved={() => { setFollowUpAssign(null); onRefresh() }}
+          onError={onError}
+          clients={[]}
+          contractors={contractors}
+          fixedClientId={followUpAssign.id}
+          initial={null}
+          notice={`クライアント「${followUpAssign.name}」を登録しました。続けて担当者を登録できます。`}
+          cancelLabel="登録しない"
         />
       )}
 
@@ -1684,7 +1712,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
 // ─────────────────────────────────────────────
 // 内訳ドラフトの空行を作る。
 function emptyItemDraft(): ItemDraft {
-  return { label: '', billing_amount: '', contract_start: '', contract_months: '', active: true }
+  return { label: '', billing_amount: '', monthly_video_count: '', contract_start: '', contract_months: '', active: true }
 }
 
 // APIへ送る内訳ペイロードを組み立てる。
@@ -1693,6 +1721,7 @@ function itemPayload(d: ItemDraft) {
   return {
     label: d.label.trim(),
     billing_amount: d.billing_amount ? Number(d.billing_amount) : 0,
+    monthly_video_count: d.monthly_video_count ? Number(d.monthly_video_count) : 0,
     contract_start: d.contract_start ? `${d.contract_start}-01` : null,
     contract_months: d.contract_months ? Number(d.contract_months) : null,
     active: d.active,
@@ -1702,14 +1731,14 @@ function itemPayload(d: ItemDraft) {
 function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
   open: boolean
   onClose: () => void
-  onSaved: () => void
+  // 新規作成のときだけ、作成したクライアントを渡す（呼び出し元が続けて担当者を登録できるように）。
+  onSaved: (created?: { id: string; name: string }) => void
   onError: (msg: string) => void
   initial: ClientWithItems | null
 }) {
   const [name, setName] = useState('')
   const [aliases, setAliases] = useState('')
   const [nmAsDate, setNmAsDate] = useState(false)
-  const [monthlyVideoCount, setMonthlyVideoCount] = useState('')
   const [items, setItems] = useState<ItemDraft[]>([emptyItemDraft()])
   const [removedIds, setRemovedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
@@ -1721,7 +1750,6 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
       setName(initial?.name ?? '')
       setAliases(initial?.aliases ?? '')
       setNmAsDate(initial?.nm_as_date ?? false)
-      setMonthlyVideoCount(initial?.monthly_video_count ? initial.monthly_video_count.toString() : '')
       setRemovedIds([])
       setCreatedClientId(null)
       const existing = initial?.billing_items ?? []
@@ -1730,6 +1758,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
           id: it.id,
           label: it.label,
           billing_amount: it.billing_amount ? it.billing_amount.toString() : '',
+          monthly_video_count: it.monthly_video_count ? it.monthly_video_count.toString() : '',
           contract_start: it.contract_start ? it.contract_start.slice(0, 7) : '',
           contract_months: it.contract_months ? it.contract_months.toString() : '',
           active: it.active,
@@ -1769,8 +1798,7 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
     }
     setSaving(true)
     try {
-      // 1) クライアント本体（名前・月本数）を作成/更新して client_id を確定させる。
-      const countNum = monthlyVideoCount ? Number(monthlyVideoCount) : 0
+      // 1) クライアント本体（名前・別名）を作成/更新して client_id を確定させる。
       // 空欄は「別名なし」なので null に寄せる（空文字のまま保存すると、
       // 未入力と「空の別名を登録した」が見分けられなくなる）。
       const aliasesValue = aliases.trim() || null
@@ -1781,7 +1809,6 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         if (name !== initial.name) patch.name = name
         if (aliasesValue !== (initial.aliases ?? null)) patch.aliases = aliasesValue
         if (nmAsDate !== initial.nm_as_date) patch.nm_as_date = nmAsDate
-        if (countNum !== initial.monthly_video_count) patch.monthly_video_count = countNum
         if (Object.keys(patch).length > 0) {
           const res = await fetch(`/api/master/clients/${initial.id}`, {
             method: 'PATCH',
@@ -1795,14 +1822,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         const res = await fetch(`/api/master/clients/${clientId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
       } else {
         const res = await fetch('/api/master/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate, monthly_video_count: countNum }),
+          body: JSON.stringify({ name, aliases: aliasesValue, nm_as_date: nmAsDate }),
         })
         if (!res.ok) throw new Error(await readErrorMessage(res, 'クライアントの保存に失敗しました。'))
         clientId = (await res.json()).id
@@ -1846,7 +1873,8 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
       }
 
       setSaving(false)
-      onSaved()
+      if (!initial && clientId) onSaved({ id: clientId, name: name.trim() })
+      else onSaved()
     } catch (err) {
       setSaving(false)
       const msg = err instanceof Error ? err.message : '通信に失敗しました。接続を確認して再度お試しください。'
@@ -1889,12 +1917,6 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
         </div>
 
         <div>
-          <label className="text-sm font-medium block mb-1">月本数（動画）</label>
-          <input type="number" inputMode="numeric" min="0" value={monthlyVideoCount} onChange={(e) => setMonthlyVideoCount(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="0" />
-          <p className="mt-1 text-xs text-muted-foreground">編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。</p>
-        </div>
-
-        <div>
           <div className="mb-2 flex items-center justify-between">
             <label className="text-sm font-medium">請求内訳</label>
             <button type="button" onClick={addItem} className={`gap-1 text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>
@@ -1902,7 +1924,8 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
             </button>
           </div>
           <p className="mb-2 text-xs text-muted-foreground">
-            内訳ごとに金額と契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
+            内訳ごとに金額・月本数・契約期間を設定できます（例: YouTube運用費 / Instagram運用費）。1つだけなら内訳名は空でも構いません。
+            月本数は編集者の単価と掛け合わせて、フル納品時の支払額を自動計算します。
           </p>
 
           <div className="space-y-3">
@@ -1926,10 +1949,14 @@ function ClientFormDialog({ open, onClose, onSaved, onError, initial }: {
                     </button>
                   )}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs text-muted-foreground block mb-1">請求額</label>
                     <input type="number" inputMode="numeric" value={it.billing_amount} onChange={(e) => updateItem(index, { billing_amount: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">月本数</label>
+                    <input type="number" inputMode="numeric" min="0" value={it.monthly_video_count} onChange={(e) => updateItem(index, { monthly_video_count: e.target.value })} className="w-full border rounded px-2 py-1.5 text-sm" placeholder="0" />
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground block mb-1">契約開始月</label>
@@ -1970,7 +1997,7 @@ const DEFAULT_ROLE_NAMES: Record<'daiko' | 'video_editor', string> = {
 // これらの値は新しい既定値に置き換え、手入力されたカスタム役割名は保持する。
 const AUTO_ROLE_VALUES = ['', '代行者', '編集者', '動画編集']
 
-function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractors, fixedContractorId, fixedContractorType, fixedClientId, initial }: {
+function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractors, fixedContractorId, fixedContractorType, fixedClientId, initial, notice, cancelLabel }: {
   open: boolean
   onClose: () => void
   onSaved: () => void
@@ -1981,6 +2008,9 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
   fixedContractorType?: 'daiko' | 'video_editor'
   fixedClientId?: string
   initial: Assignment | null
+  // クライアント登録直後の連続登録など、どういう状況で開いたダイアログかを伝えるための案内文。
+  notice?: string
+  cancelLabel?: string
 }) {
   const [contractorId, setContractorId] = useState(fixedContractorId ?? '')
   const [clientId, setClientId] = useState(fixedClientId ?? '')
@@ -2072,6 +2102,10 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
   return (
     <FormDialog open={open} onClose={onClose} title={dialogTitle}>
       <form onSubmit={submit} className="space-y-4">
+        {notice && (
+          <p className="rounded-lg border bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">{notice}</p>
+        )}
+
         {showTypeSelector && (
           <div>
             <label className="text-sm font-medium block mb-1">種別 <span className="text-danger">*</span></label>
@@ -2145,7 +2179,7 @@ function AssignFormDialog({ open, onClose, onSaved, onError, clients, contractor
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>{cancelLabel ?? 'キャンセル'}</Button>
           <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || !contractorId || !clientId}>
             {saving ? '保存中…' : '保存'}
           </Button>

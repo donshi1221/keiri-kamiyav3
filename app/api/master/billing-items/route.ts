@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       client_id: body.client_id,
       label: body.label?.trim() ?? '',
       billing_amount: body.billing_amount ?? 0,
+      monthly_video_count: body.monthly_video_count ?? 0,
       contract_start: body.contract_start ?? null,
       contract_months: body.contract_months ?? null,
       active: body.active ?? true,

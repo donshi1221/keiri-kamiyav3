@@ -20,6 +20,7 @@ export async function PATCH(
     const patch: Partial<typeof clientBillingItems.$inferInsert> = {}
     if (v.label !== undefined) patch.label = v.label?.trim() ?? ''
     if (v.billing_amount !== undefined) patch.billing_amount = v.billing_amount
+    if (v.monthly_video_count !== undefined) patch.monthly_video_count = v.monthly_video_count
     if (v.contract_start !== undefined) patch.contract_start = v.contract_start ?? null
     if (v.contract_months !== undefined) patch.contract_months = v.contract_months
     if (v.active !== undefined) patch.active = v.active
