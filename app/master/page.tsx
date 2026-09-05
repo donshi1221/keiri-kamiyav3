@@ -1082,6 +1082,7 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
   const [deleteTarget, setDeleteTarget] = useState<Contractor | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
   const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
+  const [reactivateTarget, setReactivateTarget] = useState<{ id: string; label: string } | null>(null)
 
   async function confirmDeleteContractor() {
     if (!deleteTarget) return
@@ -1130,6 +1131,23 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
       }
       if (!res.ok) {
         onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  async function reactivateAssignment(id: string) {
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの再有効化に失敗しました。'))
         return
       }
       onRefresh()
@@ -1210,8 +1228,10 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
                             )}
                           </span>
                           <button onClick={() => setEditAssign(a)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
-                          {a.active && (
+                          {a.active ? (
                             <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
+                          ) : (
+                            <button onClick={() => setReactivateTarget({ id: a.id, label: `${a.clients?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>再有効化</button>
                           )}
                         </div>
                       )
@@ -1324,6 +1344,28 @@ function ContractorTab({ contractors, assignments, clients, onRefresh, onError }
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={!!reactivateTarget} onOpenChange={(open) => { if (!open) setReactivateTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>アサインを再有効化しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{reactivateTarget?.label}」を再有効化します。今月分の月次レコードが無ければ自動生成され、請求書チェックの照合対象に戻ります。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (reactivateTarget) reactivateAssignment(reactivateTarget.id)
+                setReactivateTarget(null)
+              }}
+            >
+              再有効化する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -1347,6 +1389,7 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
   const [deactivateTarget, setDeactivateTarget] = useState<{ id: string; label: string } | null>(null)
   const [deleteAssignTarget, setDeleteAssignTarget] = useState<{ id: string; label: string } | null>(null)
+  const [reactivateTarget, setReactivateTarget] = useState<{ id: string; label: string } | null>(null)
 
   async function confirmDeleteClient() {
     if (!deleteTarget) return
@@ -1395,6 +1438,23 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
       }
       if (!res.ok) {
         onError(await readErrorMessage(res, 'アサインの削除に失敗しました。'))
+        return
+      }
+      onRefresh()
+    } catch {
+      onError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  async function reactivateAssignment(id: string) {
+    try {
+      const res = await fetch(`/api/master/assignments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      })
+      if (!res.ok) {
+        onError(await readErrorMessage(res, 'アサインの再有効化に失敗しました。'))
         return
       }
       onRefresh()
@@ -1502,8 +1562,10 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
                             )}
                           </span>
                           <button onClick={() => setEditAssign(a)} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>編集</button>
-                          {a.active && (
+                          {a.active ? (
                             <button onClick={() => setDeleteAssignTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-danger hover:underline ${TAP_TEXT_LINK}`}>削除</button>
+                          ) : (
+                            <button onClick={() => setReactivateTarget({ id: a.id, label: `${a.contractors?.name ?? ''} — ${a.role_name}` })} className={`text-xs text-info hover:underline ${TAP_TEXT_LINK}`}>再有効化</button>
                           )}
                         </div>
                       )
@@ -1624,6 +1686,28 @@ function ClientTab({ clients, contractors, assignments, onRefresh, onError }: {
               }}
             >
               削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!reactivateTarget} onOpenChange={(open) => { if (!open) setReactivateTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>アサインを再有効化しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{reactivateTarget?.label}」を再有効化します。今月分の月次レコードが無ければ自動生成され、請求書チェックの照合対象に戻ります。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (reactivateTarget) reactivateAssignment(reactivateTarget.id)
+                setReactivateTarget(null)
+              }}
+            >
+              再有効化する
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
