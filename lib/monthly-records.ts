@@ -2,7 +2,10 @@ import { db } from './db'
 import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords, payrollRecurringReimbursements, payrollReimbursementItems } from './schema'
 import { and, eq } from 'drizzle-orm'
 
-function isPaymentActiveForMonth(
+// 支払期間（開始月・回数）から、その (year, month) が支払い対象かを判定する。
+// 生成側と、期間外になった月次レコードの掃除側（app/api/master/assignments/[id]）で
+// 同じ判定を使うため export している。片方だけ直すと生成と掃除が食い違うため実装は必ずここ1か所に置く。
+export function isPaymentActiveForMonth(
   assignment: { payment_start_month: string | null; payment_count: number | null },
   year: number,
   month: number,
