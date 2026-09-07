@@ -17,7 +17,7 @@ import {
 import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import { parseInvoiceNotes } from '@/lib/invoice-notes'
+import { formatInvoiceNote, parseInvoiceNotes } from '@/lib/invoice-notes'
 import {
   CAUTION_LABEL_SEPARATOR,
   cautionKeyFromNoteText,
@@ -155,6 +155,51 @@ function summarizeCaution(text: string): { key: string; display: string } | null
   const nm = key.split('|')[1] || null
   const display = typeLabel && nm ? `${displayName}（${typeLabel} ${nm}）` : displayName
   return { key, display }
+}
+
+// 確認済みにしたときサーバーが書く文言（lib/invoice-check.ts の cautionNote 呼び出し箇所と揃える）。
+// 「記載日」を含む注意＝N/Mを日付として扱うクライアント向けの案内、それ以外＝支払回数の案内。
+const CONFIRMED_DATE_BODY = '作業実施を確認済み'
+const CONFIRMED_COUNT_BODY = '回数を確認済み'
+// 取り消したときの近似文言。元の注意文（具体的な日付など）はここには残っていないため、
+// サーバー側の本来の文言そのものではなく汎用的な案内に戻す。正式な文言は直後の load() で入れ替わる。
+const APPROX_DATE_CAUTION_BODY = '記載日の作業実施をご確認ください'
+const APPROX_COUNT_CAUTION_BODY = '支払回数の記載があります。回数が合っているかご確認ください'
+
+function serializeNoteLine(line: InvoiceNoteLine): string {
+  return line.mark ? formatInvoiceNote(line.mark, line.text) : line.text
+}
+
+// 「確認済みにする／取り消す」を押した瞬間に check_notes をローカルで書き換えるための変換。
+// サーバーは確認キー保存後に判定全体をやり直すため反映まで数秒かかる。押した直後に見た目だけ
+// 先に切り替え、実際の判定は fetch 成功後の load() で正式なものに差し替える（このため取り消し側の
+// 文言復元は近似でよい）。
+function withCautionConfirmation(notes: string | null, key: string, confirmed: boolean): string | null {
+  if (!notes) return notes
+  const lines = parseInvoiceNotes(notes)
+  let changed = false
+  const next = lines.map((line): InvoiceNoteLine => {
+    if (confirmed) {
+      if (line.mark !== 'caution') return line
+      if (cautionKeyFromNoteText(line.text) !== key) return line
+      const sepIndex = line.text.lastIndexOf(CAUTION_LABEL_SEPARATOR)
+      const label = line.text.slice(0, sepIndex)
+      const body = line.text.slice(sepIndex + CAUTION_LABEL_SEPARATOR.length)
+      const confirmedBody = body.includes('記載日') ? CONFIRMED_DATE_BODY : CONFIRMED_COUNT_BODY
+      changed = true
+      return { mark: 'ok', text: `${label}${CAUTION_LABEL_SEPARATOR}${confirmedBody}` }
+    }
+    if (line.mark !== 'ok' || !line.text.includes('確認済み')) return line
+    if (cautionKeyFromNoteText(line.text) !== key) return line
+    const sepIndex = line.text.lastIndexOf(CAUTION_LABEL_SEPARATOR)
+    const label = line.text.slice(0, sepIndex)
+    const body = line.text.slice(sepIndex + CAUTION_LABEL_SEPARATOR.length)
+    const approxBody = body === CONFIRMED_DATE_BODY ? APPROX_DATE_CAUTION_BODY : APPROX_COUNT_CAUTION_BODY
+    changed = true
+    return { mark: 'caution', text: `${label}${CAUTION_LABEL_SEPARATOR}${approxBody}` }
+  })
+  if (!changed) return notes
+  return next.map(serializeNoteLine).join('\n')
 }
 
 // 注意（[注意]）が複数件あると縦に長文の箱が並んで冗長になるため、1つの警告枠にまとめて
@@ -870,11 +915,18 @@ export default function InvoiceCheckClient() {
     }
   }
 
-  // 注意の消し込み（confirmed=false で取り消し）。サーバー側で確認済みキーを保存したあと
-  // 照合をやり直すため、戻ってきたら一覧を取り直して判定理由を差し替える。
+  // 注意の消し込み（confirmed=false で取り消し）。サーバー側は確認済みキーを保存したあと
+  // 判定全体をやり直す（納品シート読み込みを含み数秒かかる）ため、押してから表示が変わるまで
+  // 待たされないよう、まずローカルの check_notes を書き換えて見た目を切り替える。
+  // fetch が成功すれば load() で正式な内容に差し替わり、失敗すれば load() でローカルの変更を取り消す。
   async function confirmCaution(id: string, key: string, confirmed: boolean) {
     setCautionBusyId(id)
     setError(null)
+    setRows((prev) =>
+      prev
+        ? prev.map((r) => (r.id === id ? { ...r, check_notes: withCautionConfirmation(r.check_notes, key, confirmed) } : r))
+        : prev
+    )
     try {
       const res = await fetch(`/api/invoice-check/${id}/confirm-caution`, {
         method: 'POST',
@@ -883,6 +935,7 @@ export default function InvoiceCheckClient() {
       })
       if (!res.ok) {
         setError(await readErrorMessage(res, '注意の確認状態を更新できませんでした。'))
+        await load() // 楽観的更新を正しい状態に戻す
         return
       }
       // 読み取り失敗行では照合そのものが行われない。理由が返ってきたら画面に出す。
@@ -891,6 +944,7 @@ export default function InvoiceCheckClient() {
       await load()
     } catch {
       setError('通信に失敗しました。接続を確認して再度お試しください。')
+      await load() // 楽観的更新を正しい状態に戻す
     } finally {
       setCautionBusyId(null)
     }
