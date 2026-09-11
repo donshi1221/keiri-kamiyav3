@@ -27,6 +27,10 @@ export const contractors = pgTable('contractors', {
   // （桁あふれや先頭0の欠落といった数値化に伴う事故を避ける）。未登録の人には送らない。
   chatwork_room_id: text('chatwork_room_id'),
   notes: text('notes'),
+  // 請求書の差出人名に書かれる呼び名（通称・字違い）。カンマ区切りで複数持つ。
+  // クライアントの aliases と同じ理由（例:「サトウタイチ」と「佐藤太一」）で、
+  // 正式名だけでは請求書チェックの照合が通らないため照合用の別名を委託者側にも持たせる。
+  aliases: text('aliases'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

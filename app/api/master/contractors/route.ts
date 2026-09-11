@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       unit_price: body.unit_price ?? 0,
       email: body.email ?? null,
       chatwork_room_id: body.chatwork_room_id ?? null,
+      aliases: body.aliases ?? null,
       notes: body.notes ?? null,
     }).returning()
     return Response.json(data, { status: 201 })

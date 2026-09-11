@@ -23,6 +23,7 @@ export async function PATCH(
     if (v.unit_price !== undefined) patch.unit_price = v.unit_price
     if (v.email !== undefined) patch.email = v.email ?? null
     if (v.chatwork_room_id !== undefined) patch.chatwork_room_id = v.chatwork_room_id ?? null
+    if (v.aliases !== undefined) patch.aliases = v.aliases ?? null
     if (v.notes !== undefined) patch.notes = v.notes ?? null
 
     if (Object.keys(patch).length === 0) {

@@ -1731,6 +1731,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   const [chatworkRoomId, setChatworkRoomId] = useState('')
   const [contractorType, setContractorType] = useState<'daiko' | 'video_editor'>('daiko')
   const [unitPrice, setUnitPrice] = useState('')
+  const [aliases, setAliases] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -1740,6 +1741,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
       setChatworkRoomId(initial?.chatwork_room_id ?? '')
       setContractorType(initial?.contractor_type ?? 'daiko')
       setUnitPrice(initial?.unit_price ? initial.unit_price.toString() : '')
+      setAliases(initial?.aliases ?? '')
     }
   }, [open, initial])
 
@@ -1753,6 +1755,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
       email: email || null,
       chatwork_room_id: chatworkRoomId || null,
       contractor_type: contractorType,
+      aliases: aliases.trim() || null,
       ...(contractorType === 'video_editor' ? { unit_price: unitPrice ? Number(unitPrice) : 0 } : {}),
     }
     try {
@@ -1816,6 +1819,13 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           />
           <p className="mt-1 text-xs text-muted-foreground">
             その人とのチャットを開いたURLの #!rid の後ろの数字。請求書の未提出リマインドの送信先になります（未登録の人には送れません）。
+          </p>
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">別名（カンマ区切り）</label>
+          <input value={aliases} onChange={(e) => setAliases(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" placeholder="サトウタイチ, さとう" />
+          <p className="mt-1 text-xs text-muted-foreground">
+            請求書の差出人名に書かれる通称・字違いを登録すると、請求書チェックの照合で正式名と同じものとして扱います。
           </p>
         </div>
         <div className="flex justify-end gap-2 pt-2">

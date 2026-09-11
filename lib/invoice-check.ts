@@ -14,6 +14,7 @@ import {
   clientMatchNames,
   extractItemDate,
   normalizeName,
+  parseClientAliases,
   resolveItemClient,
 } from '@/lib/invoice-match'
 import type {
@@ -510,6 +511,8 @@ function unitCountHint(contractor: ContractorRow, diff: number): string {
 
 // 差出人名からマスタの委託者を1人に絞る。完全一致を先に試し、見つからない場合だけ
 // 片方向の包含（「山田太郎」と「山田太郎（個人事業主）」など）に緩める。
+// 正式名だけでなく別名（aliases）も候補に含める。parseClientAliases はクライアント側で
+// 作った関数だが中身はカンマ区切り文字列を配列にするだけの汎用処理のため、名前を変えずここでも使う。
 async function resolveContractor(issuer: string): Promise<{ contractor: ContractorRow } | { hold: string }> {
   const target = normalizeName(issuer)
   const all = await db
@@ -518,15 +521,21 @@ async function resolveContractor(issuer: string): Promise<{ contractor: Contract
       name: contractors.name,
       contractor_type: contractors.contractor_type,
       unit_price: contractors.unit_price,
+      aliases: contractors.aliases,
     })
     .from(contractors)
   const candidates = all
-    .map((c) => ({ ...c, norm: normalizeName(c.name) }))
-    .filter((c) => c.norm.length > 0)
+    .map((c) => ({
+      ...c,
+      names: [...new Set([normalizeName(c.name), ...parseClientAliases(c.aliases).map(normalizeName)])].filter(
+        (n) => n.length > 0
+      ),
+    }))
+    .filter((c) => c.names.length > 0)
 
-  let matched = candidates.filter((c) => c.norm === target)
+  let matched = candidates.filter((c) => c.names.some((n) => n === target))
   if (matched.length === 0) {
-    matched = candidates.filter((c) => c.norm.includes(target) || target.includes(c.norm))
+    matched = candidates.filter((c) => c.names.some((n) => n.includes(target) || target.includes(n)))
   }
 
   if (matched.length === 0) return { hold: `差出人「${issuer}」がマスタに見つかりません` }

@@ -91,6 +91,9 @@ export const contractorCreateSchema = z.object({
   unit_price: moneyInt.optional(),
   email: optionalEmail.optional(),
   chatwork_room_id: optionalChatworkRoomId.optional(),
+  // 請求書の差出人名に書かれる呼び名（通称・字違い）。カンマ区切りの1行として保存し、
+  // 分解は照合側（lib/invoice-check）で行う＝入力の見た目とDBの値を一致させる。
+  aliases: z.string().nullish(),
   notes: z.string().nullish(),
 })
 export const contractorPatchSchema = contractorCreateSchema.partial()
