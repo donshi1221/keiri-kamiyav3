@@ -1,7 +1,7 @@
 import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { invoiceUploads, monthlyRecords } from '@/lib/schema'
+import { contractors, invoiceUploads, monthlyRecords } from '@/lib/schema'
 import { checkInvoiceAndSave, findPayoutMonthlyRecords, payoutMonthOf } from '@/lib/invoice-check'
 import { parseBody, invoiceManualApproveSchema } from '@/lib/validation'
 import { eq } from 'drizzle-orm'
@@ -35,10 +35,26 @@ export async function POST(
       .where(eq(invoiceUploads.id, id))
     if (!invoice) return Response.json({ error: 'Not found' }, { status: 404 })
 
-    // OK・NGの行にこの操作を許すと、判定が合っていないのに金額だけ確定してしまう。
-    // 対象は「材料が足りずに結論が出せなかった」保留の行だけに限る。
-    if (invoice.status !== 'hold') {
-      return Response.json({ error: '保留の請求書だけが手動OKの対象です' }, { status: 400 })
+    // OK・pendingの行にこの操作を許すと、判定が合っていないのに金額だけ確定してしまう。
+    // 対象は「材料が足りずに結論が出せなかった」保留の行と、
+    // 「編集者のイレギュラー請求で実支払額を優先すれば直る」NGの行に限る。
+    if (invoice.status !== 'hold' && invoice.status !== 'ng') {
+      return Response.json({ error: '保留またはNGの請求書だけが手動OKの対象です' }, { status: 400 })
+    }
+    // NGの行は、期待額の計算で actual_payout_amount を優先するのが編集者（video_editor）だけ。
+    // 代行者（daiko）は契約額・snapshotで計算するため、ここで金額を入れても判定は直らず、
+    // 押した人が「入れたのに直らない」と混乱する事故になる。保留(hold)は種別を問わず従来どおり許可する。
+    if (invoice.status === 'ng' && invoice.contractor_id) {
+      const [contractor] = await db
+        .select({ contractor_type: contractors.contractor_type })
+        .from(contractors)
+        .where(eq(contractors.id, invoice.contractor_id))
+      if (contractor && contractor.contractor_type !== 'video_editor') {
+        return Response.json(
+          { error: '代行者への支払額の変更はダッシュボードの支払予定額から行ってください（NGの手動OKは編集者のみ対象です）' },
+          { status: 400 }
+        )
+      }
     }
     if (!invoice.contractor_id || invoice.resolved_year === null || invoice.resolved_month === null) {
       return Response.json(

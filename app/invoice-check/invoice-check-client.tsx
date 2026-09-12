@@ -820,6 +820,13 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
     }
   }
 
+  // 期待額（支払予定額）が分かっていて、入力中の金額も数値として有効なら、差額をその場で見せる。
+  // ダッシュボードに移動しなくても「これで確定して大丈夫か」がこの画面だけで判断できるようにするため。
+  const expectedAmount = target?.expected_amount ?? null
+  const parsedAmount = amount.trim() === '' ? null : Number(amount)
+  const hasValidDiff = expectedAmount !== null && parsedAmount !== null && Number.isFinite(parsedAmount)
+  const diff = hasValidDiff ? parsedAmount - expectedAmount : null
+
   return (
     <FormDialog open={!!target} onClose={onClose} title="手動でOKにする">
       <form onSubmit={submit} className="space-y-4">
@@ -827,6 +834,14 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
           「{target?.file_name}」について、納品シートの照合をスキップし、入力した金額を実支払額として確定します。
           確定後は入力した金額で自動照合をやり直すため、請求額と合っていなければNGになります。
         </p>
+        {hasValidDiff && diff !== null && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            支払予定 {formatAmount(expectedAmount)} に対し {formatAmount(parsedAmount)} で確定します
+            {diff === 0
+              ? '（支払予定と一致します）'
+              : `（差額 ${diff > 0 ? '+' : '-'}¥${Math.abs(diff).toLocaleString('ja-JP')}）`}
+          </p>
+        )}
         <div>
           <label className="text-sm font-medium block mb-1">実支払額</label>
           <input
@@ -1138,8 +1153,8 @@ export default function InvoiceCheckClient() {
                         >
                           {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                         </button>
-                        {/* 保留は納品シート照合が原因のことが多い。金額を人が入れれば進められるため、保留の行にだけ出す。 */}
-                        {r.status === 'hold' && (
+                        {/* 保留は納品シート照合が原因のことが多い。NGも編集者のイレギュラー請求なら金額を人が入れれば進められるため、保留・NGの行に出す。 */}
+                        {(r.status === 'hold' || r.status === 'ng') && (
                           <button
                             type="button"
                             onClick={() => setApproveTarget(r)}
@@ -1270,7 +1285,7 @@ export default function InvoiceCheckClient() {
                   >
                     {extractingId === r.id ? '読み取り中…' : '再読み取り・再チェック'}
                   </Button>
-                  {r.status === 'hold' && (
+                  {(r.status === 'hold' || r.status === 'ng') && (
                     <Button
                       variant="outline"
                       size="sm"
