@@ -106,7 +106,11 @@ async function createReimbursements(
   targetIds: Set<string>,
   fallbackMonth: { year: number; month: number }
 ): Promise<ExpenseApproveResult['reimbursement']> {
-  const targets = items.filter((item) => targetIds.has(item.id) && item.kind !== 'excluded')
+  // 「その他」は社会保険料・税金など会社口座から支払済みの書類なので、代表への返金に乗せると
+  // 二重に支払うことになる。「対象外」と同じく立替精算からは外す。
+  const targets = items.filter(
+    (item) => targetIds.has(item.id) && item.kind !== 'excluded' && item.kind !== 'other'
+  )
   if (targets.length === 0) return { created: 0 }
 
   // 誰に返すかは役員（＝代表）1人に定まることが前提。0人・2人以上は経理が決めるべき話で、

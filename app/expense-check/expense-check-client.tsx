@@ -127,9 +127,11 @@ function billingMonthKey(m: BillingMonth): string {
 }
 
 // 立替精算（代表へ返すお金）に乗せられる明細か。「対象外」はどこにも計上しない区分なので、
-// 返金の対象にもならない。クライアント請求分・自社経費分はどちらも代表が立て替えていれば返す。
+// 返金の対象にもならない。「その他」は社会保険料・税金など会社口座から支払済みの書類で、
+// 代表が立て替えたお金ではないため返金に乗せると誤支給になる。
+// クライアント請求分・自社経費分はどちらも代表が立て替えていれば返す。
 function isReimbursableItem(item: ExpenseUploadItemRow): boolean {
-  return item.kind !== null && item.kind !== 'excluded'
+  return item.kind !== null && item.kind !== 'excluded' && item.kind !== 'other'
 }
 
 async function readErrorMessage(res: Response, fallback: string) {
@@ -381,7 +383,7 @@ export default function ExpenseCheckClient() {
         <h1 className="text-xl font-bold">経費チェック</h1>
         <p className="text-xs leading-relaxed text-muted-foreground">
           代表から届いた経費ファイルの明細です。「クライアントに請求」の行だけが、登録すると
-          そのクライアントへの請求経費になります。自社経費・対象外の行は記録だけが残ります。
+          そのクライアントへの請求経費になります。自社経費・その他・対象外の行は記録だけが残ります。
         </p>
         <p className="text-xs leading-relaxed text-muted-foreground">
           「立替精算」にチェックが入った行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。

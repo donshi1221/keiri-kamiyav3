@@ -86,6 +86,12 @@ function AssignFields({
             </option>
           ))}
         </select>
+        {/* 「その他」は交通費と扱いが違う（請求にも立替精算にも乗らない）ため、選んだ時だけ用途を補う。 */}
+        {draft.kind === 'other' && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            支払済みの書類（社会保険料・税金など）はこちら。請求・精算には乗せず記録だけ残します。
+          </p>
+        )}
       </div>
 
       {draft.kind === 'client_billed' && (

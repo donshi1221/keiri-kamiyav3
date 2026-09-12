@@ -126,10 +126,11 @@ export const INVOICE_REMINDER_TEMPLATE =
 // 明細1行の用途。金額の行き先がそれぞれ違うため、読み取り後に代表が必ずどれかを選ぶ。
 //   client_billed: クライアントに請求する（client_expenses へ登録される）
 //   company:       自社経費（マネーフォワード側で計上済みなので、ここでは金額を集計しない）
+//   other:         その他（社会保険料・税金など、会社口座から支払済みの書類。記録とドライブ保存だけ）
 //   excluded:      対象外（私用など）
 // 画面のプルダウンとサーバー側の検証（zod）で同じ一覧を使うためここ1か所に置く
 // （片方だけ増やすと「画面では選べるのに保存で弾かれる」食い違いが起きるため）。
-export const EXPENSE_ITEM_KINDS = ['client_billed', 'company', 'excluded'] as const
+export const EXPENSE_ITEM_KINDS = ['client_billed', 'company', 'other', 'excluded'] as const
 
 // 経費アップロードで受け付けるファイル種別。ICOCAの利用履歴はPDF、特急券の領収書は
 // スマホで撮った画像で届くため両方を許す（Geminiはどちらもそのまま読める）。

@@ -8,6 +8,7 @@ import type { ExpenseItemKind } from '@/lib/ui-types'
 export const EXPENSE_KIND_LABEL: Record<ExpenseItemKind, string> = {
   client_billed: 'クライアントに請求',
   company: '自社経費',
+  other: 'その他',
   excluded: '対象外',
 }
 
