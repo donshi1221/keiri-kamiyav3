@@ -15,12 +15,16 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { TZ, addMonthsOf, nextMonthOf } from '@/lib/dates'
+import { EXPENSE_ITEM_KINDS } from '@/lib/config'
+import type { Client } from '@/lib/schema'
 import type {
   ExpenseUploadRow,
   ExpenseUploadItemRow,
   ExpenseExtractOutcome,
   ExpenseApproveResult,
   ExpenseRejectResult,
+  ExpenseItemAssignment,
+  ExpenseItemKind,
   GoogleDriveStatus,
 } from '@/lib/ui-types'
 import {
@@ -134,6 +138,17 @@ function isReimbursableItem(item: ExpenseUploadItemRow): boolean {
   return item.kind !== null && item.kind !== 'excluded' && item.kind !== 'other'
 }
 
+// 経理がこの画面で割り当てるときの下書き。送信用の型（ExpenseItemAssignment）は選択済みが前提なので、
+// 「まだ選んでいない」を表せる空文字を許す形で別に持つ（受付側 upload-form.tsx と同じ流儀）。
+type ItemAssignDraft = { kind: ExpenseItemKind | ''; clientId: string }
+
+// 送信できる状態か。サーバー側の検証（lib/validation の expenseSubmitSchema）と同じ条件にして、
+// 画面では通るのに送信で弾かれる、という食い違いを避ける。
+function isAssignComplete(draft: ItemAssignDraft): boolean {
+  if (draft.kind === '') return false
+  return draft.kind !== 'client_billed' || draft.clientId !== ''
+}
+
 async function readErrorMessage(res: Response, fallback: string) {
   const data = (await res.json().catch(() => null)) as { error?: string } | null
   return typeof data?.error === 'string' ? data.error : fallback
@@ -159,6 +174,68 @@ export default function ExpenseCheckClient() {
   // 明細ID => 立替精算に含めるか。既定はON（代表が自分の財布から払っているのが通常のため）で、
   // 会社カード決済など返金の要らない明細だけを経理が外す。ここに入っていない行はONとして扱う。
   const [reimburse, setReimburse] = useState<Record<string, boolean>>({})
+  // 割当中（draft）の受付を経理がこの画面で割り当てるための選択。明細IDは受付をまたいで一意なので明細単位で持つ。
+  const [assignDrafts, setAssignDrafts] = useState<Record<string, ItemAssignDraft>>({})
+  // 区分の選択肢に出すクライアント。受付ページはサーバー側で渡せるが、この画面は認証済みなので社内APIから取る。
+  const [clientOptions, setClientOptions] = useState<Pick<Client, 'id' | 'name'>[]>([])
+
+  // 未選択の行はDBの現在値（再読み取り直後は未割当）を初期値にする。
+  function resolveAssign(item: ExpenseUploadItemRow): ItemAssignDraft {
+    return assignDrafts[item.id] ?? { kind: (item.kind as ExpenseItemKind | null) ?? '', clientId: item.client_id ?? '' }
+  }
+
+  function updateAssign(item: ExpenseUploadItemRow, next: ItemAssignDraft) {
+    setAssignDrafts((prev) => ({ ...prev, [item.id]: next }))
+  }
+
+  // 表とカードで同じプルダウンを出すため、見た目と挙動をここに1つだけ持つ（請求月・立替精算と同じ作り）。
+  function renderKindSelect(item: ExpenseUploadItemRow, disabled: boolean) {
+    const draft = resolveAssign(item)
+    return (
+      <div className="space-y-1">
+        <select
+          aria-label="区分"
+          value={draft.kind}
+          disabled={disabled}
+          onChange={(e) => updateAssign(item, { ...draft, kind: e.target.value as ItemAssignDraft['kind'] })}
+          className="min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
+        >
+          <option value="">選択してください</option>
+          {EXPENSE_ITEM_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {EXPENSE_KIND_LABEL[kind]}
+            </option>
+          ))}
+        </select>
+        {/* 「その他」は請求にも立替精算にも乗らない区分なので、選んだときだけ扱いを補う。 */}
+        {draft.kind === 'other' && (
+          <p className="text-xs leading-snug text-muted-foreground">
+            支払済みの書類（社会保険料・税金など）。請求・精算には乗せず記録だけ残します。
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  function renderClientSelect(item: ExpenseUploadItemRow, disabled: boolean) {
+    const draft = resolveAssign(item)
+    return (
+      <select
+        aria-label="クライアント"
+        value={draft.clientId}
+        disabled={disabled}
+        onChange={(e) => updateAssign(item, { ...draft, clientId: e.target.value })}
+        className="min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
+      >
+        <option value="">選択してください</option>
+        {clientOptions.map((client) => (
+          <option key={client.id} value={client.id}>
+            {client.name}
+          </option>
+        ))}
+      </select>
+    )
+  }
 
   function resolveBillingMonth(item: ExpenseUploadItemRow): BillingMonth {
     return billingMonths[item.id] ?? defaultBillingMonth(item.item_date!)
@@ -258,6 +335,15 @@ export default function ExpenseCheckClient() {
       .catch(() => setDriveConfigured(false))
   }, [])
 
+  // 割当中の受付を経理が割り当てるときだけ使う一覧。取得できなくても他の操作は続けられるため、
+  // 失敗しても画面全体のエラーにはしない（クライアント選択が空になり「割り当てて送信」が押せないだけ）。
+  useEffect(() => {
+    fetch('/api/master/clients', { cache: 'no-store' })
+      .then((res) => (res.ok ? (res.json() as Promise<Pick<Client, 'id' | 'name'>[]>) : []))
+      .then((data) => setClientOptions(data.map((c) => ({ id: c.id, name: c.name }))))
+      .catch(() => setClientOptions([]))
+  }, [])
+
   // 409（登録済み・却下できない）や400（必須未入力の行）は、経理が次に何をすべきかを
   // サーバーの文言がそのまま説明している。言い換えず、そのまま画面に出す。
   // 読み取りのやり直し。Gemini の混雑など一時的な失敗はサーバー側でも自動で数回試すが、
@@ -278,9 +364,9 @@ export default function ExpenseCheckClient() {
         setError(`「${row.file_name}」の再読み取りに失敗しました。${outcome.error}`)
       } else {
         setNotice(
-          `「${row.file_name}」を読み取り直しました。この受付は代表の割当待ち（割当中）に戻ります。` +
-            '代表に受付URLから区分・クライアントの割り当てと送信をご依頼ください。' +
-            '（この一覧には「登録済み・却下も表示する」で確認できます）'
+          `「${row.file_name}」を読み取り直しました。この受付は「割当中」に戻ります。` +
+            'この画面でそのまま明細ごとの区分を割り当てて送信し、続けて登録できます。' +
+            '（割当中の受付は「登録済み・却下も表示する」にチェックを入れると一覧に出ます）'
         )
       }
       await load()
@@ -288,6 +374,40 @@ export default function ExpenseCheckClient() {
       setError('通信に失敗しました。接続を確認して再度お試しください。')
     } finally {
       setExtractingId(null)
+    }
+  }
+
+  // 経理が代表の代わりに区分を割り当てて送信する。受付側（/expense/<トークン>）と同じAPIを叩くので、
+  // 送信後は通常の送信済みと全く同じ登録フロー（請求月・立替精算・確認ダイアログ）にそのまま乗る。
+  async function submitAssignment(row: ExpenseUploadRow) {
+    setBusyId(row.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const items: ExpenseItemAssignment[] = row.items.map((item) => {
+        const draft = resolveAssign(item)
+        return {
+          id: item.id,
+          kind: draft.kind as ExpenseItemKind,
+          // 請求しない行にクライアントが残っていると、後から見て「請求するのか」が読めなくなる。
+          client_id: draft.kind === 'client_billed' ? draft.clientId : null,
+        }
+      })
+      const res = await fetch(`/api/expense-inbox/${row.id}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '割り当ての送信に失敗しました。'))
+        return
+      }
+      setNotice(`「${row.file_name}」に区分を割り当てて送信済みにしました。内容を確認して登録してください。`)
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -443,6 +563,12 @@ export default function ExpenseCheckClient() {
         const showBillingMonth = row.status === 'submitted' && row.items.some(isBillableItem)
         // 立替精算の選択も、これから登録する受付（送信済み）のときだけ意味を持つ。
         const showReimburse = row.status === 'submitted' && row.items.some(isReimbursableItem)
+        // 割当中（draft）の受付は、代表が受付URLを開き直せないと誰も触れなくなる。経理がこの画面で
+        // 代わりに区分を割り当てられるようにする。明細が1件も無い受付は送信しようがないので除く。
+        const assignable = row.status === 'draft' && !failed && row.items.length > 0
+        const assignIncomplete = assignable
+          ? row.items.filter((item) => !isAssignComplete(resolveAssign(item))).length
+          : 0
         return (
           <div key={row.id} className="rounded-lg border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-2 border-b px-4 py-3">
@@ -471,7 +597,7 @@ export default function ExpenseCheckClient() {
                     <p className="text-foreground">AIが原本を読み取れなかったため、明細がありません。</p>
                     <p className="text-xs leading-relaxed">
                       AI側の一時的な混雑が原因のことが多いので、まず「再読み取り」をお試しください。
-                      成功するとこの受付は代表の割当待ちに戻り、代表が受付URLから割り当て・送信し直します。
+                      成功するとこの受付は「割当中」に戻り、そのままこの画面で区分を割り当てて送信・登録できます。
                       経費以外の書類など、そもそも読み取れないファイルは「却下」で片付けてください。
                     </p>
                   </div>
@@ -488,7 +614,9 @@ export default function ExpenseCheckClient() {
                 className={cn(
                   'w-full text-sm',
                   showBillingMonth ? 'min-w-[57rem]' : 'min-w-[48rem]',
-                  showReimburse && 'min-w-[64rem]'
+                  showReimburse && 'min-w-[64rem]',
+                  // 区分・クライアントが文字からプルダウンに変わるぶん、潰れないよう幅を広げる。
+                  assignable && 'min-w-[56rem]'
                 )}
               >
                 <thead className="border-b bg-secondary">
@@ -517,13 +645,29 @@ export default function ExpenseCheckClient() {
                         {formatExpenseAmount(item.amount)}
                       </td>
                       <td className="px-3 py-2">
-                        <KindLabel kind={item.kind} />
-                        {/* 登録済みの行が分かると、途中で失敗した受付をどこから追えばよいかが判断できる。 */}
-                        {item.registered_client_expense_id && (
-                          <span className="ml-1 text-xs whitespace-nowrap text-success">登録済み</span>
+                        {assignable ? (
+                          renderKindSelect(item, busy)
+                        ) : (
+                          <>
+                            <KindLabel kind={item.kind} />
+                            {/* 登録済みの行が分かると、途中で失敗した受付をどこから追えばよいかが判断できる。 */}
+                            {item.registered_client_expense_id && (
+                              <span className="ml-1 text-xs whitespace-nowrap text-success">登録済み</span>
+                            )}
+                          </>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-foreground">{item.client_name ?? '—'}</td>
+                      <td className="px-3 py-2 text-foreground">
+                        {assignable ? (
+                          resolveAssign(item).kind === 'client_billed' ? (
+                            renderClientSelect(item, busy)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )
+                        ) : (
+                          (item.client_name ?? '—')
+                        )}
+                      </td>
                       {/* 請求に乗らない行（自社経費・対象外）は請求月そのものが無いので空欄にする。
                           登録済みの行は月が確定しているため選び直させない。 */}
                       {showBillingMonth && (
@@ -565,17 +709,34 @@ export default function ExpenseCheckClient() {
                     <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(item.amount)}</p>
                   </div>
                   <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">区分</span>
-                      <span className="text-right">
-                        <KindLabel kind={item.kind} />
-                        {item.registered_client_expense_id && <span className="ml-1 text-success">登録済み</span>}
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="shrink-0 text-muted-foreground">クライアント</span>
-                      <span className="text-right text-foreground">{item.client_name ?? '—'}</span>
-                    </div>
+                    {/* 割当中はプルダウンになる。幅が狭いので値と同じ行には並べず、ラベルの下に全幅で置く。 */}
+                    {assignable ? (
+                      <div className="space-y-1">
+                        <span className="block text-muted-foreground">区分</span>
+                        {renderKindSelect(item, busy)}
+                      </div>
+                    ) : (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">区分</span>
+                        <span className="text-right">
+                          <KindLabel kind={item.kind} />
+                          {item.registered_client_expense_id && <span className="ml-1 text-success">登録済み</span>}
+                        </span>
+                      </div>
+                    )}
+                    {assignable ? (
+                      resolveAssign(item).kind === 'client_billed' && (
+                        <div className="space-y-1 pt-1">
+                          <span className="block text-muted-foreground">クライアント</span>
+                          {renderClientSelect(item, busy)}
+                        </div>
+                      )
+                    ) : (
+                      <div className="flex justify-between gap-3">
+                        <span className="shrink-0 text-muted-foreground">クライアント</span>
+                        <span className="text-right text-foreground">{item.client_name ?? '—'}</span>
+                      </div>
+                    )}
                     {item.description && formatExpenseRoute(item.from_place, item.to_place) && (
                       <div className="flex justify-between gap-3">
                         <span className="shrink-0 text-muted-foreground">内容</span>
@@ -620,53 +781,53 @@ export default function ExpenseCheckClient() {
                 >
                   原本を開く
                 </Button>
-                {/* 代表がまだ送信していない受付（割当中）は、割り当てが変わる可能性があるので判断させない。 */}
+                {/* 却下は送信済みだけでなく割当中（読み取り失敗の有無を問わず）でも出す。
+                    割当中に操作が1つも無いと、誰も触れない受付が一覧に残り続けてしまうため。 */}
+                {(row.status === 'submitted' || row.status === 'draft') && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-11 text-danger md:h-7"
+                    onClick={() => setConfirmTarget({ row, action: 'reject' })}
+                    disabled={busy}
+                  >
+                    却下
+                  </Button>
+                )}
                 {row.status === 'submitted' && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-11 text-danger md:h-7"
-                      onClick={() => setConfirmTarget({ row, action: 'reject' })}
-                      disabled={busy}
-                    >
-                      却下
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="h-11 md:h-7"
-                      onClick={() => setConfirmTarget({ row, action: 'approve' })}
-                      disabled={busy}
-                    >
-                      {busy ? '処理中…' : '登録する'}
-                    </Button>
-                  </>
+                  <Button
+                    size="sm"
+                    className="h-11 md:h-7"
+                    onClick={() => setConfirmTarget({ row, action: 'approve' })}
+                    disabled={busy}
+                  >
+                    {busy ? '処理中…' : '登録する'}
+                  </Button>
                 )}
-                {/* 読み取りに失敗した受付は、代表が先へ進めないまま止まっている。
-                    経理がやり直すか片付けるかを決められるよう、この2つだけを出す。 */}
+                {/* 読み取りに失敗した受付は明細が無いまま止まっている。やり直す手段をその場に出す。 */}
                 {failed && (
+                  <Button size="sm" className="h-11 md:h-7" onClick={() => reExtract(row)} disabled={busy}>
+                    {extracting ? '読み取り中…' : '再読み取り'}
+                  </Button>
+                )}
+                {/* 全明細の区分（請求分はクライアントも）が埋まるまで押せない。サーバー側の検証と同じ条件。 */}
+                {assignable && (
                   <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-11 text-danger md:h-7"
-                      onClick={() => setConfirmTarget({ row, action: 'reject' })}
-                      disabled={busy}
-                    >
-                      却下
-                    </Button>
+                    {assignIncomplete > 0 && (
+                      <span className="text-xs text-warning">未選択があと{assignIncomplete}件</span>
+                    )}
                     <Button
                       size="sm"
                       className="h-11 md:h-7"
-                      onClick={() => reExtract(row)}
-                      disabled={busy}
+                      onClick={() => submitAssignment(row)}
+                      disabled={busy || assignIncomplete > 0}
                     >
-                      {extracting ? '読み取り中…' : '再読み取り'}
+                      {busyId === row.id ? '送信中…' : '割り当てて送信'}
                     </Button>
                   </>
                 )}
-                {row.status === 'draft' && !failed && (
-                  <span className="text-xs text-muted-foreground">代表が割当中です</span>
+                {row.status === 'draft' && !assignable && !failed && (
+                  <span className="text-xs text-muted-foreground">明細がありません</span>
                 )}
                 {/* 登録済みの原本はドライブに控えが残る。保存できていない場合だけ、
                     控えが無い事実と直し方（再試行）をその場に出す。 */}

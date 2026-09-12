@@ -4,8 +4,17 @@ import { asc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { expenseUploads, expenseUploadItems } from '@/lib/schema'
 import { verifyExpenseUploadToken } from '@/lib/expense-token'
+import { verifySessionToken } from '@/lib/auth'
 import { expenseSubmitSchema, parseBody } from '@/lib/validation'
 import { getResend } from '@/lib/resend'
+
+// このパスは proxy.ts の認証除外に入っているため、ログイン済みかどうかはここで自分で見るしかない。
+// AUTH_SECRET 未設定時は誰でも通るトークンになってしまうので認証不成立として扱う（proxy.ts と同じ）。
+async function hasValidSession(req: NextRequest): Promise<boolean> {
+  const secret = process.env.AUTH_SECRET
+  if (!secret) return false
+  return verifySessionToken(secret, req.cookies.get('session')?.value ?? '')
+}
 
 // 公開エンドポイント（proxy.ts の認証除外）。代表が明細ごとの割り当てを送って経理へ回す。
 // 受付（POST /api/expense-inbox）と同じトークンで入口を絞る。
@@ -16,8 +25,12 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
 
     // トークンは検証の可否そのものなので、入力の形の検証（zod）とは分けて先に見る。
     // 形式エラー(400)と権限エラー(401)を混ぜると、URLが無効なのか入力が悪いのか区別が付かないため。
+    // 経理の /expense-check からも同じ割り当て送信を使う。経理は受付URLのトークンを持たないので、
+    // ログイン済みのセッションもトークンと同格の入口として認める（draft限定・明細の所属検証はそのまま活きる）。
     const token = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).token : null
-    if (typeof token !== 'string' || !(await verifyExpenseUploadToken(token))) {
+    const authorized =
+      (typeof token === 'string' && (await verifyExpenseUploadToken(token))) || (await hasValidSession(req))
+    if (!authorized) {
       return Response.json({ error: 'このURLは無効です。担当者に新しいURLをご確認ください。' }, { status: 401 })
     }
 
