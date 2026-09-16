@@ -528,6 +528,9 @@ const PAYROLL_FIELDS = [
 ] as const
 type PayrollField = (typeof PAYROLL_FIELDS)[number]['key']
 
+// 委託者への支払いチェックリストの列（受領・支払い予約・支払い確認）。一括操作の対象列を表す。
+type ContractorField = 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at'
+
 function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose, onSave }: {
   record: PayrollRecordWithRecipient | null
   monthLabel: string
@@ -905,8 +908,11 @@ export default function DashboardClient({
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
-  // グループ一括（委託者の支払い確認／クライアントの入金確認）を外すときの確認待ち。
-  const [pendingGroupUncheck, setPendingGroupUncheck] = useState<{ kind: 'contractor' | 'client'; ids: string[] } | null>(null)
+  // グループ一括（委託者の受領／支払い予約／支払い確認、またはクライアントの入金確認）を外すときの確認待ち。
+  // kind: 'contractor' のときだけ field を使う（どの列のまとめてチェックを外すか）。
+  const [pendingGroupUncheck, setPendingGroupUncheck] = useState<
+    { kind: 'contractor'; field: ContractorField; ids: string[] } | { kind: 'client'; ids: string[] } | null
+  >(null)
   const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
   // 経費行（立替経費・自社経費）の送付チェックを外すときの確認待ち。クライアント単位で持つ。
   const [pendingExpenseUncheck, setPendingExpenseUncheck] = useState<{ kind: 'expense' | 'clientExpense'; clientId: string } | null>(null)
@@ -1151,24 +1157,24 @@ export default function DashboardClient({
     setPendingUncheck(null)
   }
 
-  // 委託者の「支払い確認」を、その委託者の全アサインに一括で反映する。
-  // 支払いは委託者へまとめて行うため、行ごとでなく1操作で全行を揃える。
-  async function bulkToggleContractorPaid(ids: string[], nextChecked: boolean) {
-    const prev = new Map(ids.map((id) => [id, localRecords.find((r) => r.id === id)?.contractor_paid_at ?? null]))
+  // 委託者の「受領」「支払い予約」「支払い確認」を、その委託者の全アサインに一括で反映する。
+  // これらは委託者へまとめて確認・支払いを行うため、行ごとでなく1操作で全行を揃える。
+  async function bulkToggleContractorField(ids: string[], field: ContractorField, nextChecked: boolean) {
+    const prev = new Map(ids.map((id) => [id, localRecords.find((r) => r.id === id)?.[field] ?? null]))
     const stamp = new Date().toISOString()
-    setLocalRecords((list) => list.map((r) => ids.includes(r.id) ? { ...r, contractor_paid_at: nextChecked ? stamp : null } : r))
+    setLocalRecords((list) => list.map((r) => ids.includes(r.id) ? { ...r, [field]: nextChecked ? stamp : null } : r))
     try {
       const results = await Promise.all(ids.map((id) =>
         fetch(`/api/checklist/records/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ field: 'contractor_paid_at', checked: nextChecked }),
+          body: JSON.stringify({ field, checked: nextChecked }),
         })
       ))
       if (results.some((res) => !res.ok)) throw new Error('save failed')
     } catch {
       // どれか失敗したら、この委託者分だけまとめて元に戻す（他の委託者の状態は保持）。
-      setLocalRecords((list) => list.map((r) => ids.includes(r.id) ? { ...r, contractor_paid_at: prev.get(r.id) ?? null } : r))
+      setLocalRecords((list) => list.map((r) => ids.includes(r.id) ? { ...r, [field]: prev.get(r.id) ?? null } : r))
       showError('保存に失敗しました。もう一度お試しください。')
     }
   }
@@ -1194,9 +1200,9 @@ export default function DashboardClient({
   }
 
   // 一括チェック。付ける操作はそのまま、外す操作だけ確認を挟む（既存の誤タップ防止と同じ作法）。
-  function requestBulkContractorPaid(ids: string[], currentlyAllChecked: boolean) {
-    if (currentlyAllChecked) setPendingGroupUncheck({ kind: 'contractor', ids })
-    else bulkToggleContractorPaid(ids, true)
+  function requestBulkContractorField(ids: string[], field: ContractorField, currentlyAllChecked: boolean) {
+    if (currentlyAllChecked) setPendingGroupUncheck({ kind: 'contractor', field, ids })
+    else bulkToggleContractorField(ids, field, true)
   }
   function requestBulkClientConfirmed(ids: string[], currentlyAllChecked: boolean) {
     if (currentlyAllChecked) setPendingGroupUncheck({ kind: 'client', ids })
@@ -1204,10 +1210,10 @@ export default function DashboardClient({
   }
   function confirmGroupUncheck() {
     if (!pendingGroupUncheck) return
-    const { kind, ids } = pendingGroupUncheck
+    const pending = pendingGroupUncheck
     setPendingGroupUncheck(null)
-    if (kind === 'contractor') bulkToggleContractorPaid(ids, false)
-    else bulkToggleClientConfirmed(ids, false)
+    if (pending.kind === 'contractor') bulkToggleContractorField(pending.ids, pending.field, false)
+    else bulkToggleClientConfirmed(pending.ids, false)
   }
 
   // ─── 役員報酬・給与 ─────────────────────────────
@@ -2305,8 +2311,11 @@ export default function DashboardClient({
                     )
                     // 複数クライアントを担当する委託者は「ヘッダー行（名前＋合計）＋明細行（インデント）」で表示する。
                     // 1クライアントだけの委託者は従来どおり1行にまとめ、冗長な行を増やさない。
-                    // 支払い確認はこの委託者の全アサインに一括で付ける（支払いはまとめて行うため）。
+                    // 受領・支払い予約・支払い確認は、いずれもこの委託者の全アサインに一括で付ける
+                    // （委託者とのやり取り・支払いはまとめて行うため）。
                     const paidIds = g.items.map((r) => r.id)
+                    const allReceived = g.items.every((r) => !!r.invoice_received_at)
+                    const allReserved = g.items.every((r) => !!r.payment_reserved_at)
                     const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                     // 相手の行（見出し／1件だけの行）の見た目。期限はその委託者の全アサインぶんをまとめて判定し、
                     // 背景ではなく左端のバーで出す（対応色の面は内訳の行だけに使う）。
@@ -2341,13 +2350,34 @@ export default function DashboardClient({
                               <span className="text-xs text-muted-foreground mr-1">合計</span>
                               <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                             </td>
-                            <td colSpan={2} />
+                            <td className="text-center py-2 px-3">
+                              <MoneyCheckControl
+                                checked={allReceived}
+                                pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'invoice_received_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                                label={`${g.contractorName}の請求書受領（まとめて）`}
+                                onRequest={() => requestBulkContractorField(paidIds, 'invoice_received_at', allReceived)}
+                                onConfirm={confirmGroupUncheck}
+                                onCancel={() => setPendingGroupUncheck(null)}
+                                badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
+                              />
+                            </td>
+                            <td className="text-center py-2 px-3">
+                              <MoneyCheckControl
+                                checked={allReserved}
+                                pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'payment_reserved_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                                label={`${g.contractorName}の支払い予約（まとめて）`}
+                                onRequest={() => requestBulkContractorField(paidIds, 'payment_reserved_at', allReserved)}
+                                onConfirm={confirmGroupUncheck}
+                                onCancel={() => setPendingGroupUncheck(null)}
+                                badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
+                              />
+                            </td>
                             <td className="text-center py-2 px-3">
                               <MoneyCheckControl
                                 checked={allPaid}
-                                pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                                pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'contractor_paid_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
                                 label={`${g.contractorName}の支払い確認（まとめて）`}
-                                onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
+                                onRequest={() => requestBulkContractorField(paidIds, 'contractor_paid_at', allPaid)}
                                 onConfirm={confirmGroupUncheck}
                                 onCancel={() => setPendingGroupUncheck(null)}
                                 badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
@@ -2483,6 +2513,8 @@ export default function DashboardClient({
                   0
                 )
                 const paidIds = g.items.map((r) => r.id)
+                const allReceived = g.items.every((r) => !!r.invoice_received_at)
+                const allReserved = g.items.every((r) => !!r.payment_reserved_at)
                 const allPaid = g.items.every((r) => !!r.contractor_paid_at)
                 // PC表と同じ考え方で、相手の名前の帯は淡いブルー固定・期限は左端のバーで出す。
                 const groupState = rowDueState(
@@ -2505,30 +2537,57 @@ export default function DashboardClient({
                     data-pending-row={multi ? `cgroup-${g.contractorId}` : undefined}
                     className={`px-4 py-3 ${multi ? rowBg(`cgroup-${g.contractorId}`, '') : ''}`}
                   >
-                    <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cgroup-${g.contractorId}`, groupCls)} ${accentCls}`}>
-                      <span className="flex min-w-0 flex-col gap-1">
-                        <span className="font-semibold text-foreground">{g.contractorName}</span>
-                        <ProgressPips states={groupPips} />
-                      </span>
-                      {/* 複数クライアントを担当する委託者は、ヘッダーに合計報酬と「支払い確認（まとめて）」を置く */}
-                      {multi && (
-                        <span className="flex shrink-0 items-center gap-3 text-sm">
-                          <span>
+                    <div className={`-mx-4 mb-2 flex flex-col gap-2 px-4 py-2 ${rowBg(`cgroup-${g.contractorId}`, groupCls)} ${accentCls}`}>
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="flex min-w-0 flex-col gap-1">
+                          <span className="font-semibold text-foreground">{g.contractorName}</span>
+                          <ProgressPips states={groupPips} />
+                        </span>
+                        {multi && (
+                          <span className="shrink-0 text-sm">
                             <span className="text-xs text-muted-foreground mr-1">合計</span>
                             <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
+                          </span>
+                        )}
+                      </div>
+                      {/* 複数クライアントを担当する委託者は、名前・合計の行の下に「受領／支払い予約／支払い確認（まとめて）」を2行目として並べる。
+                          横一列に押し込むと委託者名が縦書きに折り返されるため、明細カードと同じ3列グリッドにする。 */}
+                      {multi && (
+                        <div className="grid grid-cols-3 gap-1">
+                          <span className="flex flex-col items-center gap-0.5">
+                            <span className="text-xs text-muted-foreground">受領</span>
+                            <MoneyCheckControl
+                              checked={allReceived}
+                              pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'invoice_received_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                              label={`${g.contractorName}の請求書受領（まとめて）`}
+                              onRequest={() => requestBulkContractorField(paidIds, 'invoice_received_at', allReceived)}
+                              onConfirm={confirmGroupUncheck}
+                              onCancel={() => setPendingGroupUncheck(null)}
+                            />
+                          </span>
+                          <span className="flex flex-col items-center gap-0.5">
+                            <span className="text-xs text-muted-foreground">支払い予約</span>
+                            <MoneyCheckControl
+                              checked={allReserved}
+                              pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'payment_reserved_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                              label={`${g.contractorName}の支払い予約（まとめて）`}
+                              onRequest={() => requestBulkContractorField(paidIds, 'payment_reserved_at', allReserved)}
+                              onConfirm={confirmGroupUncheck}
+                              onCancel={() => setPendingGroupUncheck(null)}
+                            />
                           </span>
                           <span className="flex flex-col items-center gap-0.5">
                             <span className="text-xs text-muted-foreground">支払い確認</span>
                             <MoneyCheckControl
                               checked={allPaid}
-                              pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
+                              pending={pendingGroupUncheck?.kind === 'contractor' && pendingGroupUncheck.field === 'contractor_paid_at' && pendingGroupUncheck.ids.join(',') === paidIds.join(',')}
                               label={`${g.contractorName}の支払い確認（まとめて）`}
-                              onRequest={() => requestBulkContractorPaid(paidIds, allPaid)}
+                              onRequest={() => requestBulkContractorField(paidIds, 'contractor_paid_at', allPaid)}
                               onConfirm={confirmGroupUncheck}
                               onCancel={() => setPendingGroupUncheck(null)}
                             />
                           </span>
-                        </span>
+                        </div>
                       )}
                     </div>
                     <div className="space-y-2">
