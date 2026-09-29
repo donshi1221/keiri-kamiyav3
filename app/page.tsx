@@ -57,7 +57,7 @@ export default async function DashboardPage({
       orderBy: [asc(monthlyClientRecords.created_at)],
       with: {
         clients: { columns: { id: true, name: true } },
-        billing_items: { columns: { id: true, label: true, contract_months: true } },
+        billing_items: { columns: { id: true, label: true, billing_amount: true, one_time: true, contract_start: true, contract_months: true } },
       },
     }),
     db.query.monthlyGlobalTasks.findFirst({
@@ -69,16 +69,17 @@ export default async function DashboardPage({
       where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
     }),
     db.select({ updated_at: moneyforwardTokens.updated_at }).from(moneyforwardTokens).limit(1),
-    // 内訳ごとの送付済み・入金確認済み件数をSQL側で集計（請求回数超過の判定に使用）
+    // 内訳ごとの送付済み・入金確認済みの請求回数をSQL側で集計（請求回数超過の判定に使用）。
+    // 残りの月をまとめた行は1行で複数か月分になるため、行数ではなく months_covered の合計で数える。
     db.select({
       billing_item_id: monthlyClientRecords.billing_item_id,
-      billed: sql<number>`count(*) filter (where ${monthlyClientRecords.invoice_sent_at} is not null)`,
-      paid: sql<number>`count(*) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null)`,
+      billed: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.invoice_sent_at} is not null), 0)`,
+      paid: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null), 0)`,
     }).from(monthlyClientRecords).groupBy(monthlyClientRecords.billing_item_id),
     db.select({
       assignment_id: monthlyRecords.assignment_id,
-      scheduled: sql<number>`count(*)`,
-      paid: sql<number>`count(*) filter (where ${monthlyRecords.contractor_paid_at} is not null)`,
+      scheduled: sql<number>`coalesce(sum(${monthlyRecords.months_covered}), 0)`,
+      paid: sql<number>`coalesce(sum(${monthlyRecords.months_covered}) filter (where ${monthlyRecords.contractor_paid_at} is not null), 0)`,
     }).from(monthlyRecords).groupBy(monthlyRecords.assignment_id),
     db.select({
       year: monthlyRecords.year,

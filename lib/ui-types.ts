@@ -49,10 +49,24 @@ export interface TaskItem {
 
 // monthlyClientRecords（クライアント請求記録）。
 // billing_item_id / label_snapshot は MonthlyClientRecord 本体に含まれる。
-// billing_items（内訳マスタ）は回数超過の判定に contract_months を使うために取得する。
+// billing_items（内訳マスタ）は回数超過の判定に contract_months を、残りの月をまとめる操作
+// （lib/lump-sum）の可否判定と1か月あたりの金額に one_time / contract_start / billing_amount を使うために取得する。
 export type ClientRecordWithClient = MonthlyClientRecord & {
   clients: Pick<Client, 'id' | 'name'> | null
-  billing_items?: Pick<ClientBillingItem, 'id' | 'label' | 'contract_months'> | null
+  billing_items?: Pick<ClientBillingItem, 'id' | 'label' | 'billing_amount' | 'one_time' | 'contract_start' | 'contract_months'> | null
+}
+
+// 残りの月をまとめる確認ダイアログ（ダッシュボード）の対象1件。
+// kind でクライアント請求（client）か委託者支払い（record）かを分け、id はその月次行の id。
+// monthlyAmount は合計の初期値（1か月あたり × months）を出すための1か月分の金額。
+export interface LumpSumTarget {
+  kind: 'client' | 'record'
+  id: string
+  title: string
+  year: number
+  month: number
+  months: number
+  monthlyAmount: number
 }
 
 // ─── 納品チェック（app/delivery）─────────────────────────────

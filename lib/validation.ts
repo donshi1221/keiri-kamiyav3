@@ -348,6 +348,16 @@ export const snapshotBackfillSchema = z.object({
   mode: z.enum(['fill-missing', 'overwrite']).default('fill-missing'),
 })
 
+// 残りの月をまとめて1回で請求・支払いするときの合計額（POST .../lump）。
+// 値引きで「1か月分×月数」と違う額にすることがあるため金額は画面から受け取るが、
+// 0円のまとめは残りの月を無料にする操作と区別が付かないので許さない。
+export const lumpSumCreateSchema = z.object({
+  total_amount: z.coerce
+    .number({ message: '合計金額には数値を入力してください' })
+    .int({ message: '合計金額は整数で入力してください' })
+    .min(1, { message: '合計金額は1円以上で入力してください' }),
+})
+
 type ParseResult<T> = { ok: true; data: T } | { ok: false; message: string }
 
 // スキーマで body を検証し、失敗時は最初のエラーメッセージ（利用者向け）を返す。

@@ -218,6 +218,13 @@
       "when": 1789094959392,
       "tag": "0030_curly_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790659318231,
+      "tag": "0031_absurd_hulk",
+      "breakpoints": true
     }
   ]
 }

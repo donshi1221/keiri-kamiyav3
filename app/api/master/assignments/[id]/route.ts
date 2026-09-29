@@ -38,6 +38,8 @@ async function cleanupOutOfPeriodRecords(assignmentId: string, today: Date) {
         isNull(monthlyRecords.invoice_received_at),
         isNull(monthlyRecords.payment_reserved_at),
         isNull(monthlyRecords.contractor_paid_at),
+        // 残りの月をまとめた行は人が操作して作った行なので、期間が変わっても消さない。
+        eq(monthlyRecords.months_covered, 1),
         // payout_amount_snapshot は生成時にマスタの契約額が入るため NULL 判定ができない。
         // 「生成時のまま＝マスタの契約額と一致」だけを未編集とみなし、手で直された行は残す。
         or(

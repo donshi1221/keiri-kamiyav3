@@ -1,6 +1,7 @@
 import { db } from './db'
 import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords, payrollRecurringReimbursements, payrollReimbursementItems } from './schema'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, gt, inArray } from 'drizzle-orm'
+import { isCoveredByLump } from './lump-sum'
 
 // 支払期間（開始月・回数）から、その (year, month) が支払い対象かを判定する。
 // 生成側と、期間外になった月次レコードの掃除側（app/api/master/assignments/[id]）で
@@ -44,9 +45,26 @@ export async function generateMonthlyRecords(year: number, month: number) {
 
   const payableAssignments = activeAssignments.filter((a) => isPaymentActiveForMonth(a, year, month))
 
-  if (payableAssignments.length > 0) {
+  // 前の月の行で残りの支払いをまとめた（months_covered が 2 以上）アサインは、
+  // カバー済みの月に行を作らない。作ると同じ月の分を二重に払うことになる。
+  const assignmentLumpRows = payableAssignments.length > 0
+    ? await db.select({
+        assignment_id: monthlyRecords.assignment_id,
+        year: monthlyRecords.year,
+        month: monthlyRecords.month,
+        months_covered: monthlyRecords.months_covered,
+      }).from(monthlyRecords).where(and(
+        inArray(monthlyRecords.assignment_id, payableAssignments.map((a) => a.id)),
+        gt(monthlyRecords.months_covered, 1),
+      ))
+    : []
+  const uncoveredAssignments = payableAssignments.filter((a) =>
+    !isCoveredByLump(assignmentLumpRows.filter((r) => r.assignment_id === a.id), { year, month })
+  )
+
+  if (uncoveredAssignments.length > 0) {
     await db.insert(monthlyRecords)
-      .values(payableAssignments.map((a) => ({
+      .values(uncoveredAssignments.map((a) => ({
         year,
         month,
         assignment_id: a.id,
@@ -69,9 +87,25 @@ export async function generateMonthlyRecords(year: number, month: number) {
 
   const activeItems = allItems.filter((it) => it.active && isBillingItemActiveForMonth(it, year, month))
 
-  if (activeItems.length > 0) {
+  // 支払いと同じく、前の月の行で残りの請求をまとめた内訳は、カバー済みの月に行を作らない（二重請求の防止）。
+  const itemLumpRows = activeItems.length > 0
+    ? await db.select({
+        billing_item_id: monthlyClientRecords.billing_item_id,
+        year: monthlyClientRecords.year,
+        month: monthlyClientRecords.month,
+        months_covered: monthlyClientRecords.months_covered,
+      }).from(monthlyClientRecords).where(and(
+        inArray(monthlyClientRecords.billing_item_id, activeItems.map((it) => it.id)),
+        gt(monthlyClientRecords.months_covered, 1),
+      ))
+    : []
+  const uncoveredItems = activeItems.filter((it) =>
+    !isCoveredByLump(itemLumpRows.filter((r) => r.billing_item_id === it.id), { year, month })
+  )
+
+  if (uncoveredItems.length > 0) {
     await db.insert(monthlyClientRecords)
-      .values(activeItems.map((it) => ({
+      .values(uncoveredItems.map((it) => ({
         year,
         month,
         client_id: it.client_id,
@@ -147,8 +181,8 @@ export async function generateMonthlyRecords(year: number, month: number) {
   }
 
   return {
-    assignmentCount: payableAssignments.length,
-    clientCount: activeItems.length,
+    assignmentCount: uncoveredAssignments.length,
+    clientCount: uncoveredItems.length,
     payrollCount: activeRecipients.length,
     recurringReimbursementCount: dueRecurring.length,
   }

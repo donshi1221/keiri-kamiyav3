@@ -9,11 +9,12 @@ import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, nextMonthOf, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
-import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput } from '@/lib/ui-types'
+import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense, MonthlyRecord, MonthlyClientRecord } from '@/lib/schema'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput, LumpSumTarget } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
+import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText } from '@/lib/lump-sum'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
@@ -463,6 +464,65 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
   )
 }
 
+// 残りの月をまとめる操作（クライアント請求・委託者支払いの行内）。
+// まとめ済みの行は何か月分かをバッジで示し、確定前（送付・支払い前）なら取り消せる。
+// 取り消しは金額が1か月分に戻る操作なので、チェックを外すときと同じく一度確認を挟む。
+function LumpSumControl({ monthsCovered, canLump, canUndo, undoPending, onLump, onRequestUndo, onConfirmUndo, onCancelUndo }: {
+  monthsCovered: number
+  canLump: boolean
+  canUndo: boolean
+  undoPending: boolean
+  onLump: () => void
+  onRequestUndo: () => void
+  onConfirmUndo: () => void
+  onCancelUndo: () => void
+}) {
+  if (monthsCovered > 1) {
+    return (
+      <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <Badge variant="outline" className="text-xs">{monthsCovered}か月分まとめ</Badge>
+        {canUndo && (undoPending ? (
+          <span className="flex items-center gap-1">
+            <span className="text-muted-foreground">取り消しますか？</span>
+            <button
+              type="button"
+              onClick={onConfirmUndo}
+              className="flex h-11 items-center rounded px-2 font-medium text-danger hover:bg-danger-subtle md:h-6"
+            >
+              取り消す
+            </button>
+            <button
+              type="button"
+              onClick={onCancelUndo}
+              className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
+            >
+              戻る
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onRequestUndo}
+            className="flex h-11 items-center text-muted-foreground hover:text-danger hover:underline md:h-5"
+          >
+            まとめを取り消す
+          </button>
+        ))}
+      </span>
+    )
+  }
+  if (!canLump) return null
+  return (
+    <button
+      type="button"
+      onClick={onLump}
+      className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+    >
+      残りをまとめる
+    </button>
+  )
+}
+
 // 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
 // タップ領域はスマホで44px以上を確保し、PCの表では詰めて表示する。
 function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onConfirm, onCancel, badge }: {
@@ -618,6 +678,81 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
           <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving}>
             {saving ? '保存中…' : '保存'}
+          </Button>
+        </div>
+      </div>
+    </FormDialog>
+  )
+}
+
+// 残りの月を1回の請求・支払いにまとめる確認ダイアログ。
+// 合計は「1か月あたり × 月数」を初期値にし、値引きに合わせて書き換えられるようにする。
+function LumpSumDialog({ target, onClose, onSubmit }: {
+  target: LumpSumTarget | null
+  onClose: () => void
+  onSubmit: (target: LumpSumTarget, total: number) => Promise<void>
+}) {
+  const [total, setTotal] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setTotal(String(target.monthlyAmount * target.months))
+  }, [target])
+
+  if (!target) return null
+
+  const isClient = target.kind === 'client'
+  const next = nextMonthOf(target.year, target.month)
+  const nextLabel = next.year === target.year ? `${next.month}月` : `${next.year}年${next.month}月`
+  const totalNum = Number(total)
+  const valid = total.trim() !== '' && Number.isInteger(totalNum) && totalNum >= 1
+
+  async function submit() {
+    if (!target || !valid) return
+    setSaving(true)
+    await onSubmit(target, totalNum)
+    setSaving(false)
+  }
+
+  return (
+    <FormDialog open onClose={onClose} title={isClient ? '残りの請求をまとめる' : '残りの支払いをまとめる'}>
+      <div className="space-y-3 text-sm">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          <dt className="text-muted-foreground">対象</dt>
+          <dd className="min-w-0 break-words">{target.title}</dd>
+          <dt className="text-muted-foreground">期間</dt>
+          <dd>{lumpPeriodText(target.year, target.month, target.months)}（{target.months}か月）</dd>
+          <dt className="text-muted-foreground">1か月あたり</dt>
+          <dd>¥{target.monthlyAmount.toLocaleString()}</dd>
+        </dl>
+        <div>
+          <label className="mb-1 block font-medium" htmlFor="lump-total">
+            合計（{isClient ? '今回の請求額' : '今回の支払額'}）
+          </label>
+          <input
+            id="lump-total"
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            value={total}
+            onChange={(e) => setTotal(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            className="w-full rounded border border-border px-3 py-2 text-right text-sm"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            初期値は1か月あたり×{target.months}か月です。値引きする場合は書き換えてください。
+          </p>
+        </div>
+        <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+          <li>{nextLabel}以降の行は作られなくなります。{isClient ? '請求書を送る前' : '支払う前'}ならあとで取り消せます。</li>
+          {!isClient && <li>請求書チェックで支払回数（N/M）の注意が出ることがあります。</li>}
+        </ul>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving || !valid}>
+            {saving ? '保存中…' : 'まとめる'}
           </Button>
         </div>
       </div>
@@ -1018,6 +1153,10 @@ export default function DashboardClient({
     { kind: 'contractor'; field: ContractorField; ids: string[] } | { kind: 'client'; ids: string[] } | null
   >(null)
   const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
+  // 残りの月をまとめる確認ダイアログの対象。
+  const [lumpTarget, setLumpTarget] = useState<LumpSumTarget | null>(null)
+  // まとめを取り消すときの確認待ち（金額が1か月分に戻るため、チェックを外すときと同じ誤タップ防止）。
+  const [pendingLumpUndo, setPendingLumpUndo] = useState<{ kind: LumpSumTarget['kind']; id: string } | null>(null)
   // 経費行（立替経費・自社経費）の送付チェックを外すときの確認待ち。クライアント単位で持つ。
   const [pendingExpenseUncheck, setPendingExpenseUncheck] = useState<{ kind: 'expense' | 'clientExpense'; clientId: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -1222,7 +1361,8 @@ export default function DashboardClient({
       })
       if (!res.ok) throw new Error('save failed')
       const updated = await res.json()
-      setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...updated, clients: r.clients } : r))
+      // billing_items も引き継ぐ（落とすと請求回数超過の判定と「残りをまとめる」の可否判定が効かなくなる）。
+      setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...updated, clients: r.clients, billing_items: r.billing_items } : r))
     } catch {
       setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...r, [field]: prevValue } : r))
       showError('保存に失敗しました。もう一度お試しください。')
@@ -1753,6 +1893,113 @@ export default function DashboardClient({
       ? r.actual_payout_amount
       : (r.payout_amount_snapshot ?? r.assignments?.contractor_payout_amount ?? null)
   }
+
+  // ─── 残りの月をまとめる ─────────────────────────────
+  // まとめる対象の1か月あたりの金額は、その行の今の控えを優先する（控えが無ければマスタの額）。
+  function openClientLump(cr: ClientRecordWithClient, clientName: string) {
+    const item = cr.billing_items
+    const months = remainingMonths(cr, item?.contract_start ?? null, item?.contract_months ?? null)
+    if (months == null) return
+    const label = itemLabel(cr)
+    setLumpTarget({
+      kind: 'client',
+      id: cr.id,
+      title: label ? `${clientName}（${label}）` : clientName,
+      year: cr.year,
+      month: cr.month,
+      months,
+      monthlyAmount: cr.billing_amount_snapshot ?? item?.billing_amount ?? 0,
+    })
+  }
+
+  function openRecordLump(r: RecordWithRelations) {
+    const asgn = r.assignments
+    if (!asgn) return
+    const months = remainingMonths(r, asgn.payment_start_month, asgn.payment_count)
+    if (months == null) return
+    setLumpTarget({
+      kind: 'record',
+      id: r.id,
+      title: `${asgn.contractors?.name ?? '?'}（${asgn.clients?.name ?? '?'} · ${asgn.role_name}）`,
+      year: r.year,
+      month: r.month,
+      months,
+      monthlyAmount: r.payout_amount_snapshot ?? asgn.contractor_payout_amount,
+    })
+  }
+
+  // まとめ・取り消しは金額と後続の月の行の有無が変わる操作なので、楽観更新せずサーバーが返した行で差し替える。
+  // 関連（clients / billing_items / assignments）はレスポンスに含まれないため、今の行の値を残して上書きする。
+  function replaceLumpRow(kind: LumpSumTarget['kind'], id: string, updated: MonthlyRecord | MonthlyClientRecord) {
+    if (kind === 'client') {
+      setLocalClientRecords((prev) => prev.map((r) => r.id === id ? { ...r, ...(updated as MonthlyClientRecord) } : r))
+    } else {
+      setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, ...(updated as MonthlyRecord) } : r))
+    }
+  }
+
+  const lumpApiPath = (kind: LumpSumTarget['kind'], id: string) =>
+    `/api/checklist/${kind === 'client' ? 'client-records' : 'records'}/${id}/lump`
+
+  async function submitLumpSum(target: LumpSumTarget, total: number) {
+    try {
+      const res = await fetch(lumpApiPath(target.kind, target.id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ total_amount: total }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        showError((data as { error?: string } | null)?.error ?? 'まとめられませんでした。もう一度お試しください。')
+        return
+      }
+      replaceLumpRow(target.kind, target.id, data as MonthlyRecord | MonthlyClientRecord)
+      setLumpTarget(null)
+    } catch {
+      showError('まとめられませんでした。通信状況をご確認ください。')
+    }
+  }
+
+  async function undoLumpSum(kind: LumpSumTarget['kind'], id: string) {
+    setPendingLumpUndo(null)
+    try {
+      const res = await fetch(lumpApiPath(kind, id), { method: 'DELETE' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        showError((data as { error?: string } | null)?.error ?? 'まとめを取り消せませんでした。もう一度お試しください。')
+        return
+      }
+      replaceLumpRow(kind, id, data as MonthlyRecord | MonthlyClientRecord)
+    } catch {
+      showError('まとめを取り消せませんでした。通信状況をご確認ください。')
+    }
+  }
+
+  const renderClientLump = (cr: ClientRecordWithClient, clientName: string) => (
+    <LumpSumControl
+      monthsCovered={cr.months_covered}
+      canLump={clientLumpBlockReason(cr, cr.billing_items) === null}
+      canUndo={!cr.invoice_sent_at}
+      undoPending={pendingLumpUndo?.kind === 'client' && pendingLumpUndo.id === cr.id}
+      onLump={() => openClientLump(cr, clientName)}
+      onRequestUndo={() => setPendingLumpUndo({ kind: 'client', id: cr.id })}
+      onConfirmUndo={() => undoLumpSum('client', cr.id)}
+      onCancelUndo={() => setPendingLumpUndo(null)}
+    />
+  )
+
+  const renderRecordLump = (r: RecordWithRelations) => (
+    <LumpSumControl
+      monthsCovered={r.months_covered}
+      canLump={payoutLumpBlockReason(r, r.assignments, r.assignments?.contractors?.contractor_type) === null}
+      canUndo={!r.contractor_paid_at}
+      undoPending={pendingLumpUndo?.kind === 'record' && pendingLumpUndo.id === r.id}
+      onLump={() => openRecordLump(r)}
+      onRequestUndo={() => setPendingLumpUndo({ kind: 'record', id: r.id })}
+      onConfirmUndo={() => undoLumpSum('record', r.id)}
+      onCancelUndo={() => setPendingLumpUndo(null)}
+    />
+  )
 
   // ─── 立替経費（代行者のみ）─────────────────────────────
   // アサインに紐づくため、委託者への支払いとクライアントへの請求の両方に同額が乗る（パススルー）。
@@ -2535,6 +2782,7 @@ export default function DashboardClient({
                                 paid={assignmentPaymentCounts[asgn.id]?.paid ?? 0}
                               />
                             )}
+                            {renderRecordLump(r)}
                             {isVideoEditor && (() => {
                               const result = deliveryResult(asgn?.id)
                               if (!result) return null
@@ -2726,6 +2974,7 @@ export default function DashboardClient({
                                     paid={assignmentPaymentCounts[asgn.id]?.paid ?? 0}
                                   />
                                 )}
+                                {renderRecordLump(r)}
                                 {isVideoEditor && (() => {
                                   const result = deliveryResult(asgn?.id)
                                   if (!result) return null
@@ -2946,6 +3195,7 @@ export default function DashboardClient({
                               </>
                             )}
                             {overBilled && <Badge variant="destructive" className="ml-2 text-xs">請求回数超過</Badge>}
+                            {renderClientLump(cr, g.clientName)}
                           </td>
                           <td className={`py-3 px-3 text-right ${multi ? 'text-muted-foreground' : 'font-semibold text-foreground'}`}>
                             {(() => {
@@ -3110,6 +3360,7 @@ export default function DashboardClient({
                               <div className="min-w-0">
                                 <span className="text-sm text-muted-foreground">{label || '（内訳名なし）'}</span>
                                 {overBilled && <Badge variant="destructive" className="ml-1 text-xs">請求回数超過</Badge>}
+                                {renderClientLump(cr, g.clientName)}
                               </div>
                               <span className={`shrink-0 text-sm ${multi ? 'text-muted-foreground' : 'font-semibold text-foreground'}`}>
                                 {billing ? `¥${billing.toLocaleString()}` : '—'}
@@ -3295,6 +3546,12 @@ export default function DashboardClient({
           </p>
         </section>
       )}
+
+      <LumpSumDialog
+        target={lumpTarget}
+        onClose={() => setLumpTarget(null)}
+        onSubmit={submitLumpSum}
+      />
 
       <PayrollAmountsDialog
         record={payrollEditTarget}

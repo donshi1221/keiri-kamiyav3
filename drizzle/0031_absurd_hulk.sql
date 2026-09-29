@@ -1,0 +1,2 @@
+ALTER TABLE "monthly_client_records" ADD COLUMN "months_covered" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "monthly_records" ADD COLUMN "months_covered" integer DEFAULT 1 NOT NULL;

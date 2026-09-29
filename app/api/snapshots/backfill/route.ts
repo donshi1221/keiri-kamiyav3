@@ -11,6 +11,8 @@ export const maxDuration = 60
 // 現在のマスタ値から補完・訂正する。
 //   fill-missing: 未設定(null)の行だけ埋める（生成漏れの穴埋め）
 //   overwrite   : その月の全行を現マスタ値で上書きする（誤りの訂正。過去表示が変わる点に注意）
+// 残りの月をまとめた行（months_covered > 1）は複数か月分の合計額と専用の内訳名を持つため、
+// どちらのモードでもマスタの1か月分の値で上書きしない。
 // proxy.ts で認証必須。
 export async function POST(req: NextRequest) {
   try {
@@ -22,6 +24,7 @@ export async function POST(req: NextRequest) {
     const recs = await db.select({
       id: monthlyRecords.id,
       snapshot: monthlyRecords.payout_amount_snapshot,
+      monthsCovered: monthlyRecords.months_covered,
       payout: assignments.contractor_payout_amount,
     })
       .from(monthlyRecords)
@@ -30,6 +33,7 @@ export async function POST(req: NextRequest) {
 
     let recordsUpdated = 0
     for (const r of recs) {
+      if (r.monthsCovered > 1) continue
       if (mode === 'fill-missing' && r.snapshot !== null) continue
       if (r.snapshot === r.payout) continue
       await db.update(monthlyRecords).set({ payout_amount_snapshot: r.payout }).where(eq(monthlyRecords.id, r.id))
@@ -41,6 +45,7 @@ export async function POST(req: NextRequest) {
       id: monthlyClientRecords.id,
       snapshot: monthlyClientRecords.billing_amount_snapshot,
       labelSnapshot: monthlyClientRecords.label_snapshot,
+      monthsCovered: monthlyClientRecords.months_covered,
       billing: clientBillingItems.billing_amount,
       label: clientBillingItems.label,
     })
@@ -50,6 +55,7 @@ export async function POST(req: NextRequest) {
 
     let clientRecordsUpdated = 0
     for (const r of clientRecs) {
+      if (r.monthsCovered > 1) continue
       const amountNeedsFill = !(mode === 'fill-missing' && r.snapshot !== null) && r.snapshot !== r.billing
       const labelNeedsFill = !(mode === 'fill-missing' && r.labelSnapshot !== null) && r.labelSnapshot !== r.label
       if (!amountNeedsFill && !labelNeedsFill) continue

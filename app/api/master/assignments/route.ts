@@ -19,10 +19,11 @@ export async function GET() {
 
     // アサインごとの支払い実績を集計する。支払い確認(contractor_paid_at)済みの月だけを対象に、
     // 回数（=支払った月数）と本数（=その月の支払対象本数の合計）をまとめる。編集者の累計表示に使う。
+    // 回数は、残りの月をまとめた行が1行で複数か月分になるため months_covered の合計で数える。
     const paidRows = await db
       .select({
         assignment_id: monthlyRecords.assignment_id,
-        paid_count: sql<number>`count(*) filter (where ${monthlyRecords.contractor_paid_at} is not null)`,
+        paid_count: sql<number>`coalesce(sum(${monthlyRecords.months_covered}) filter (where ${monthlyRecords.contractor_paid_at} is not null), 0)`,
         paid_video_count: sql<number>`coalesce(sum(${monthlyRecords.delivered_video_count}) filter (where ${monthlyRecords.contractor_paid_at} is not null), 0)`,
       })
       .from(monthlyRecords)

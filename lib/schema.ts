@@ -108,6 +108,9 @@ export const monthlyRecords = pgTable('monthly_records', {
   invoice_received_at: timestamp('invoice_received_at', { withTimezone: true, mode: 'string' }),
   payment_reserved_at: timestamp('payment_reserved_at', { withTimezone: true, mode: 'string' }),
   contractor_paid_at: timestamp('contractor_paid_at', { withTimezone: true, mode: 'string' }),
+  // この1行で何か月分をまかなうか。残りの支払いを1回にまとめた行だけ 2 以上になり、
+  // その後の月は行を作らない（lib/lump-sum）。支払回数の集計もこの値の合計で数える。
+  months_covered: integer('months_covered').notNull().default(1),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.assignment_id)])
 
@@ -124,6 +127,9 @@ export const monthlyClientRecords = pgTable('monthly_client_records', {
   label_snapshot: text('label_snapshot'),
   invoice_sent_at: timestamp('invoice_sent_at', { withTimezone: true, mode: 'string' }),
   payment_confirmed_at: timestamp('payment_confirmed_at', { withTimezone: true, mode: 'string' }),
+  // この1行で何か月分をまかなうか。残りの請求を1回にまとめた行だけ 2 以上になり、
+  // その後の月は行を作らない（lib/lump-sum）。請求回数の集計もこの値の合計で数える。
+  months_covered: integer('months_covered').notNull().default(1),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.billing_item_id)])
 
