@@ -54,6 +54,37 @@ export function lumpPeriodText(startYear: number, startMonth: number, months: nu
   return `${startYear}年${startMonth}月〜${endText}`
 }
 
+// まとめる月数を決める。requested が無ければ残り全部。残りを超える指定はエラー文を返す
+// （残り月数は行と契約から決まるため、画面の選択肢ではなくサーバー側で必ず確かめる）。
+export function resolveLumpMonths(
+  remaining: number,
+  requested: number | undefined,
+): { ok: true; months: number } | { ok: false; error: string } {
+  const months = requested ?? remaining
+  if (months > remaining) return { ok: false, error: `まとめられるのは最大${remaining}か月です。` }
+  if (months < 2) return { ok: false, error: 'まとめる月数は2か月以上で指定してください。' }
+  return { ok: true, months }
+}
+
+// 基準の年と同じ年なら「10月」、違う年なら「2027年1月」と書く。
+function monthText(baseYear: number, ym: YearMonth): string {
+  return ym.year === baseYear ? `${ym.month}月` : `${ym.year}年${ym.month}月`
+}
+
+// まとめたことで行が作られなくなる月の説明（確認ダイアログの注意書き）。
+// 残り全部なら「以降は作られない」、途中までなら「どの月が作られず、いつから元に戻るか」を書く。
+export function lumpSkipNote(year: number, month: number, months: number, remaining: number): string {
+  const first = addMonthsOf(year, month, 1)
+  if (months >= remaining) return `${monthText(year, first)}以降の行は作られなくなります。`
+  const last = addMonthsOf(year, month, months - 1)
+  const resume = addMonthsOf(year, month, months)
+  const skipped =
+    months === 2 ? monthText(year, first)
+    : months === 3 ? `${monthText(year, first)}・${monthText(year, last)}`
+    : `${monthText(year, first)}〜${monthText(year, last)}`
+  return `${skipped}の行は作られません。${monthText(year, resume)}からは通常どおり毎月の行ができます。`
+}
+
 // まとめ行の内訳名（label_snapshot）。請求書に載る名前なので、何か月分をまとめたかを名前で読めるようにする。
 export function lumpLabel(baseLabel: string, startYear: number, startMonth: number, months: number): string {
   const period = `${lumpPeriodText(startYear, startMonth, months)}分・${months}か月まとめて`

@@ -58,14 +58,15 @@ export type ClientRecordWithClient = MonthlyClientRecord & {
 
 // 残りの月をまとめる確認ダイアログ（ダッシュボード）の対象1件。
 // kind でクライアント請求（client）か委託者支払い（record）かを分け、id はその月次行の id。
-// monthlyAmount は合計の初期値（1か月あたり × months）を出すための1か月分の金額。
+// maxMonths はその行の月を含めた契約の残り月数（まとめる月数の選択肢の上限・初期値）。
+// monthlyAmount は合計の初期値（1か月あたり × 選んだ月数）を出すための1か月分の金額。
 export interface LumpSumTarget {
   kind: 'client' | 'record'
   id: string
   title: string
   year: number
   month: number
-  months: number
+  maxMonths: number
   monthlyAmount: number
 }
 

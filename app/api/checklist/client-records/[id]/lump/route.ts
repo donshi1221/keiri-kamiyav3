@@ -5,7 +5,7 @@ import { clientBillingItems, monthlyClientRecords } from '@/lib/schema'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
-import { clientLumpBlockReason, lumpLabel, monthIndex, remainingMonths } from '@/lib/lump-sum'
+import { clientLumpBlockReason, lumpLabel, monthIndex, remainingMonths, resolveLumpMonths } from '@/lib/lump-sum'
 import { parseBody, lumpSumCreateSchema } from '@/lib/validation'
 
 // クライアント請求の残りの月を、この行1回の請求にまとめる。
@@ -26,7 +26,12 @@ export async function POST(
     const reason = clientLumpBlockReason(row, item)
     if (reason) return Response.json({ error: reason }, { status: 400 })
     // clientLumpBlockReason が通った時点で契約開始月・期間はあり、残りは2以上。
-    const months = remainingMonths(row, item.contract_start, item.contract_months)!
+    const resolved = resolveLumpMonths(
+      remainingMonths(row, item.contract_start, item.contract_months)!,
+      parsed.data.months,
+    )
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 400 })
+    const months = resolved.months
 
     // まとめた後の月にすでに行があると、その月の分を二重に請求することになる。
     // どちらを残すかは人が決めることなので、自動で消さずに断る。

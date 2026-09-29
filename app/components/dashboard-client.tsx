@@ -14,7 +14,7 @@ import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryChe
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
-import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText } from '@/lib/lump-sum'
+import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote } from '@/lib/lump-sum'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
@@ -686,32 +686,41 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
 }
 
 // 残りの月を1回の請求・支払いにまとめる確認ダイアログ。
+// まとめる月数は2か月〜残り全部から選べる（初期値は残り全部）。
 // 合計は「1か月あたり × 月数」を初期値にし、値引きに合わせて書き換えられるようにする。
+// 月数を変えたら合計は初期値に戻す（前の月数で打った値引き額がそのまま残ると、月数と金額が食い違うため）。
 function LumpSumDialog({ target, onClose, onSubmit }: {
   target: LumpSumTarget | null
   onClose: () => void
-  onSubmit: (target: LumpSumTarget, total: number) => Promise<void>
+  onSubmit: (target: LumpSumTarget, total: number, months: number) => Promise<void>
 }) {
+  const [months, setMonths] = useState(2)
   const [total, setTotal] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!target) return
-    setTotal(String(target.monthlyAmount * target.months))
+    setMonths(target.maxMonths)
+    setTotal(String(target.monthlyAmount * target.maxMonths))
   }, [target])
 
   if (!target) return null
 
   const isClient = target.kind === 'client'
-  const next = nextMonthOf(target.year, target.month)
-  const nextLabel = next.year === target.year ? `${next.month}月` : `${next.year}年${next.month}月`
   const totalNum = Number(total)
   const valid = total.trim() !== '' && Number.isInteger(totalNum) && totalNum >= 1
+  const monthOptions = Array.from({ length: target.maxMonths - 1 }, (_, i) => i + 2)
+
+  function changeMonths(n: number) {
+    if (!target) return
+    setMonths(n)
+    setTotal(String(target.monthlyAmount * n))
+  }
 
   async function submit() {
     if (!target || !valid) return
     setSaving(true)
-    await onSubmit(target, totalNum)
+    await onSubmit(target, totalNum, months)
     setSaving(false)
   }
 
@@ -721,11 +730,30 @@ function LumpSumDialog({ target, onClose, onSubmit }: {
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           <dt className="text-muted-foreground">対象</dt>
           <dd className="min-w-0 break-words">{target.title}</dd>
-          <dt className="text-muted-foreground">期間</dt>
-          <dd>{lumpPeriodText(target.year, target.month, target.months)}（{target.months}か月）</dd>
           <dt className="text-muted-foreground">1か月あたり</dt>
           <dd>¥{target.monthlyAmount.toLocaleString()}</dd>
         </dl>
+        <div>
+          {/* 残りがちょうど2か月なら選ぶ余地が無いので、選択欄は出さずに期間だけ見せる。 */}
+          {monthOptions.length > 1 ? (
+            <>
+              <label className="mb-1 block text-xs text-muted-foreground" htmlFor="lump-months">まとめる月数</label>
+              <select
+                id="lump-months"
+                value={months}
+                onChange={(e) => changeMonths(Number(e.target.value))}
+                className="w-full rounded border border-border px-2 py-2 text-sm"
+              >
+                {monthOptions.map((n) => (
+                  <option key={n} value={n}>{n}か月{n === target.maxMonths ? '（残り全部）' : ''}</option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <span className="mb-1 block text-xs text-muted-foreground">まとめる月数</span>
+          )}
+          <p className="mt-1">{lumpPeriodText(target.year, target.month, months)}（{months}か月）</p>
+        </div>
         <div>
           <label className="mb-1 block font-medium" htmlFor="lump-total">
             合計（{isClient ? '今回の請求額' : '今回の支払額'}）
@@ -742,11 +770,11 @@ function LumpSumDialog({ target, onClose, onSubmit }: {
             className="w-full rounded border border-border px-3 py-2 text-right text-sm"
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            初期値は1か月あたり×{target.months}か月です。値引きする場合は書き換えてください。
+            初期値は1か月あたり×{months}か月です。値引きする場合は書き換えてください。
           </p>
         </div>
         <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-          <li>{nextLabel}以降の行は作られなくなります。{isClient ? '請求書を送る前' : '支払う前'}ならあとで取り消せます。</li>
+          <li>{lumpSkipNote(target.year, target.month, months, target.maxMonths)}{isClient ? '請求書を送る前' : '支払う前'}ならあとで取り消せます。</li>
           {!isClient && <li>請求書チェックで支払回数（N/M）の注意が出ることがあります。</li>}
         </ul>
         <div className="flex justify-end gap-2 pt-2">
@@ -1907,7 +1935,7 @@ export default function DashboardClient({
       title: label ? `${clientName}（${label}）` : clientName,
       year: cr.year,
       month: cr.month,
-      months,
+      maxMonths: months,
       monthlyAmount: cr.billing_amount_snapshot ?? item?.billing_amount ?? 0,
     })
   }
@@ -1923,7 +1951,7 @@ export default function DashboardClient({
       title: `${asgn.contractors?.name ?? '?'}（${asgn.clients?.name ?? '?'} · ${asgn.role_name}）`,
       year: r.year,
       month: r.month,
-      months,
+      maxMonths: months,
       monthlyAmount: r.payout_amount_snapshot ?? asgn.contractor_payout_amount,
     })
   }
@@ -1941,12 +1969,12 @@ export default function DashboardClient({
   const lumpApiPath = (kind: LumpSumTarget['kind'], id: string) =>
     `/api/checklist/${kind === 'client' ? 'client-records' : 'records'}/${id}/lump`
 
-  async function submitLumpSum(target: LumpSumTarget, total: number) {
+  async function submitLumpSum(target: LumpSumTarget, total: number, months: number) {
     try {
       const res = await fetch(lumpApiPath(target.kind, target.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ total_amount: total }),
+        body: JSON.stringify({ total_amount: total, months }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {

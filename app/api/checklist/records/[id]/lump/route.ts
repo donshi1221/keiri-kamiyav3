@@ -5,7 +5,7 @@ import { assignments, contractors, monthlyRecords } from '@/lib/schema'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { nowJST } from '@/lib/dates'
 import { generateMonthlyRecords } from '@/lib/monthly-records'
-import { monthIndex, payoutLumpBlockReason, remainingMonths } from '@/lib/lump-sum'
+import { monthIndex, payoutLumpBlockReason, remainingMonths, resolveLumpMonths } from '@/lib/lump-sum'
 import { parseBody, lumpSumCreateSchema } from '@/lib/validation'
 
 // 委託者への残りの支払いを、この行1回の支払いにまとめる。
@@ -34,7 +34,12 @@ export async function POST(
     const reason = payoutLumpBlockReason(row, found, found?.contractor_type)
     if (reason) return Response.json({ error: reason }, { status: 400 })
     // payoutLumpBlockReason が通った時点で支払開始月・回数はあり、残りは2以上。
-    const months = remainingMonths(row, found.payment_start_month, found.payment_count)!
+    const resolved = resolveLumpMonths(
+      remainingMonths(row, found.payment_start_month, found.payment_count)!,
+      parsed.data.months,
+    )
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 400 })
+    const months = resolved.months
 
     // まとめた後の月にすでに行があると、その月の分を二重に払うことになる。
     // どちらを残すかは人が決めることなので、自動で消さずに断る。
