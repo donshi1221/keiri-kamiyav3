@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
-import { getLastDayOfMonth, getDueState, type DueState } from '@/lib/dates'
+import { getLastDayOfMonth, getDueState, nextMonthOf, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense } from '@/lib/schema'
 import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput } from '@/lib/ui-types'
@@ -625,13 +625,90 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
   )
 }
 
+// 立替明細の一覧（表示中の月の分と、翌月の給与で返す分の両方で使う）。
+// 削除の確認待ちはダイアログ側で1つだけ持つ（2つの一覧で同時に確認中にならないように）。
+function ReimbursementItemList({ items, pendingDelete, onRequestDelete, onCancelDelete, onEdit, onDelete }: {
+  items: PayrollReimbursement[]
+  pendingDelete: string | null
+  onRequestDelete: (id: string) => void
+  onCancelDelete: () => void
+  onEdit: (item: PayrollReimbursement) => void
+  onDelete: (id: string) => Promise<void>
+}) {
+  return (
+    <ul className="divide-y rounded border">
+      {items.map((item) => (
+        <li key={item.id} className="px-3 py-2">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm break-words text-foreground">{item.description}</p>
+              <p className="text-xs text-muted-foreground">
+                {item.item_date ?? '日付なし'}
+                {/* 経費チェックから取り込んだ行は、経理が原本まで遡らずに出どころを判断できるようにする。 */}
+                {item.expense_upload_item_id && <span className="ml-2 text-info">経費チェックから</span>}
+                {/* マスタの定額設定から毎月自動で作られた行。手入力の行と見分けが付かないと、
+                    「消しても来月また出てくる」理由が分からず何度も消す操作になるため印を付ける。 */}
+                {item.recurring_id && <span className="ml-2 text-info">毎月の立替</span>}
+              </p>
+            </div>
+            <span className="shrink-0 text-sm font-medium text-foreground">¥{item.amount.toLocaleString()}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onEdit(item)}
+                className="flex h-11 items-center text-xs text-info hover:underline md:h-6"
+              >
+                修正
+              </button>
+              {pendingDelete === item.id ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={async () => { onCancelDelete(); await onDelete(item.id) }}
+                    className="flex h-11 items-center text-xs text-danger hover:underline md:h-6"
+                  >
+                    削除する
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCancelDelete}
+                    className="flex h-11 items-center text-xs text-muted-foreground hover:underline md:h-6"
+                  >
+                    やめる
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onRequestDelete(item.id)}
+                  aria-label={`${item.description}を削除`}
+                  className={`flex h-11 items-center text-muted-foreground hover:text-danger md:h-6 ${TAP_ICON_BUTTON}`}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// 立替を「どの月の給与で返すか」の選択肢。表示中の月とその翌月の2つだけに絞る
+// （翌月の給与行は翌月1日まで作られないため、先に積めるのは翌月分までで足りる）。
+type ReimbursementPayMonth = 'current' | 'next'
+
 // 立替経費の精算明細（人×月）を管理する小さなダイアログ。
 // 合計だけを1つの欄で持っていた頃は「何をいくら立て替えたのか」が本人にも経理にも残らず、
 // 金額が合わない時に原本まで遡るしかなかった。行単位で持つことで明細書にもそのまま出せる。
-function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCreate, onUpdate, onDelete }: {
+function PayrollReimbursementDialog({ target, year, month, items, nextItems, onClose, onCreate, onUpdate, onDelete }: {
   target: PayrollRecordWithRecipient | null
-  monthLabel: string
+  year: number
+  month: number
   items: PayrollReimbursement[]
+  // 翌月の給与で返す明細（同じ人の分）。表示中の月の立替合計には含めない。
+  nextItems: PayrollReimbursement[]
   onClose: () => void
   onCreate: (recipientId: string, input: PayrollReimbursementInput) => Promise<boolean>
   onUpdate: (id: string, input: PayrollReimbursementInput) => Promise<boolean>
@@ -640,8 +717,8 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
   // 編集中の行ID（null は新規行）。1行ずつしか開かないので単一の状態で足りる。
   const [editingId, setEditingId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState<{ item_date: string; description: string; amount: string }>({
-    item_date: '', description: '', amount: '',
+  const [form, setForm] = useState<{ item_date: string; description: string; amount: string; pay_month: ReimbursementPayMonth }>({
+    item_date: '', description: '', amount: '', pay_month: 'next',
   })
   const [busy, setBusy] = useState(false)
   // 削除は取り消せないので、他のチェック操作と同じく一度確認を挟む。
@@ -652,17 +729,37 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
     setEditingId(null)
     setAdding(false)
     setPendingDelete(null)
-    setForm({ item_date: '', description: '', amount: '' })
+    setForm({ item_date: '', description: '', amount: '', pay_month: 'next' })
   }, [target])
 
   if (!target) return null
   const recipientId = target.recipient_id
   const total = payrollReimbursementTotal(items)
+  const nextTotal = payrollReimbursementTotal(nextItems)
+  const next = nextMonthOf(year, month)
+  const payMonths: Record<ReimbursementPayMonth, { year: number; month: number }> = {
+    current: { year, month },
+    next,
+  }
+  const monthLabel = `${year}年${month}月`
+  const nextMonthLabel = `${next.year}年${next.month}月`
+
+  // 利用日から「翌月の給与で返す」月を割り出し、選択肢のどちらかに当たればそれを返す。
+  // どちらにも当たらない（数か月前の立替など）ときは、人が選んだ値を勝手に変えない。
+  function payMonthForDate(itemDate: string): ReimbursementPayMonth | null {
+    const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(itemDate)
+    if (!m) return null
+    const due = nextMonthOf(Number(m[1]), Number(m[2]))
+    if (due.year === year && due.month === month) return 'current'
+    if (due.year === next.year && due.month === next.month) return 'next'
+    return null
+  }
 
   function openAdd() {
     setEditingId(null)
     setPendingDelete(null)
-    setForm({ item_date: '', description: '', amount: '' })
+    // 利用日が空の時点では、運用の基本（使った月の翌月に返す）に合わせて翌月を選んでおく。
+    setForm({ item_date: '', description: '', amount: '', pay_month: 'next' })
     setAdding(true)
   }
 
@@ -670,7 +767,12 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
     setAdding(false)
     setPendingDelete(null)
     setEditingId(item.id)
-    setForm({ item_date: item.item_date ?? '', description: item.description, amount: String(item.amount) })
+    setForm({
+      item_date: item.item_date ?? '',
+      description: item.description,
+      amount: String(item.amount),
+      pay_month: item.year === year && item.month === month ? 'current' : 'next',
+    })
   }
 
   function closeForm() {
@@ -678,9 +780,21 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
     setEditingId(null)
   }
 
+  function changeItemDate(itemDate: string) {
+    setForm((prev) => {
+      // 既存行の修正では利用日を直しても月は動かさない。日付の打ち間違いを直しただけで
+      // 精算する給与まで黙って変わると、振込額が知らないうちにずれるため。
+      const auto = adding ? payMonthForDate(itemDate) : null
+      return { ...prev, item_date: itemDate, pay_month: auto ?? prev.pay_month }
+    })
+  }
+
   async function submitForm() {
     setBusy(true)
+    const payMonth = payMonths[form.pay_month]
     const input: PayrollReimbursementInput = {
+      year: payMonth.year,
+      month: payMonth.month,
       item_date: form.item_date.trim() === '' ? null : form.item_date,
       description: form.description.trim(),
       amount: form.amount.trim() === '' ? 0 : Number(form.amount),
@@ -691,6 +805,16 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
   }
 
   const formOpen = adding || editingId !== null
+  // 毎月の立替は精算する月を動かせない（サーバー側で禁止。理由は PATCH のコメント参照）。
+  const editingRecurring = editingId !== null
+    && [...items, ...nextItems].some((r) => r.id === editingId && r.recurring_id !== null)
+  const listHandlers = {
+    pendingDelete,
+    onRequestDelete: (id: string) => setPendingDelete(id),
+    onCancelDelete: () => setPendingDelete(null),
+    onEdit: openEdit,
+    onDelete,
+  }
 
   return (
     <FormDialog
@@ -701,6 +825,7 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
       <div className="space-y-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           本人が立て替えた実費を返すための明細です。非課税なので控除の計算には入らず、手取りに足して振り込みます。
+          使った月の翌月の給与で返すのが基本です（追加時は利用日から精算する給与を選びます）。
           「毎月の立替」の行も、この月だけ金額や項目を直せます（マスタの設定は変わりません）。
         </p>
 
@@ -709,62 +834,7 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
             立替の明細はありません。
           </p>
         ) : (
-          <ul className="divide-y rounded border">
-            {items.map((item) => (
-              <li key={item.id} className="px-3 py-2">
-                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm break-words text-foreground">{item.description}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {item.item_date ?? '日付なし'}
-                      {/* 経費チェックから取り込んだ行は、経理が原本まで遡らずに出どころを判断できるようにする。 */}
-                      {item.expense_upload_item_id && <span className="ml-2 text-info">経費チェックから</span>}
-                      {/* マスタの定額設定から毎月自動で作られた行。手入力の行と見分けが付かないと、
-                          「消しても来月また出てくる」理由が分からず何度も消す操作になるため印を付ける。 */}
-                      {item.recurring_id && <span className="ml-2 text-info">毎月の立替</span>}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-sm font-medium text-foreground">¥{item.amount.toLocaleString()}</span>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(item)}
-                      className="flex h-11 items-center text-xs text-info hover:underline md:h-6"
-                    >
-                      修正
-                    </button>
-                    {pendingDelete === item.id ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={async () => { setPendingDelete(null); await onDelete(item.id) }}
-                          className="flex h-11 items-center text-xs text-danger hover:underline md:h-6"
-                        >
-                          削除する
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPendingDelete(null)}
-                          className="flex h-11 items-center text-xs text-muted-foreground hover:underline md:h-6"
-                        >
-                          やめる
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setPendingDelete(item.id)}
-                        aria-label={`${item.description}を削除`}
-                        className={`flex h-11 items-center text-muted-foreground hover:text-danger md:h-6 ${TAP_ICON_BUTTON}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <ReimbursementItemList items={items} {...listHandlers} />
         )}
 
         {/* 合計の帯の左側は、フォームを開いていないときは空く。項目は経路や店名で一番長くなる欄なので、
@@ -798,7 +868,7 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
                   id="reimbursement-date"
                   type="date"
                   value={form.item_date}
-                  onChange={(e) => setForm((prev) => ({ ...prev, item_date: e.target.value }))}
+                  onChange={(e) => changeItemDate(e.target.value)}
                   className="w-full rounded border border-border px-2 py-2 text-sm"
                 />
               </div>
@@ -815,6 +885,22 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
                 />
               </div>
             </div>
+            {editingRecurring ? (
+              <p className="text-xs text-muted-foreground">毎月の立替は精算する月を変えられません</p>
+            ) : (
+              <div>
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="reimbursement-pay-month">精算する給与</label>
+                <select
+                  id="reimbursement-pay-month"
+                  value={form.pay_month}
+                  onChange={(e) => setForm((prev) => ({ ...prev, pay_month: e.target.value as ReimbursementPayMonth }))}
+                  className="w-full rounded border border-border px-2 py-2 text-sm"
+                >
+                  <option value="current">{monthLabel}分</option>
+                  <option value="next">{nextMonthLabel}分</option>
+                </select>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={closeForm}>キャンセル</Button>
               <Button size="sm" className="h-11 md:h-7" type="button" onClick={submitForm} disabled={busy}>
@@ -826,6 +912,20 @@ function PayrollReimbursementDialog({ target, monthLabel, items, onClose, onCrea
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={openAdd}>
             ＋明細を追加
           </Button>
+        )}
+
+        {/* 翌月の給与行は翌月1日まで作られないため、先に積んだ翌月分はここでしか見られない。
+            0件のときまで枠を出すと、表示中の月の明細と見間違えやすいので出さない。 */}
+        {nextItems.length > 0 && (
+          <div className="space-y-2 pt-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 className="text-sm font-medium text-foreground">{nextMonthLabel}分の給与で返す明細</h3>
+              <span className="whitespace-nowrap text-xs text-muted-foreground">
+                合計 <span className="font-semibold text-foreground">¥{nextTotal.toLocaleString()}</span>
+              </span>
+            </div>
+            <ReimbursementItemList items={nextItems} {...listHandlers} />
+          </div>
         )}
 
         <div className="flex justify-end pt-2">
@@ -866,10 +966,13 @@ interface Props {
   payrollRecords: PayrollRecordWithRecipient[]
   // 当月に精算する立替経費の明細（全対象者分）。振込額はこの合計から出す。
   payrollReimbursements: PayrollReimbursement[]
+  // 翌月の給与で返す立替明細（全対象者分）。翌月の給与行ができる前に積んだ分を確認・修正するためだけに持ち、
+  // 表示中の月の振込額には混ぜない。
+  nextMonthReimbursements: PayrollReimbursement[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements,
+  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -894,6 +997,7 @@ export default function DashboardClient({
   const [pendingPayrollUncheck, setPendingPayrollUncheck] = useState<string | null>(null)
   const [payrollEditTarget, setPayrollEditTarget] = useState<PayrollRecordWithRecipient | null>(null)
   const [localReimbursements, setLocalReimbursements] = useState(payrollReimbursements)
+  const [localNextReimbursements, setLocalNextReimbursements] = useState(nextMonthReimbursements)
   const [reimbursementTarget, setReimbursementTarget] = useState<PayrollRecordWithRecipient | null>(null)
   const [localGlobal, setLocalGlobal] = useState(globalTask)
   const [customTasks, setCustomTasks] = useState(initialCustomTasks)
@@ -1261,20 +1365,31 @@ export default function DashboardClient({
   // ─── 立替経費の精算明細 ─────────────────────────────
   // 立替は「いくら返すか」がそのまま振込額に効くため、楽観更新はせずサーバーの結果だけを取り込む
   // （失敗したのに画面上は増えている、という状態を作らない）。
+  // 保存先の月は行ごとに選べるため、サーバーが返した年月を見て表示月・翌月どちらの一覧に置くかを決める
+  // （月を移した修正なら、元の一覧から外して移動先に入れる）。
+  const nextPayrollMonth = nextMonthOf(year, month)
+  function placeReimbursement(item: PayrollReimbursement) {
+    const upsert = (list: PayrollReimbursement[]) =>
+      list.some((r) => r.id === item.id) ? list.map((r) => (r.id === item.id ? item : r)) : [...list, item]
+    const inViewed = item.year === year && item.month === month
+    const inNext = item.year === nextPayrollMonth.year && item.month === nextPayrollMonth.month
+    setLocalReimbursements((prev) => (inViewed ? upsert(prev) : prev.filter((r) => r.id !== item.id)))
+    setLocalNextReimbursements((prev) => (inNext ? upsert(prev) : prev.filter((r) => r.id !== item.id)))
+  }
+
   async function createReimbursement(recipientId: string, input: PayrollReimbursementInput): Promise<boolean> {
     try {
       const res = await fetch('/api/payroll-reimbursements', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient_id: recipientId, year, month, ...input }),
+        body: JSON.stringify({ recipient_id: recipientId, ...input }),
       })
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null
         showError(data?.error ?? '立替明細の保存に失敗しました。')
         return false
       }
-      const created = (await res.json()) as PayrollReimbursement
-      setLocalReimbursements((prev) => [...prev, created])
+      placeReimbursement((await res.json()) as PayrollReimbursement)
       return true
     } catch {
       showError('立替明細の保存に失敗しました。もう一度お試しください。')
@@ -1294,8 +1409,7 @@ export default function DashboardClient({
         showError(data?.error ?? '立替明細の保存に失敗しました。')
         return false
       }
-      const updated = (await res.json()) as PayrollReimbursement
-      setLocalReimbursements((prev) => prev.map((r) => (r.id === id ? updated : r)))
+      placeReimbursement((await res.json()) as PayrollReimbursement)
       return true
     } catch {
       showError('立替明細の保存に失敗しました。もう一度お試しください。')
@@ -1308,6 +1422,7 @@ export default function DashboardClient({
       const res = await fetch(`/api/payroll-reimbursements/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('delete failed')
       setLocalReimbursements((prev) => prev.filter((r) => r.id !== id))
+      setLocalNextReimbursements((prev) => prev.filter((r) => r.id !== id))
     } catch {
       showError('立替明細の削除に失敗しました。もう一度お試しください。')
     }
@@ -3191,8 +3306,10 @@ export default function DashboardClient({
 
       <PayrollReimbursementDialog
         target={reimbursementTarget}
-        monthLabel={`${year}年${month}月`}
+        year={year}
+        month={month}
         items={reimbursementTarget ? reimbursementItemsOf(reimbursementTarget.recipient_id) : []}
+        nextItems={reimbursementTarget ? localNextReimbursements.filter((r) => r.recipient_id === reimbursementTarget.recipient_id) : []}
         onClose={() => setReimbursementTarget(null)}
         onCreate={createReimbursement}
         onUpdate={updateReimbursement}

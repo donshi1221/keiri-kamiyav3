@@ -400,7 +400,10 @@ export type PayrollReimbursement = PayrollReimbursementItem
 
 // 明細の新規作成・編集で画面が送る値。検証の正本は lib/validation の
 // payrollReimbursementCreateSchema で、これは画面側が同じ形を組み立てるための型。
+// year/month は「どの月の給与で返すか」。item_date（立て替えた日）とは別の値。
 export interface PayrollReimbursementInput {
+  year: number
+  month: number
   item_date: string | null
   description: string
   amount: number

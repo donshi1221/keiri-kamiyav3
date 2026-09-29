@@ -302,10 +302,15 @@ export const payrollReimbursementCreateSchema = z.object({
     .refine((n) => n >= 1, { message: '金額は1円以上で入力してください' }),
 })
 
-// 編集は送られてきた項目だけを更新する。対象者・月は行を作り直す方が事故が少ないので変更させない。
+// 編集は送られてきた項目だけを更新する。対象者は付け替えると誰の立替か食い違うので変更させない。
+// 月（どの給与で返すか）は、翌月の給与行が作られる前に積んだ明細を後から正しい月へ移せるよう変更を許す。
+// 年と月は片方だけ届くと「前の年×新しい月」のような意図しない月へ移るため、両方そろったときだけ受け付ける。
 export const payrollReimbursementPatchSchema = payrollReimbursementCreateSchema
   .partial()
-  .omit({ recipient_id: true, year: true, month: true })
+  .omit({ recipient_id: true })
+  .refine((v) => (v.year === undefined) === (v.month === undefined), {
+    message: '精算する給与の年と月は両方指定してください',
+  })
 
 // 毎月の定額立替のマスタ。金額は明細と同じく0円を許さない（0円の立替は精算する意味が無いうえ、
 // 毎月0円の行が自動で積まれると明細が読めなくなるため）。

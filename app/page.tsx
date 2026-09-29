@@ -2,7 +2,7 @@ import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords, payrollReimbursementItems, paymentRequests } from '@/lib/schema'
 import { and, eq, asc, sql } from 'drizzle-orm'
 import type { InvoiceAlertCounts, PaymentAlertCounts } from '@/lib/ui-types'
-import { nowJST } from '@/lib/dates'
+import { nowJST, nextMonthOf } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
 import { ONE_TIME_TASK_WINDOW_DAYS } from '@/lib/config'
@@ -17,6 +17,7 @@ export default async function DashboardPage({
   const today = nowJST()
   const year = params.year ? Number(params.year) : today.getFullYear()
   const month = params.month ? Number(params.month) : today.getMonth() + 1
+  const nextPayrollMonth = nextMonthOf(year, month)
 
   const [
     records,
@@ -37,6 +38,7 @@ export default async function DashboardPage({
     paymentStatusCountRows,
     payrollRecords,
     payrollReimbursements,
+    nextMonthReimbursements,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -133,6 +135,13 @@ export default async function DashboardPage({
       .select()
       .from(payrollReimbursementItems)
       .where(and(eq(payrollReimbursementItems.year, year), eq(payrollReimbursementItems.month, month)))
+      .orderBy(asc(payrollReimbursementItems.created_at)),
+    // 翌月の給与で返す明細。翌月の給与行は翌月1日まで作られないため、先に積んだ分を
+    // 表示中の月の立替明細ダイアログで確認・修正できるように読む（表示月の振込額には混ぜない）。
+    db
+      .select()
+      .from(payrollReimbursementItems)
+      .where(and(eq(payrollReimbursementItems.year, nextPayrollMonth.year), eq(payrollReimbursementItems.month, nextPayrollMonth.month)))
       .orderBy(asc(payrollReimbursementItems.created_at)),
   ])
 
@@ -232,6 +241,7 @@ export default async function DashboardPage({
       paymentAlert={paymentAlert}
       payrollRecords={payrollRecords}
       payrollReimbursements={payrollReimbursements}
+      nextMonthReimbursements={nextMonthReimbursements}
     />
   )
 }

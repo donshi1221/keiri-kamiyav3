@@ -19,9 +19,34 @@ export async function PATCH(
     if (v.item_date !== undefined) patch.item_date = v.item_date
     if (v.description !== undefined) patch.description = v.description
     if (v.amount !== undefined) patch.amount = v.amount
+    if (v.year !== undefined && v.month !== undefined) {
+      patch.year = v.year
+      patch.month = v.month
+    }
 
     if (Object.keys(patch).length === 0) {
       return Response.json({ error: '更新する項目がありません。' }, { status: 400 })
+    }
+
+    // 毎月の立替の行は精算する月を動かさせない。月次生成は同じ月にその定額設定の行が無いと作り直すため、
+    // 別の月へ移すと元の月に行が復活し、同じ立替を二重に払うことになる。
+    if (patch.year !== undefined && patch.month !== undefined) {
+      const [current] = await db
+        .select({
+          recurring_id: payrollReimbursementItems.recurring_id,
+          year: payrollReimbursementItems.year,
+          month: payrollReimbursementItems.month,
+        })
+        .from(payrollReimbursementItems)
+        .where(eq(payrollReimbursementItems.id, id))
+        .limit(1)
+      if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
+      if (current.recurring_id && (current.year !== patch.year || current.month !== patch.month)) {
+        return Response.json(
+          { error: '毎月の立替は精算する月を変えられません。この月で不要なら金額を直すか削除してください。' },
+          { status: 400 }
+        )
+      }
     }
 
     const [updated] = await db
