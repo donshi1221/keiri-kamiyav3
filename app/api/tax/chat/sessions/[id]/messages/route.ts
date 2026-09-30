@@ -153,6 +153,25 @@ export async function POST(
       let completed = false
       let lastError: unknown = null
 
+      // 回答の保存を close より前に済ませるための関数。理由は2つ。
+      // ① クライアントは通信が閉じた直後に会話を読み直すので、保存が後だと保存前の状態で
+      //    画面が上書きされて回答が消える。
+      // ② Vercel はレスポンスが終わると関数の処理を止めることがあり、close の後の保存は失われうる。
+      // 保存済みフラグで1回だけにするのは、通常経路と想定外エラーの catch の両方から呼ぶため
+      // （二重保存を防ぐ）。ストリームが失敗しても、それまでに生成できた分は部分保存する。
+      let saved = false
+      const saveAnswer = async () => {
+        if (saved || !fullText) return
+        saved = true
+        try {
+          await db.insert(taxChatMessages).values({ session_id: sessionId, role: 'assistant', content: fullText })
+        } catch (err) {
+          console.error('[tax-chat] 回答の保存に失敗しました:', err)
+          // ストリーム中の表示は再読み込みで消えるため、保存できていないことを利用者に知らせる。
+          send({ error: '回答を保存できませんでした。画面を再読み込みすると消えている可能性があります。' })
+        }
+      }
+
       try {
         for (let index = 0; index < GEMINI_MODEL_FALLBACKS.length; index++) {
           const modelName = GEMINI_MODEL_FALLBACKS[index]
@@ -209,6 +228,9 @@ export async function POST(
           }
         }
 
+        // [DONE] やエラーを送る前に保存する（理由は saveAnswer のコメント参照）。
+        await saveAnswer()
+
         if (completed) {
           controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         } else {
@@ -216,13 +238,11 @@ export async function POST(
         }
       } catch (err) {
         console.error('[tax-chat] 応答の送出中に想定外のエラーが発生しました:', err)
+        await saveAnswer()
         send({ error: userFacingErrorMessage(err) })
       } finally {
+        // 何があっても close だけは必ず呼ぶ。
         controller.close()
-        // ストリームが失敗しても、それまでに生成できた分は部分保存する
-        if (fullText) {
-          await db.insert(taxChatMessages).values({ session_id: sessionId, role: 'assistant', content: fullText })
-        }
       }
     },
   })
