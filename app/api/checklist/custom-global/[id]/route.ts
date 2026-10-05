@@ -11,6 +11,22 @@ export async function PATCH(
   try {
     const { id } = await ctx.params
     const body = await req.json()
+
+    // body に title があるときはタスク名の更新。完了チェック（yearMonth + completed）とは body の形で分ける。
+    // 完了月・対象月・日にちは変えない。
+    if (body.title !== undefined) {
+      const title = typeof body.title === 'string' ? body.title.trim() : ''
+      if (!title) {
+        return Response.json({ error: 'タスク名を入力してください' }, { status: 400 })
+      }
+      const [renamed] = await db.update(monthlyCustomGlobalTasks)
+        .set({ title })
+        .where(eq(monthlyCustomGlobalTasks.id, id))
+        .returning()
+      if (!renamed) return Response.json({ error: 'Not found' }, { status: 404 })
+      return Response.json(renamed)
+    }
+
     const yearMonth = body.yearMonth as number
 
     if (!yearMonth) {

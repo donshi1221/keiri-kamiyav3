@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, nextMonthOf, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
@@ -1357,6 +1357,10 @@ export default function DashboardClient({
   const [newDueDate, setNewDueDate] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  // カスタムタスク名のインライン編集。編集中は常に1行だけ（別の行を開くと前の編集は閉じる）。
+  const [editingCustomId, setEditingCustomId] = useState<string | null>(null)
+  const [editingCustomTitle, setEditingCustomTitle] = useState('')
+  const [isSavingCustomTitle, setIsSavingCustomTitle] = useState(false)
   const [pendingUncheck, setPendingUncheck] = useState<{ kind: 'record' | 'client'; id: string; field: string } | null>(null)
   // グループ一括（委託者の受領／支払い予約／支払い確認、またはクライアントの入金確認）を外すときの確認待ち。
   // kind: 'contractor' のときだけ field を使う（どの列のまとめてチェックを外すか）。
@@ -2023,6 +2027,50 @@ export default function DashboardClient({
     } catch {
       setCustomTasks((prev) => prev.map((t) => t.id === id ? { ...t, completed_months: prevCompletedMonths } : t))
       showError('保存に失敗しました。もう一度お試しください。')
+    }
+  }
+
+  function startEditCustomTask(task: CustomGlobalTask) {
+    if (isSavingCustomTitle) return
+    setPendingDeleteId(null)
+    setEditingCustomId(task.id)
+    setEditingCustomTitle(task.title)
+  }
+
+  function cancelEditCustomTask() {
+    if (isSavingCustomTitle) return
+    setEditingCustomId(null)
+    setEditingCustomTitle('')
+  }
+
+  // 保存はサーバーが返した行で差し替える（楽観更新しない）。失敗時は編集状態を残して再試行できるようにする。
+  async function saveCustomTaskTitle() {
+    const id = editingCustomId
+    if (!id || isSavingCustomTitle) return
+    const title = editingCustomTitle.trim()
+    if (!title) {
+      showError('タスク名を入力してください')
+      return
+    }
+    setIsSavingCustomTitle(true)
+    try {
+      const res = await fetch(`/api/checklist/custom-global/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        showError((data as { error?: string } | null)?.error ?? 'タスク名の保存に失敗しました。もう一度お試しください。')
+        return
+      }
+      setCustomTasks((prev) => prev.map((t) => (t.id === id ? (data as CustomGlobalTask) : t)))
+      setEditingCustomId(null)
+      setEditingCustomTitle('')
+    } catch {
+      showError('タスク名の保存に失敗しました。もう一度お試しください。')
+    } finally {
+      setIsSavingCustomTitle(false)
     }
   }
 
@@ -4059,6 +4107,31 @@ export default function DashboardClient({
                   const done = t.completed_months.includes(yearMonth)
                   const isPendingDelete = pendingDeleteId === t.id
                   const state = customTaskState(t)
+                  if (editingCustomId === t.id) {
+                    return (
+                      <div key={t.id} className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={editingCustomTitle}
+                          onChange={(e) => setEditingCustomTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            // 日本語入力の変換確定の Enter では保存しない。
+                            if (e.nativeEvent.isComposing) return
+                            if (e.key === 'Enter') saveCustomTaskTitle()
+                            if (e.key === 'Escape') cancelEditCustomTask()
+                          }}
+                          aria-label="タスク名"
+                          disabled={isSavingCustomTitle}
+                          className="w-full min-w-0 text-sm border border-border rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                          autoFocus
+                        />
+                        <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={saveCustomTaskTitle} disabled={isSavingCustomTitle || !editingCustomTitle.trim()}>
+                          {isSavingCustomTitle ? '保存中…' : '保存'}
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-11 md:h-7" onClick={cancelEditCustomTask} disabled={isSavingCustomTitle}>キャンセル</Button>
+                      </div>
+                    )
+                  }
                   return (
                     <div key={t.id} className={`flex min-h-11 flex-wrap items-center gap-3 md:min-h-0 ${done ? 'opacity-50' : ''}`}>
                       <Checkbox checked={done} onCheckedChange={() => toggleCustomTask(t.id)} className={TAP_CHECKBOX} />
@@ -4100,14 +4173,25 @@ export default function DashboardClient({
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setPendingDeleteId(t.id)}
-                          aria-label={`${t.title}を削除`}
-                          className={`text-muted-foreground/60 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        // アイコン2つ分のタップ領域（各 -inset-4）が重ならないよう、スマホでは間隔を広げる。
+                        <div className="flex shrink-0 items-center gap-8 md:gap-3">
+                          <button
+                            type="button"
+                            onClick={() => startEditCustomTask(t)}
+                            aria-label={`${t.title}を編集`}
+                            className={`text-muted-foreground/60 hover:text-info shrink-0 ${TAP_ICON_BUTTON}`}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteId(t.id)}
+                            aria-label={`${t.title}を削除`}
+                            className={`text-muted-foreground/60 hover:text-danger shrink-0 ${TAP_ICON_BUTTON}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       )}
                     </div>
                   )
