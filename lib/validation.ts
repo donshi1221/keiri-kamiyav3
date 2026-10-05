@@ -365,6 +365,22 @@ export const lumpSumCreateSchema = z.object({
     .optional(),
 })
 
+// まとめ済みで行が無い月に、続きの月の分を請求する行を作る（/api/checklist/client-records/advance）。
+// 確認ダイアログ用の GET は対象（内訳と請求を立てる年月）だけ、POST はそこに月数と合計額が加わる。
+// 月数は1か月だけ先に請求することもあるので1以上（上限は契約と既存の行で決まるため API 側で確かめる）。
+export const advanceBillingQuerySchema = z.object({
+  billing_item_id: z.uuid({ message: '請求内訳の指定が不正です' }),
+  year: z.coerce.number().int().min(2000).max(3000),
+  month: z.coerce.number().int().min(1).max(12),
+})
+export const advanceBillingCreateSchema = advanceBillingQuerySchema.extend({
+  months: z.coerce
+    .number({ message: '請求する月数には数値を指定してください' })
+    .int({ message: '請求する月数は整数で指定してください' })
+    .min(1, { message: '請求する月数は1か月以上で指定してください' }),
+  total_amount: lumpSumCreateSchema.shape.total_amount,
+})
+
 type ParseResult<T> = { ok: true; data: T } | { ok: false; message: string }
 
 // スキーマで body を検証し、失敗時は最初のエラーメッセージ（利用者向け）を返す。

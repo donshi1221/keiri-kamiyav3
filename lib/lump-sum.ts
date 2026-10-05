@@ -19,6 +19,31 @@ function indexOfDate(date: string): number {
   return monthIndex(y, m)
 }
 
+// 通し番号から年月へ戻す。
+export function yearMonthOfIndex(index: number): YearMonth {
+  const year = Math.floor((index - 1) / 12)
+  return { year, month: index - year * 12 }
+}
+
+// まかなう範囲を持つ行。covers_from（いつからの分か）はクライアント請求の先取り行だけが持つ。
+// 委託者支払いの行にはこの列が無い（＝常に行自身の月から）ので省略できる形にしてある。
+type CoverRow = YearMonth & { months_covered: number; covers_from?: string | null }
+
+// その行がまかなう月の範囲（通し番号で from〜to）。
+// 始まりは covers_from があればその月、無ければ行自身の月。そこから months_covered か月。
+// 「どの月がカバー済みか」を使う箇所は必ずこれを通す（始まりの決め方を1か所に閉じ込めるため）。
+export function coverRange(row: CoverRow): { from: number; to: number } {
+  const from = row.covers_from ? indexOfDate(row.covers_from) : monthIndex(row.year, row.month)
+  return { from, to: from + row.months_covered - 1 }
+}
+
+// 自分の月以外の月をまかなう行（まとめ行・先取り行）かどうか。
+// 先取り行は1か月分だけでも別の月をまかなうので、months_covered だけでは判定できない。
+// SQL で同じ条件を書く箇所は lib/monthly-records の clientLumpRowCondition を使う。
+export function isLumpRow(row: { months_covered: number; covers_from?: string | null }): boolean {
+  return row.months_covered > 1 || row.covers_from != null
+}
+
 // その行の月を含めて、契約（支払期間）の最後の月まで何か月あるか。
 // 開始月・月数のどちらかが無い（＝継続契約で終わりが無い）か、行の月が期間外なら null。
 export function remainingMonths(
@@ -34,21 +59,22 @@ export function remainingMonths(
   return lastIndex - rowIndex + 1
 }
 
-// target の月が、同じ内訳（またはアサイン）の既存のまとめ行にカバーされているか。
-// rows には同じ内訳・アサインの行だけを渡す（months_covered が 1 の行は何もカバーしない）。
-export function isCoveredByLump(
-  rows: { year: number; month: number; months_covered: number }[],
-  target: YearMonth,
-): boolean {
+// target の月が、同じ内訳（またはアサイン）の「別の月の行」にカバーされているか。
+// rows には同じ内訳・アサインの行だけを渡す。target と同じ月の行は数えない
+// （その月自身の行は「カバーされている」のではなく、その月の行そのものなので）。
+export function isCoveredByLump(rows: CoverRow[], target: YearMonth): boolean {
   const targetIndex = monthIndex(target.year, target.month)
   return rows.some((r) => {
-    const idx = monthIndex(r.year, r.month)
-    return idx < targetIndex && idx + r.months_covered - 1 >= targetIndex
+    if (monthIndex(r.year, r.month) === targetIndex) return false
+    const range = coverRange(r)
+    return range.from <= targetIndex && targetIndex <= range.to
   })
 }
 
 // まとめる期間の表示。「2026年9月〜12月」、年をまたぐときは「2026年11月〜2027年2月」。
+// 1か月だけ（先取り行で1か月分を請求するとき）は「2026年11月」。
 export function lumpPeriodText(startYear: number, startMonth: number, months: number): string {
+  if (months <= 1) return `${startYear}年${startMonth}月`
   const end = addMonthsOf(startYear, startMonth, months - 1)
   const endText = end.year === startYear ? `${end.month}月` : `${end.year}年${end.month}月`
   return `${startYear}年${startMonth}月〜${endText}`
@@ -87,7 +113,10 @@ export function lumpSkipNote(year: number, month: number, months: number, remain
 
 // まとめ行の内訳名（label_snapshot）。請求書に載る名前なので、何か月分をまとめたかを名前で読めるようにする。
 export function lumpLabel(baseLabel: string, startYear: number, startMonth: number, months: number): string {
-  const period = `${lumpPeriodText(startYear, startMonth, months)}分・${months}か月まとめて`
+  // 1か月分だけの先取り行は「まとめて」ではないので、どの月の分かだけを書く。
+  const period = months <= 1
+    ? `${lumpPeriodText(startYear, startMonth, 1)}分`
+    : `${lumpPeriodText(startYear, startMonth, months)}分・${months}か月まとめて`
   const base = baseLabel.trim()
   return base ? `${base}（${period}）` : period
 }
@@ -95,11 +124,11 @@ export function lumpLabel(baseLabel: string, startYear: number, startMonth: numb
 // クライアント請求の行をまとめられない理由。まとめられるなら null。
 // 送付済みの行は金額が確定しているので変えない。初回のみ（初期費用）や継続契約は「残り」が定まらない。
 export function clientLumpBlockReason(
-  row: YearMonth & { invoice_sent_at: string | null; months_covered: number },
+  row: YearMonth & { invoice_sent_at: string | null; months_covered: number; covers_from?: string | null },
   item: { one_time: boolean; contract_start: string | null; contract_months: number | null } | null | undefined,
 ): string | null {
   if (row.invoice_sent_at) return '請求書を送付済みの行はまとめられません。'
-  if (row.months_covered !== 1) return 'この行はすでにまとめてあります。'
+  if (isLumpRow(row)) return 'この行はすでにまとめてあります。'
   if (!item) return '請求内訳が見つかりません。'
   if (item.one_time) return '初回のみの内訳はまとめられません。'
   if (!item.contract_start || item.contract_months == null) return '契約開始月と契約期間が登録されていない内訳はまとめられません。'
@@ -132,11 +161,11 @@ export function payoutLumpBlockReason(
 
 // クライアント請求の後ろの月の行を取り込めない理由。取り込めるなら null。
 export function clientLaterRowBlockCause(
-  row: { invoice_sent_at: string | null; payment_confirmed_at: string | null; months_covered: number },
+  row: { invoice_sent_at: string | null; payment_confirmed_at: string | null; months_covered: number; covers_from?: string | null },
 ): string | null {
   if (row.invoice_sent_at) return '請求書を送付済みの'
   if (row.payment_confirmed_at) return '入金確認済みの'
-  if (row.months_covered !== 1) return 'すでに別のまとめ行になっている'
+  if (isLumpRow(row)) return 'すでに別のまとめ行になっている'
   return null
 }
 
@@ -178,8 +207,64 @@ export function laterRowsInRange<T extends YearMonth>(rows: T[], year: number, m
   })
 }
 
-// まとめ行にカバーされている月に出す説明。「2026年9月の行でまとめ済み（9月〜12月分）」。
-export function coveredLumpNote(year: number, month: number, months: number): string {
-  const end = addMonthsOf(year, month, months - 1)
-  return `${year}年${month}月の行でまとめ済み（${month}月〜${monthText(year, end)}分）`
+// 行がまかなう期間の短い表記。「11月〜12月分」、1か月なら「11月分」。
+// 行の年と違う年の月には年を付ける（「11月〜2027年2月分」）。
+export function coverPeriodLabel(row: CoverRow): string {
+  const range = coverRange(row)
+  const from = monthText(row.year, yearMonthOfIndex(range.from))
+  if (range.to === range.from) return `${from}分`
+  return `${from}〜${monthText(row.year, yearMonthOfIndex(range.to))}分`
+}
+
+// まとめ行・先取り行にカバーされている月に出す説明。
+// 「2026年9月の行でまとめ済み（9月〜12月分）」「2026年10月の行でまとめ済み（11月〜12月分）」。
+export function coveredLumpNote(row: CoverRow): string {
+  return `${row.year}年${row.month}月の行でまとめ済み（${coverPeriodLabel(row)}）`
+}
+
+// ─── まとめ済みの月に、続きの月の分を請求する（先取り行。クライアント請求のみ）─────────────
+// 例: 契約が9〜12月で、9月の行に9・10月をまとめた。10月は行が無いが、10月のうちに11・12月分を請求したい。
+// このとき10月に「11月からの2か月分」をまかなう行（covers_from=11月）を作る。
+
+// 先取り行を作れるか、作れるならどの月から最大何か月か。
+// rows にはその内訳の月次行をすべて渡す。(year, month) は請求を立てる月（＝まとめ済みで行が無い月）。
+export function advancePlan(
+  item: { active: boolean; one_time: boolean; contract_start: string | null; contract_months: number | null } | null | undefined,
+  rows: CoverRow[],
+  year: number,
+  month: number,
+): { ok: true; from: YearMonth; maxMonths: number } | { ok: false; error: string } {
+  if (!item) return { ok: false, error: '請求内訳が見つかりません。' }
+  if (!item.active) return { ok: false, error: '無効にした内訳には請求を追加できません。' }
+  if (item.one_time) return { ok: false, error: '初回のみの内訳には続きの月がありません。' }
+  if (!item.contract_start || item.contract_months == null) {
+    return { ok: false, error: '契約開始月と契約期間が登録されていない内訳には追加できません。' }
+  }
+  const target = monthIndex(year, month)
+  const hasRow = (index: number) => rows.some((r) => monthIndex(r.year, r.month) === index)
+  const covered = (index: number) => isCoveredByLump(rows, yearMonthOfIndex(index))
+  if (hasRow(target)) return { ok: false, error: 'この月にはすでに請求の行があります。' }
+  if (!covered(target)) return { ok: false, error: 'この月はまとめ済みではありません。' }
+
+  const last = indexOfDate(item.contract_start) + item.contract_months - 1
+  // すでにカバー済みの月は飛ばし、その次の月から請求する。
+  let from = target + 1
+  while (from <= last && covered(from)) from++
+  // 契約の最後まで請求済みか、次の月にもう行がある（その月の行で請求すればよい）なら続きは無い。
+  if (from > last || hasRow(from)) return { ok: false, error: '続きの月はありません。' }
+
+  let maxMonths = 0
+  while (from + maxMonths <= last && !hasRow(from + maxMonths) && !covered(from + maxMonths)) maxMonths++
+  return { ok: true, from: yearMonthOfIndex(from), maxMonths }
+}
+
+// 先取り行を作ると行が作られなくなる月の説明（確認ダイアログの注意書き）。
+// baseYear は請求を立てる月の年（同じ年の月は年を省く）。
+export function advanceSkipNote(baseYear: number, from: YearMonth, months: number): string {
+  const last = addMonthsOf(from.year, from.month, months - 1)
+  const skipped =
+    months <= 1 ? monthText(baseYear, from)
+    : months === 2 ? `${monthText(baseYear, from)}・${monthText(baseYear, last)}`
+    : `${monthText(baseYear, from)}〜${monthText(baseYear, last)}`
+  return `${skipped}の行は作られなくなります。`
 }

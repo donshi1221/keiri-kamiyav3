@@ -10,11 +10,11 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, nextMonthOf, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense, MonthlyRecord, MonthlyClientRecord } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput, LumpSumTarget, LumpLaterRow, CoveredClientLump } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput, LumpSumTarget, LumpLaterRow, CoveredClientLump, AdvanceBillingTarget, AdvanceBillingInfo } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
-import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote, laterRowsInRange, coveredLumpNote } from '@/lib/lump-sum'
+import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote, laterRowsInRange, coveredLumpNote, coverPeriodLabel, advanceSkipNote } from '@/lib/lump-sum'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
@@ -467,8 +467,12 @@ function PayoutAmountCell({ amount, editable, edited, strong, onSave }: {
 // 残りの月をまとめる操作（クライアント請求・委託者支払いの行内）。
 // まとめ済みの行は何か月分かをバッジで示し、確定前（送付・支払い前）なら取り消せる。
 // 取り消しは金額が1か月分に戻る操作なので、チェックを外すときと同じく一度確認を挟む。
-function LumpSumControl({ monthsCovered, canLump, canUndo, undoPending, onLump, onRequestUndo, onConfirmUndo, onCancelUndo }: {
+// 続きの月を先に請求した行（先取り行）は「何か月分か」より「どの月の分か」が要るので、
+// バッジの文言（periodLabel）と取り消しの文言（undoLabel）を差し替えて同じ部品で出す。
+function LumpSumControl({ monthsCovered, periodLabel, undoLabel = 'まとめを取り消す', canLump, canUndo, undoPending, onLump, onRequestUndo, onConfirmUndo, onCancelUndo }: {
   monthsCovered: number
+  periodLabel?: string
+  undoLabel?: string
   canLump: boolean
   canUndo: boolean
   undoPending: boolean
@@ -477,10 +481,10 @@ function LumpSumControl({ monthsCovered, canLump, canUndo, undoPending, onLump, 
   onConfirmUndo: () => void
   onCancelUndo: () => void
 }) {
-  if (monthsCovered > 1) {
+  if (monthsCovered > 1 || periodLabel) {
     return (
       <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-        <Badge variant="outline" className="text-xs">{monthsCovered}か月分まとめ</Badge>
+        <Badge variant="outline" className="text-xs">{periodLabel ?? `${monthsCovered}か月分まとめ`}</Badge>
         {canUndo && (undoPending ? (
           <span className="flex items-center gap-1">
             <span className="text-muted-foreground">取り消しますか？</span>
@@ -505,7 +509,7 @@ function LumpSumControl({ monthsCovered, canLump, canUndo, undoPending, onLump, 
             onClick={onRequestUndo}
             className="flex h-11 items-center text-muted-foreground hover:text-danger hover:underline md:h-5"
           >
-            まとめを取り消す
+            {undoLabel}
           </button>
         ))}
       </span>
@@ -822,6 +826,141 @@ function LumpSumDialog({ target, onClose, onSubmit }: {
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
           <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving || !valid}>
             {saving ? '保存中…' : 'まとめる'}
+          </Button>
+        </div>
+      </div>
+    </FormDialog>
+  )
+}
+
+// まとめ済みで行が無い月に、続きの月の分を請求する確認ダイアログ（見た目は LumpSumDialog に揃える）。
+// どの月から最大何か月請求できるかは、その内訳の全部の月の行を見ないと決まらないため、開いたときにサーバーへ聞く。
+// 続きの月が無いなどで請求できないときは、サーバーが返した理由をそのまま出してボタンを押せなくする。
+function AdvanceBillingDialog({ target, onClose, onSubmit }: {
+  target: AdvanceBillingTarget | null
+  onClose: () => void
+  onSubmit: (target: AdvanceBillingTarget, months: number, total: number) => Promise<void>
+}) {
+  // null は読み込み中。
+  const [info, setInfo] = useState<AdvanceBillingInfo | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [months, setMonths] = useState(1)
+  const [total, setTotal] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setInfo(null)
+    setLoadError(null)
+    setTotal('')
+    // 開き直しや対象の切り替えで、前の対象の応答が後から届いても反映しない。
+    let cancelled = false
+    const query = new URLSearchParams({ billing_item_id: target.billing_item_id, year: String(target.year), month: String(target.month) })
+    fetch(`/api/checklist/client-records/advance?${query}`, { cache: 'no-store' })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => null)) as (AdvanceBillingInfo & { error?: string }) | null
+        if (cancelled) return
+        if (!res.ok || !data) {
+          setLoadError(data?.error ?? '続きの月を確認できませんでした。閉じてもう一度お試しください。')
+          return
+        }
+        setInfo(data)
+        setMonths(data.maxMonths)
+        setTotal(String(data.perMonthAmount * data.maxMonths))
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('続きの月を確認できませんでした。通信状況をご確認ください。')
+      })
+    return () => { cancelled = true }
+  }, [target])
+
+  if (!target) return null
+
+  const totalNum = Number(total)
+  const valid = info !== null && total.trim() !== '' && Number.isInteger(totalNum) && totalNum >= 1
+  const monthOptions = info ? Array.from({ length: info.maxMonths }, (_, i) => i + 1) : []
+
+  function changeMonths(n: number) {
+    if (!info) return
+    setMonths(n)
+    setTotal(String(info.perMonthAmount * n))
+  }
+
+  async function submit() {
+    if (!target || !valid) return
+    setSaving(true)
+    await onSubmit(target, months, totalNum)
+    setSaving(false)
+  }
+
+  return (
+    <FormDialog open onClose={onClose} title="続きの月を請求する">
+      <div className="space-y-3 text-sm">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          <dt className="text-muted-foreground">対象</dt>
+          <dd className="min-w-0 break-words">{target.title}</dd>
+          <dt className="text-muted-foreground">請求する月</dt>
+          <dd>{target.year}年{target.month}月</dd>
+          {info && (
+            <>
+              <dt className="text-muted-foreground">1か月あたり</dt>
+              <dd>¥{info.perMonthAmount.toLocaleString()}</dd>
+            </>
+          )}
+        </dl>
+        {info === null && !loadError && (
+          <p className="text-xs text-muted-foreground">続きの月を確認しています…</p>
+        )}
+        {loadError && <p role="alert" className="text-xs text-danger">{loadError}</p>}
+        {info && (
+          <>
+            <div>
+              {/* 続きが1か月しか無いなら選ぶ余地が無いので、選択欄は出さずに期間だけ見せる。 */}
+              {monthOptions.length > 1 ? (
+                <>
+                  <label className="mb-1 block text-xs text-muted-foreground" htmlFor="advance-months">請求する月数</label>
+                  <select
+                    id="advance-months"
+                    value={months}
+                    onChange={(e) => changeMonths(Number(e.target.value))}
+                    className="w-full rounded border border-border px-2 py-2 text-sm"
+                  >
+                    {monthOptions.map((n) => (
+                      <option key={n} value={n}>{n}か月{n === info.maxMonths ? '（残り全部）' : ''}</option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <span className="mb-1 block text-xs text-muted-foreground">請求する期間</span>
+              )}
+              <p className="mt-1">{lumpPeriodText(info.from.year, info.from.month, months)}（{months}か月）</p>
+            </div>
+            <div>
+              <label className="mb-1 block font-medium" htmlFor="advance-total">合計（今回の請求額）</label>
+              <input
+                id="advance-total"
+                type="number"
+                inputMode="numeric"
+                min="1"
+                step="1"
+                value={total}
+                onChange={(e) => setTotal(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submit()}
+                className="w-full rounded border border-border px-3 py-2 text-right text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                初期値は1か月あたり×{months}か月です。値引きする場合は書き換えてください。
+              </p>
+            </div>
+            <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+              <li>{advanceSkipNote(target.year, info.from, months)}請求書を送る前なら取り消せます。</li>
+            </ul>
+          </>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
+          <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving || !valid}>
+            {saving ? '保存中…' : '請求する'}
           </Button>
         </div>
       </div>
@@ -1227,6 +1366,8 @@ export default function DashboardClient({
   const [pendingGlobalUncheck, setPendingGlobalUncheck] = useState<string | null>(null)
   // 残りの月をまとめる確認ダイアログの対象。
   const [lumpTarget, setLumpTarget] = useState<LumpSumTarget | null>(null)
+  // 「続きの月を請求する」確認ダイアログの対象。
+  const [advanceTarget, setAdvanceTarget] = useState<AdvanceBillingTarget | null>(null)
   // まとめを取り消すときの確認待ち（金額が1か月分に戻るため、チェックを外すときと同じ誤タップ防止）。
   const [pendingLumpUndo, setPendingLumpUndo] = useState<{ kind: LumpSumTarget['kind']; id: string } | null>(null)
   // 経費行（立替経費・自社経費）の送付チェックを外すときの確認待ち。クライアント単位で持つ。
@@ -1957,7 +2098,14 @@ export default function DashboardClient({
     return clientGroups[idx]
   }
   for (const cr of localClientRecords) clientGroupOf(cr.client_id, cr.clients?.name ?? '?').items.push(cr)
-  for (const l of coveredClientLumps) clientGroupOf(l.client_id, l.client_name).lumps.push(l)
+  // まとめ済みの月に「続きの月の請求」の行を立てた内訳は、表示中の月に行がある。その内訳は情報行を出さず、
+  // 行の下に「この月の分はまとめ済み」の注記だけ出す（同じ内訳が2行に見えないように）。
+  // 行の有無を state（localClientRecords）で見ているので、請求を取り消して行が消えれば情報行が自動で戻る。
+  const coveringLumpByItem = new Map(coveredClientLumps.map((l) => [l.billing_item_id, l]))
+  const itemIdsWithRow = new Set(localClientRecords.map((cr) => cr.billing_item_id))
+  for (const l of coveredClientLumps) {
+    if (!itemIdsWithRow.has(l.billing_item_id)) clientGroupOf(l.client_id, l.client_name).lumps.push(l)
+  }
   // 内訳名。生成時点の控え(label_snapshot)を優先し、無ければ内訳マスタの現在名。
   const itemLabel = (cr: ClientRecordWithClient): string =>
     (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
@@ -2049,23 +2197,86 @@ export default function DashboardClient({
         showError((data as { error?: string } | null)?.error ?? 'まとめを取り消せませんでした。もう一度お試しください。')
         return
       }
+      // 続きの月を先に請求した行の取り消しは、行そのものが消える（サーバーが deleted で知らせる）。
+      if ((data as { deleted?: boolean } | null)?.deleted) {
+        setLocalClientRecords((prev) => prev.filter((r) => r.id !== id))
+        startTransition(() => router.refresh())
+        return
+      }
       replaceLumpRow(kind, id, data as MonthlyRecord | MonthlyClientRecord)
     } catch {
       showError('まとめを取り消せませんでした。通信状況をご確認ください。')
     }
   }
 
-  const renderClientLump = (cr: ClientRecordWithClient, clientName: string) => (
-    <LumpSumControl
-      monthsCovered={cr.months_covered}
-      canLump={clientLumpBlockReason(cr, cr.billing_items) === null}
-      canUndo={!cr.invoice_sent_at}
-      undoPending={pendingLumpUndo?.kind === 'client' && pendingLumpUndo.id === cr.id}
-      onLump={() => openClientLump(cr, clientName)}
-      onRequestUndo={() => setPendingLumpUndo({ kind: 'client', id: cr.id })}
-      onConfirmUndo={() => undoLumpSum('client', cr.id)}
-      onCancelUndo={() => setPendingLumpUndo(null)}
-    />
+  // 続きの月の請求を立てる。行が増える操作なので、楽観更新せずサーバーが返した行（関連付き）を一覧に足す。
+  async function submitAdvanceBilling(target: AdvanceBillingTarget, months: number, total: number) {
+    try {
+      const res = await fetch('/api/checklist/client-records/advance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          billing_item_id: target.billing_item_id,
+          year: target.year,
+          month: target.month,
+          months,
+          total_amount: total,
+        }),
+      })
+      const data = (await res.json().catch(() => null)) as (ClientRecordWithClient & { error?: string }) | null
+      if (!res.ok || !data) {
+        showError(data?.error ?? '請求を追加できませんでした。もう一度お試しください。')
+        return
+      }
+      setLocalClientRecords((prev) => [...prev, data])
+      setAdvanceTarget(null)
+      // 先の月の画面（まとめ済みの表示）や請求回数の集計はサーバーから渡る値なので取り直しておく。
+      startTransition(() => router.refresh())
+    } catch {
+      showError('請求を追加できませんでした。通信状況をご確認ください。')
+    }
+  }
+
+  const renderClientLump = (cr: ClientRecordWithClient, clientName: string) => {
+    const isAdvance = cr.covers_from != null
+    const covering = coveringLumpByItem.get(cr.billing_item_id)
+    return (
+      <>
+        <LumpSumControl
+          monthsCovered={cr.months_covered}
+          periodLabel={isAdvance ? coverPeriodLabel(cr) : undefined}
+          undoLabel={isAdvance ? '請求を取り消す' : undefined}
+          canLump={clientLumpBlockReason(cr, cr.billing_items) === null}
+          canUndo={!cr.invoice_sent_at && !(isAdvance && cr.payment_confirmed_at)}
+          undoPending={pendingLumpUndo?.kind === 'client' && pendingLumpUndo.id === cr.id}
+          onLump={() => openClientLump(cr, clientName)}
+          onRequestUndo={() => setPendingLumpUndo({ kind: 'client', id: cr.id })}
+          onConfirmUndo={() => undoLumpSum('client', cr.id)}
+          onCancelUndo={() => setPendingLumpUndo(null)}
+        />
+        {covering && (
+          <span className="block text-xs text-muted-foreground">
+            {cr.month}月分は{covering.year}年{covering.month}月の行でまとめ済み
+          </span>
+        )}
+      </>
+    )
+  }
+
+  // 「まとめ済み」の情報行に出すボタン。続きの月があるかどうかの最終判断は確認ダイアログ（サーバー）に任せる。
+  const renderAdvanceButton = (l: CoveredClientLump) => l.can_advance && (
+    <button
+      type="button"
+      onClick={() => setAdvanceTarget({
+        billing_item_id: l.billing_item_id,
+        title: l.label ? `${l.client_name}（${l.label}）` : l.client_name,
+        year,
+        month,
+      })}
+      className="flex h-11 items-center text-xs text-info hover:underline md:h-5"
+    >
+      続きの月を請求する
+    </button>
   )
 
   const renderRecordLump = (r: RecordWithRelations) => (
@@ -3261,7 +3472,8 @@ export default function DashboardClient({
                       <tr key={`clump-${l.id}`} className="border-b last:border-0">
                         <td className="py-3 pl-10 pr-4">
                           <span className="text-foreground">{l.label || '（内訳名なし）'}</span>
-                          <span className="block text-xs text-muted-foreground">{coveredLumpNote(l.year, l.month, l.months_covered)}</span>
+                          <span className="block text-xs text-muted-foreground">{coveredLumpNote(l)}</span>
+                          {renderAdvanceButton(l)}
                         </td>
                         <td className="py-3 px-3 text-right text-muted-foreground">—</td>
                         <td />
@@ -3514,7 +3726,8 @@ export default function DashboardClient({
                         <div key={`clump-${l.id}`} className="flex items-start justify-between gap-2 text-sm">
                           <span className="min-w-0 text-muted-foreground">
                             {l.label || '（内訳名なし）'}
-                            <span className="block text-xs">{coveredLumpNote(l.year, l.month, l.months_covered)}</span>
+                            <span className="block text-xs">{coveredLumpNote(l)}</span>
+                            {renderAdvanceButton(l)}
                           </span>
                           <span className="shrink-0 text-muted-foreground">—</span>
                         </div>
@@ -3668,6 +3881,12 @@ export default function DashboardClient({
         target={lumpTarget}
         onClose={() => setLumpTarget(null)}
         onSubmit={submitLumpSum}
+      />
+
+      <AdvanceBillingDialog
+        target={advanceTarget}
+        onClose={() => setAdvanceTarget(null)}
+        onSubmit={submitAdvanceBilling}
       />
 
       <PayrollAmountsDialog

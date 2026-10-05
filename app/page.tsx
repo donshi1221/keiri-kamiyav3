@@ -1,11 +1,13 @@
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords, payrollReimbursementItems, paymentRequests } from '@/lib/schema'
-import { and, eq, asc, gt, sql } from 'drizzle-orm'
+import { and, eq, asc, sql } from 'drizzle-orm'
 import type { InvoiceAlertCounts, PaymentAlertCounts, CoveredClientLump } from '@/lib/ui-types'
 import { nowJST, nextMonthOf } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
 import { ONE_TIME_TASK_WINDOW_DAYS } from '@/lib/config'
+import { clientLumpRowCondition } from '@/lib/monthly-records'
+import { coverRange, isCoveredByLump, monthIndex, remainingMonths } from '@/lib/lump-sum'
 import DashboardClient from './components/dashboard-client'
 
 export default async function DashboardPage({
@@ -145,31 +147,43 @@ export default async function DashboardPage({
       .from(payrollReimbursementItems)
       .where(and(eq(payrollReimbursementItems.year, nextPayrollMonth.year), eq(payrollReimbursementItems.month, nextPayrollMonth.month)))
       .orderBy(asc(payrollReimbursementItems.created_at)),
-    // 表示中の月をカバーしている「前の月のまとめ行」。カバーされた月はその内訳の行が無いため、
+    // 表示中の月をカバーしている「別の月のまとめ行・先取り行」の候補。カバーされた月はその内訳の行が無いため、
     // これを渡さないとクライアントごと表から消え、その月の自社経費を見ることも足すこともできない。
+    // まかなう範囲の始まりは行によって違う（covers_from）ので、SQL では前の月の行に絞るだけにして、
+    // 表示中の月を含むかどうかは下で lib/lump-sum の範囲計算に任せる（範囲の決め方を1か所に保つため）。
     db.query.monthlyClientRecords.findMany({
       where: and(
-        gt(monthlyClientRecords.months_covered, 1),
-        sql`${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} < ${year * 12 + month}`,
-        sql`${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} + ${monthlyClientRecords.months_covered} - 1 >= ${year * 12 + month}`
+        clientLumpRowCondition,
+        sql`${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} < ${year * 12 + month}`
       ),
       orderBy: [asc(monthlyClientRecords.created_at)],
       with: {
         clients: { columns: { id: true, name: true } },
-        billing_items: { columns: { label: true } },
+        billing_items: { columns: { label: true, active: true, one_time: true, contract_start: true, contract_months: true } },
       },
     }),
   ])
 
-  const coveredClientLumps: CoveredClientLump[] = coveredClientLumpRows.map((r) => ({
-    id: r.id,
-    client_id: r.client_id,
-    client_name: r.clients?.name ?? '?',
-    label: (r.billing_items?.label ?? r.label_snapshot ?? '').trim(),
-    year: r.year,
-    month: r.month,
-    months_covered: r.months_covered,
-  }))
+  const coveredClientLumps: CoveredClientLump[] = coveredClientLumpRows
+    .filter((r) => isCoveredByLump([r], { year, month }))
+    .map((r) => {
+      const item = r.billing_items
+      // 行の月から契約の最後の月までの月数。まかなう範囲がそれより手前で終わっていれば、まだ請求していない月が残っている。
+      const untilContractEnd = remainingMonths(r, item?.contract_start ?? null, item?.contract_months ?? null)
+      return {
+        id: r.id,
+        client_id: r.client_id,
+        client_name: r.clients?.name ?? '?',
+        billing_item_id: r.billing_item_id,
+        label: (item?.label ?? r.label_snapshot ?? '').trim(),
+        year: r.year,
+        month: r.month,
+        months_covered: r.months_covered,
+        covers_from: r.covers_from,
+        can_advance: !!item && item.active && !item.one_time && untilContractEnd != null
+          && monthIndex(r.year, r.month) + untilContractEnd - 1 > coverRange(r).to,
+      }
+    })
 
   const carryOver = computeCarryOver(
     allRecordsForCarryOver,

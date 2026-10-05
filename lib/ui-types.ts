@@ -85,14 +85,37 @@ export interface LumpLaterRow {
 // カバーされた月はその内訳の行が無いため、何もしないとクライアントごと表から消えて
 // その月の自社経費を見ることも足すこともできなくなる。金額もチェックも持たない情報行として出すために渡す。
 // label は内訳マスタの今の名前（まとめ行の label_snapshot は期間入りの長い名前で、説明文と重複するため）。
+// billing_item_id は「その内訳の行が表示中の月にあるか」の突き合わせに使う（あれば情報行は出さず、
+// その行の下に注記だけ出す）。covers_from は先取り行のときだけ入る（まかなう範囲の始まり）。
+// can_advance は「続きの月を請求する」ボタンを出すかどうかの目安（契約の最後の月がまとめの範囲より後で、
+// 内訳が有効な継続契約のとき true）。本当に続きがあるかは確認ダイアログを開いたときにサーバーが確かめる。
 export interface CoveredClientLump {
   id: string
   client_id: string
   client_name: string
+  billing_item_id: string
   label: string
   year: number
   month: number
   months_covered: number
+  covers_from: string | null
+  can_advance: boolean
+}
+
+// 「続きの月を請求する」確認ダイアログの対象（どの内訳の、どの月に請求を立てるか）。
+export interface AdvanceBillingTarget {
+  billing_item_id: string
+  title: string
+  year: number
+  month: number
+}
+
+// 確認ダイアログ用に GET /api/checklist/client-records/advance が返す内容。
+// from は請求する最初の月、maxMonths はそこから続けて請求できる月数、perMonthAmount は内訳マスタの月額。
+export interface AdvanceBillingInfo {
+  from: { year: number; month: number }
+  maxMonths: number
+  perMonthAmount: number
 }
 
 // ─── 納品チェック（app/delivery）─────────────────────────────

@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_client_records" ADD COLUMN "covers_from" date;

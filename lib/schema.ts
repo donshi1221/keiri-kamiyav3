@@ -130,6 +130,10 @@ export const monthlyClientRecords = pgTable('monthly_client_records', {
   // この1行で何か月分をまかなうか。残りの請求を1回にまとめた行だけ 2 以上になり、
   // その後の月は行を作らない（lib/lump-sum）。請求回数の集計もこの値の合計で数える。
   months_covered: integer('months_covered').notNull().default(1),
+  // いつからの分をまかなうか（'YYYY-MM-01'）。null は「この行自身の月から」。
+  // まとめ済みで行が無い月に、続きの月の分を先に請求する行（先取り行）だけが値を持つ。
+  // 例: 9月の行で9・10月をまとめ、10月に11・12月分を請求する行は covers_from=11月・months_covered=2。
+  covers_from: date('covers_from', { mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.billing_item_id)])
 

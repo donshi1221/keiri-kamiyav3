@@ -1,7 +1,16 @@
 import { db } from './db'
 import { assignments, clientBillingItems, monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, payrollRecipients, monthlyPayrollRecords, payrollRecurringReimbursements, payrollReimbursementItems } from './schema'
-import { and, eq, gt, inArray } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNotNull, or } from 'drizzle-orm'
 import { isCoveredByLump } from './lump-sum'
+
+// クライアント請求の「自分の月以外の月をまかなう行（まとめ行・先取り行）」を選ぶ SQL 条件。
+// lib/lump-sum の isLumpRow と同じ判定の SQL 版（lump-sum は画面からも読むため drizzle を持ち込めない）。
+// 片方だけ直すと「カバー済みなのに行ができる」「マスタ保存でまとめ行の金額が上書きされる」になるので、
+// SQL でこの判定が要る箇所は必ずこれを使う。
+export const clientLumpRowCondition = or(
+  gt(monthlyClientRecords.months_covered, 1),
+  isNotNull(monthlyClientRecords.covers_from),
+)
 
 // 支払期間（開始月・回数）から、その (year, month) が支払い対象かを判定する。
 // 生成側と、期間外になった月次レコードの掃除側（app/api/master/assignments/[id]）で
@@ -88,15 +97,17 @@ export async function generateMonthlyRecords(year: number, month: number) {
   const activeItems = allItems.filter((it) => it.active && isBillingItemActiveForMonth(it, year, month))
 
   // 支払いと同じく、前の月の行で残りの請求をまとめた内訳は、カバー済みの月に行を作らない（二重請求の防止）。
+  // 続きの月を先に請求した行（先取り行）がまかなう月も同じ。
   const itemLumpRows = activeItems.length > 0
     ? await db.select({
         billing_item_id: monthlyClientRecords.billing_item_id,
         year: monthlyClientRecords.year,
         month: monthlyClientRecords.month,
         months_covered: monthlyClientRecords.months_covered,
+        covers_from: monthlyClientRecords.covers_from,
       }).from(monthlyClientRecords).where(and(
         inArray(monthlyClientRecords.billing_item_id, activeItems.map((it) => it.id)),
-        gt(monthlyClientRecords.months_covered, 1),
+        clientLumpRowCondition,
       ))
     : []
   const uncoveredItems = activeItems.filter((it) =>

@@ -2,9 +2,10 @@ import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { clientBillingItems, monthlyClientRecords } from '@/lib/schema'
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNull, not, sql } from 'drizzle-orm'
 import { parseBody, billingItemPatchSchema } from '@/lib/validation'
 import { nowJST } from '@/lib/dates'
+import { clientLumpRowCondition } from '@/lib/monthly-records'
 
 export async function PATCH(
   req: NextRequest,
@@ -54,7 +55,7 @@ export async function PATCH(
 
     // 月額を変えたときは、生成済みの月次記録の控えも今月以降のぶんだけ追従させる。
     // 過去月と請求書送付済みの月は、確定した数字を遡って変えないため対象外にする。
-    // 残りの月をまとめた行（months_covered > 1）は複数か月分の合計額なので、月額で上書きしない。
+    // 残りの月をまとめた行・続きの月を先に請求した行は、人が決めた合計額なので月額で上書きしない。
     if (v.billing_amount !== undefined) {
       const now = nowJST()
       const cutoff = now.getFullYear() * 100 + (now.getMonth() + 1)
@@ -65,7 +66,7 @@ export async function PATCH(
           and(
             eq(monthlyClientRecords.billing_item_id, id),
             isNull(monthlyClientRecords.invoice_sent_at),
-            eq(monthlyClientRecords.months_covered, 1),
+            not(clientLumpRowCondition!),
             sql`${monthlyClientRecords.year} * 100 + ${monthlyClientRecords.month} >= ${cutoff}`
           )
         )
