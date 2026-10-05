@@ -124,3 +124,62 @@ export function payoutLumpBlockReason(
   if (remaining == null || remaining < 2) return '残りが2か月以上ないため、まとめられません。'
   return null
 }
+
+// ─── まとめる範囲に、すでに後ろの月の行があるとき ─────────────────────────────
+// 月初の自動生成で先に行ができていても、誰も触っていない行ならまとめに取り込んで消してよい
+// （その月の分はまとめた月数に含まれるため）。人が記録を付けた行は消すと記録ごと失われるので断る。
+// 「取り込めない理由」を返す関数にしてあるのは、画面の事前表示とAPIの判定で同じ文言を使うため。
+
+// クライアント請求の後ろの月の行を取り込めない理由。取り込めるなら null。
+export function clientLaterRowBlockCause(
+  row: { invoice_sent_at: string | null; payment_confirmed_at: string | null; months_covered: number },
+): string | null {
+  if (row.invoice_sent_at) return '請求書を送付済みの'
+  if (row.payment_confirmed_at) return '入金確認済みの'
+  if (row.months_covered !== 1) return 'すでに別のまとめ行になっている'
+  return null
+}
+
+// 委託者支払いの後ろの月の行を取り込めない理由。取り込めるなら null。
+// 「未操作」の考え方はアサイン編集時の期間外行の掃除（cleanupOutOfPeriodRecords）に揃えるが、
+// 金額の控えを手で直しただけの行は取り込んでよい（まとめの合計額で置き換わるため）。
+// hasExpense は同じアサイン・年月の立替経費の有無。経費は月次行ではなくアサイン＋年月に紐づくため、
+// 行だけ消すと経費が宙に浮く。
+export function payoutLaterRowBlockCause(
+  row: {
+    invoice_received_at: string | null
+    payment_reserved_at: string | null
+    contractor_paid_at: string | null
+    actual_payout_amount: number | null
+    delivered_video_count: number | null
+    months_covered: number
+  },
+  hasExpense: boolean,
+): string | null {
+  if (row.invoice_received_at || row.payment_reserved_at || row.contractor_paid_at) return '受領・支払いの記録がある'
+  if (row.actual_payout_amount != null || row.delivered_video_count != null) return '納品チェックの結果が入っている'
+  if (hasExpense) return '立替経費が付いている'
+  if (row.months_covered !== 1) return 'すでに別のまとめ行になっている'
+  return null
+}
+
+// 取り込めない行があるときに利用者へ返す文。
+export function laterRowBlockMessage(year: number, month: number, cause: string): string {
+  return `${year}年${month}月の行は${cause}ため、まとめられません。`
+}
+
+// 後ろの月の行のうち、まとめる範囲（行の月の翌月 〜 行の月＋months−1）に入るもの。
+export function laterRowsInRange<T extends YearMonth>(rows: T[], year: number, month: number, months: number): T[] {
+  const from = monthIndex(year, month) + 1
+  const to = monthIndex(year, month) + months - 1
+  return rows.filter((r) => {
+    const idx = monthIndex(r.year, r.month)
+    return idx >= from && idx <= to
+  })
+}
+
+// まとめ行にカバーされている月に出す説明。「2026年9月の行でまとめ済み（9月〜12月分）」。
+export function coveredLumpNote(year: number, month: number, months: number): string {
+  const end = addMonthsOf(year, month, months - 1)
+  return `${year}年${month}月の行でまとめ済み（${month}月〜${monthText(year, end)}分）`
+}

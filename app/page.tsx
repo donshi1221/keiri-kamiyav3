@@ -1,7 +1,7 @@
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords, payrollReimbursementItems, paymentRequests } from '@/lib/schema'
-import { and, eq, asc, sql } from 'drizzle-orm'
-import type { InvoiceAlertCounts, PaymentAlertCounts } from '@/lib/ui-types'
+import { and, eq, asc, gt, sql } from 'drizzle-orm'
+import type { InvoiceAlertCounts, PaymentAlertCounts, CoveredClientLump } from '@/lib/ui-types'
 import { nowJST, nextMonthOf } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
 import { getValidAccessToken } from '@/lib/moneyforward'
@@ -39,6 +39,7 @@ export default async function DashboardPage({
     payrollRecords,
     payrollReimbursements,
     nextMonthReimbursements,
+    coveredClientLumpRows,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -144,7 +145,31 @@ export default async function DashboardPage({
       .from(payrollReimbursementItems)
       .where(and(eq(payrollReimbursementItems.year, nextPayrollMonth.year), eq(payrollReimbursementItems.month, nextPayrollMonth.month)))
       .orderBy(asc(payrollReimbursementItems.created_at)),
+    // 表示中の月をカバーしている「前の月のまとめ行」。カバーされた月はその内訳の行が無いため、
+    // これを渡さないとクライアントごと表から消え、その月の自社経費を見ることも足すこともできない。
+    db.query.monthlyClientRecords.findMany({
+      where: and(
+        gt(monthlyClientRecords.months_covered, 1),
+        sql`${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} < ${year * 12 + month}`,
+        sql`${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} + ${monthlyClientRecords.months_covered} - 1 >= ${year * 12 + month}`
+      ),
+      orderBy: [asc(monthlyClientRecords.created_at)],
+      with: {
+        clients: { columns: { id: true, name: true } },
+        billing_items: { columns: { label: true } },
+      },
+    }),
   ])
+
+  const coveredClientLumps: CoveredClientLump[] = coveredClientLumpRows.map((r) => ({
+    id: r.id,
+    client_id: r.client_id,
+    client_name: r.clients?.name ?? '?',
+    label: (r.billing_items?.label ?? r.label_snapshot ?? '').trim(),
+    year: r.year,
+    month: r.month,
+    months_covered: r.months_covered,
+  }))
 
   const carryOver = computeCarryOver(
     allRecordsForCarryOver,
@@ -222,6 +247,7 @@ export default async function DashboardPage({
       month={month}
       records={records}
       clientRecords={clientRecords}
+      coveredClientLumps={coveredClientLumps}
       globalTask={globalTask ?? null}
       customTasks={customTasks}
       oneTimeTasks={oneTimeTasksForMonth}

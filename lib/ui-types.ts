@@ -70,6 +70,31 @@ export interface LumpSumTarget {
   monthlyAmount: number
 }
 
+// まとめようとしている行より後ろの月に、すでにある同じ内訳（アサイン）の行1件（GET .../lump の返り値）。
+// absorbable が true の行は、その月がまとめる範囲に入ると取り込まれて消える。
+// false の行が範囲に入るとまとめられず、reason がその理由（利用者向けの文）。
+export interface LumpLaterRow {
+  year: number
+  month: number
+  amount: number | null
+  absorbable: boolean
+  reason: string | null
+}
+
+// 表示中の月をカバーしている「前の月のまとめ行」1件（クライアント請求）。
+// カバーされた月はその内訳の行が無いため、何もしないとクライアントごと表から消えて
+// その月の自社経費を見ることも足すこともできなくなる。金額もチェックも持たない情報行として出すために渡す。
+// label は内訳マスタの今の名前（まとめ行の label_snapshot は期間入りの長い名前で、説明文と重複するため）。
+export interface CoveredClientLump {
+  id: string
+  client_id: string
+  client_name: string
+  label: string
+  year: number
+  month: number
+  months_covered: number
+}
+
 // ─── 納品チェック（app/delivery）─────────────────────────────
 // 編集者スプレッドシートを読んで「対象月に納品すべき本数／実際に納品済みの本数」を数えた結果の1行。
 // システムはDBに書き込まず、この集計結果を表示するだけ（合否判定・請求書との照合は人が行う）。

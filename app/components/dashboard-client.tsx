@@ -10,11 +10,11 @@ import Link from 'next/link'
 import { getLastDayOfMonth, getDueState, nextMonthOf, type DueState } from '@/lib/dates'
 import type { CarryOverGroup } from '@/lib/carry-over'
 import type { MonthlyGlobalTask, CustomGlobalTask, OneTimeTask, Expense, ClientExpense, MonthlyRecord, MonthlyClientRecord } from '@/lib/schema'
-import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput, LumpSumTarget } from '@/lib/ui-types'
+import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryCheckRow, InvoiceAlertCounts, PaymentAlertCounts, PayrollRecordWithRecipient, PayrollReimbursement, PayrollReimbursementInput, LumpSumTarget, LumpLaterRow, CoveredClientLump } from '@/lib/ui-types'
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
-import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote } from '@/lib/lump-sum'
+import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote, laterRowsInRange, coveredLumpNote } from '@/lib/lump-sum'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
@@ -697,19 +697,43 @@ function LumpSumDialog({ target, onClose, onSubmit }: {
   const [months, setMonths] = useState(2)
   const [total, setTotal] = useState('')
   const [saving, setSaving] = useState(false)
+  // 後ろの月にすでにある同じ内訳（アサイン）の行。null は読み込み中。
+  // ダッシュボードは表示中の月の行しか持っていないため、ダイアログを開いたときに取りに行く。
+  const [laterRows, setLaterRows] = useState<LumpLaterRow[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!target) return
     setMonths(target.maxMonths)
     setTotal(String(target.monthlyAmount * target.maxMonths))
+    setLaterRows(null)
+    setLoadError(null)
+    // 開き直しや対象の切り替えで、前の対象の応答が後から届いても反映しない。
+    let cancelled = false
+    fetch(`/api/checklist/${target.kind === 'client' ? 'client-records' : 'records'}/${target.id}/lump`, { cache: 'no-store' })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => null)) as { laterRows?: LumpLaterRow[]; error?: string } | null
+        if (cancelled) return
+        if (!res.ok) setLoadError(data?.error ?? '後ろの月の行を確認できませんでした。閉じてもう一度お試しください。')
+        else setLaterRows(data?.laterRows ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('後ろの月の行を確認できませんでした。通信状況をご確認ください。')
+      })
+    return () => { cancelled = true }
   }, [target])
 
   if (!target) return null
 
   const isClient = target.kind === 'client'
   const totalNum = Number(total)
-  const valid = total.trim() !== '' && Number.isInteger(totalNum) && totalNum >= 1
   const monthOptions = Array.from({ length: target.maxMonths - 1 }, (_, i) => i + 2)
+  // 選んだ月数の範囲に入る既存行。手つかずの行は取り込まれて消え、記録のある行が1つでもあればまとめられない。
+  const rowsInRange = laterRowsInRange(laterRows ?? [], target.year, target.month, months)
+  const absorbedRows = rowsInRange.filter((r) => r.absorbable)
+  const blockedRows = rowsInRange.filter((r) => !r.absorbable)
+  const valid = total.trim() !== '' && Number.isInteger(totalNum) && totalNum >= 1
+    && laterRows !== null && blockedRows.length === 0
 
   function changeMonths(n: number) {
     if (!target) return
@@ -776,7 +800,24 @@ function LumpSumDialog({ target, onClose, onSubmit }: {
         <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
           <li>{lumpSkipNote(target.year, target.month, months, target.maxMonths)}{isClient ? '請求書を送る前' : '支払う前'}ならあとで取り消せます。</li>
           {!isClient && <li>請求書チェックで支払回数（N/M）の注意が出ることがあります。</li>}
+          {absorbedRows.map((r) => (
+            <li key={`${r.year}-${r.month}`}>
+              {r.year}年{r.month}月の行{r.amount != null ? `（¥${r.amount.toLocaleString()}）` : ''}は、このまとめに取り込まれて消えます。
+            </li>
+          ))}
         </ul>
+        {laterRows === null && !loadError && (
+          <p className="text-xs text-muted-foreground">後ろの月の行を確認しています…</p>
+        )}
+        {loadError && <p role="alert" className="text-xs text-danger">{loadError}</p>}
+        {blockedRows.length > 0 && (
+          <ul role="alert" className="space-y-1 text-xs text-danger">
+            {blockedRows.map((r) => (
+              <li key={`${r.year}-${r.month}`}>{r.reason}</li>
+            ))}
+            {monthOptions.length > 1 && <li>まとめる月数を減らすと、まとめられることがあります。</li>}
+          </ul>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>キャンセル</Button>
           <Button size="sm" className="h-11 md:h-7" type="button" onClick={submit} disabled={saving || !valid}>
@@ -1104,6 +1145,9 @@ interface Props {
   month: number
   records: RecordWithRelations[]
   clientRecords: ClientRecordWithClient[]
+  // 表示中の月をカバーしている、前の月のまとめ行。金額もチェックも持たない情報行として出す
+  // （その月に行が無いクライアントも表に残し、自社経費を見られる・足せるようにするため）。
+  coveredClientLumps: CoveredClientLump[]
   globalTask: MonthlyGlobalTask | null
   customTasks: CustomGlobalTask[]
   oneTimeTasks: OneTimeTask[]
@@ -1135,7 +1179,7 @@ interface Props {
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements,
+  year, month, records, clientRecords, coveredClientLumps, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -1898,17 +1942,22 @@ export default function DashboardClient({
 
   // クライアント請求記録を「クライアント単位」でグループ化する（1クライアントに複数の内訳がぶら下がる）。
   // created_at 順で内訳が飛び飛びに並んでも、同じクライアントの内訳が隣り合うようにまとめ直す。
-  const clientGroups: { clientId: string; clientName: string; items: ClientRecordWithClient[] }[] = []
+  // lumps は「前の月の行でまとめ済み」の情報行。チェックも金額も無いので items（集計・チェックの対象）には
+  // 混ぜず別に持つ。件数・未完了・期限・進み具合はすべて items だけを数えるため、情報行で数字がずれない。
+  // 表示中の月に行が1つも無いクライアントも、情報行があればグループを作る（items は空）。
+  const clientGroups: { clientId: string; clientName: string; items: ClientRecordWithClient[]; lumps: CoveredClientLump[] }[] = []
   const groupIndexByClient = new Map<string, number>()
-  for (const cr of localClientRecords) {
-    let idx = groupIndexByClient.get(cr.client_id)
+  const clientGroupOf = (clientId: string, clientName: string) => {
+    let idx = groupIndexByClient.get(clientId)
     if (idx === undefined) {
       idx = clientGroups.length
-      groupIndexByClient.set(cr.client_id, idx)
-      clientGroups.push({ clientId: cr.client_id, clientName: cr.clients?.name ?? '?', items: [] })
+      groupIndexByClient.set(clientId, idx)
+      clientGroups.push({ clientId, clientName, items: [], lumps: [] })
     }
-    clientGroups[idx].items.push(cr)
+    return clientGroups[idx]
   }
+  for (const cr of localClientRecords) clientGroupOf(cr.client_id, cr.clients?.name ?? '?').items.push(cr)
+  for (const l of coveredClientLumps) clientGroupOf(l.client_id, l.client_name).lumps.push(l)
   // 内訳名。生成時点の控え(label_snapshot)を優先し、無ければ内訳マスタの現在名。
   const itemLabel = (cr: ClientRecordWithClient): string =>
     (cr.label_snapshot ?? cr.billing_items?.label ?? '').trim()
@@ -1983,6 +2032,9 @@ export default function DashboardClient({
       }
       replaceLumpRow(target.kind, target.id, data as MonthlyRecord | MonthlyClientRecord)
       setLumpTarget(null)
+      // 取り込まれて消えた行は後ろの月のものなので、表示中の月の行はこの差し替えで足りる。
+      // ただし他の月の画面や回数の集計（サーバーから渡る値）は古いままになるため、取り直しておく。
+      startTransition(() => router.refresh())
     } catch {
       showError('まとめられませんでした。通信状況をご確認ください。')
     }
@@ -2055,10 +2107,15 @@ export default function DashboardClient({
 
   // 内訳が複数、または立替経費・自社経費があるクライアントだけグループ見出し行を出している。
   // 入金確認のチェックは見出し側に集約されるため、未完了項目の飛び先もこの判定に合わせる。
-  const clientHasGroupHeader = (clientId: string): boolean =>
-    (clientGroups.find((g) => g.clientId === clientId)?.items.length ?? 0) > 1 ||
-    expensesOfClient(clientId).reduce((s, e) => s + e.amount, 0) > 0 ||
-    clientExpenseTotalOf(clientId) > 0
+  // 「まとめ済み」の情報行があるクライアントも、情報行と内訳行が並ぶので見出し行を出す
+  // （表示中の月に行が無いクライアントは、見出し行が無いと名前を出す場所が無い）。
+  const clientHasGroupHeader = (clientId: string): boolean => {
+    const g = clientGroups.find((x) => x.clientId === clientId)
+    return (g?.items.length ?? 0) > 1 ||
+      (g?.lumps.length ?? 0) > 0 ||
+      expensesOfClient(clientId).reduce((s, e) => s + e.amount, 0) > 0 ||
+      clientExpenseTotalOf(clientId) > 0
+  }
 
   // 経費は代行者にのみ紐づける運用のため、編集者のアサインには入力欄を出さない。
   const canAddExpense = (r: RecordWithRelations): boolean =>
@@ -2412,7 +2469,8 @@ export default function DashboardClient({
       monthChecks.push({ key: `sent-${cr.id}`, target: `cli-${cr.id}`, label: `請求書送付：${who}`, done: !!cr.invoice_sent_at })
       if (!multi) monthChecks.push({ key: `confirmed-${cr.id}`, target: `cli-${cr.id}`, label: `入金確認：${g.clientName}`, done: !!cr.payment_confirmed_at })
     }
-    if (multi) {
+    // 行が無い（まとめ済みの情報行だけの）クライアントには入金確認の対象が無いので項目を作らない。
+    if (multi && g.items.length > 0) {
       monthChecks.push({
         key: `confirmed-group-${g.clientId}`,
         target: `cligroup-${g.clientId}`,
@@ -3112,7 +3170,7 @@ export default function DashboardClient({
         />
         {clientOpen && (
         <>
-        {localClientRecords.length === 0 ? (
+        {clientGroups.length === 0 ? (
           <p className="text-sm text-muted-foreground p-4">
             この月の請求記録はまだありません（毎月1日に自動で作成されます）。クライアントが未登録の場合は{' '}
             <Link href="/master" className="text-info underline">マスタ管理</Link>
@@ -3140,7 +3198,9 @@ export default function DashboardClient({
                     const selfExpenses = clientExpensesOf(g.clientId)
                     const selfExpenseTotal = selfExpenses.reduce((s, e) => s + e.amount, 0)
                     // 内訳が1つでも経費があれば、内訳行と経費行が並ぶためグループ表示にする。
-                    const multi = g.items.length > 1 || expenseTotal > 0 || selfExpenseTotal > 0
+                    // 「まとめ済み」の情報行があるクライアントも同じ（clientHasGroupHeader と同じ判定）。
+                    const multi = clientHasGroupHeader(g.clientId)
+                    const hasItems = g.items.length > 0
                     // クライアント単位の合計請求額（その月の内訳スナップショット＋立替経費＋自社経費の合算）
                     const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal + selfExpenseTotal
                     // 入金はクライアントからまとめて行われるため、入金確認は全内訳に一括で付ける。
@@ -3172,7 +3232,8 @@ export default function DashboardClient({
                           >
                             <td className={`py-2 px-4 ${accentCls}`}>
                               <span className="font-semibold text-foreground">{g.clientName}</span>
-                              <ProgressPips states={groupPips} className="mt-1" />
+                              {/* 行が無い月（まとめ済みの情報行だけ）は進み具合もチェックも対象が無いので出さない。 */}
+                              {hasItems && <ProgressPips states={groupPips} className="mt-1" />}
                             </td>
                             <td className="py-2 px-3 text-right">
                               <span className="text-xs text-muted-foreground mr-1">合計</span>
@@ -3180,19 +3241,33 @@ export default function DashboardClient({
                             </td>
                             <td />
                             <td className="text-center py-2 px-3">
-                              <MoneyCheckControl
-                                checked={allConfirmed}
-                                pending={pendingGroupUncheck?.kind === 'client' && pendingGroupUncheck.ids.join(',') === confirmIds.join(',')}
-                                label={`${g.clientName}の入金確認（まとめて）`}
-                                onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
-                                onConfirm={confirmGroupUncheck}
-                                onCancel={() => setPendingGroupUncheck(null)}
-                                badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
-                              />
+                              {hasItems && (
+                                <MoneyCheckControl
+                                  checked={allConfirmed}
+                                  pending={pendingGroupUncheck?.kind === 'client' && pendingGroupUncheck.ids.join(',') === confirmIds.join(',')}
+                                  label={`${g.clientName}の入金確認（まとめて）`}
+                                  onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
+                                  onConfirm={confirmGroupUncheck}
+                                  onCancel={() => setPendingGroupUncheck(null)}
+                                  badge={<span className="block text-[10px] text-muted-foreground">まとめて</span>}
+                                />
+                              )}
                             </td>
                           </tr>
                         )]
                       : []
+                    // 前の月の行でまとめ済みの内訳。この月は請求しないので金額もチェック欄も出さない。
+                    const lumpRows = g.lumps.map((l) => (
+                      <tr key={`clump-${l.id}`} className="border-b last:border-0">
+                        <td className="py-3 pl-10 pr-4">
+                          <span className="text-foreground">{l.label || '（内訳名なし）'}</span>
+                          <span className="block text-xs text-muted-foreground">{coveredLumpNote(l.year, l.month, l.months_covered)}</span>
+                        </td>
+                        <td className="py-3 px-3 text-right text-muted-foreground">—</td>
+                        <td />
+                        <td />
+                      </tr>
+                    ))
                     const itemRows = g.items.map((cr) => {
                       const label = itemLabel(cr)
                       const billedCount = billedCounts[cr.billing_item_id] ?? 0
@@ -3308,7 +3383,7 @@ export default function DashboardClient({
                         <td />
                       </tr>
                     )]
-                    return [...headerRow, ...itemRows, ...expenseRow, ...selfExpenseRow]
+                    return [...headerRow, ...itemRows, ...lumpRows, ...expenseRow, ...selfExpenseRow]
                   })}
                 </tbody>
               </table>
@@ -3321,7 +3396,8 @@ export default function DashboardClient({
                 const expenseTotal = passThroughExpenses.reduce((s, e) => s + e.amount, 0)
                 const selfExpenses = clientExpensesOf(g.clientId)
                 const selfExpenseTotal = selfExpenses.reduce((s, e) => s + e.amount, 0)
-                const multi = g.items.length > 1 || expenseTotal > 0 || selfExpenseTotal > 0
+                const multi = clientHasGroupHeader(g.clientId)
+                const hasItems = g.items.length > 0
                 const total = g.items.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotal + selfExpenseTotal
                 const confirmIds = g.items.map((cr) => cr.id)
                 const allConfirmed = g.items.every((cr) => !!cr.payment_confirmed_at)
@@ -3347,26 +3423,29 @@ export default function DashboardClient({
                     <div className={`-mx-4 mb-2 flex items-center justify-between gap-2 px-4 py-2 ${rowBg(`cligroup-${g.clientId}`, groupCls)} ${accentCls}`}>
                       <span className="flex min-w-0 flex-col gap-1">
                         <span className="font-semibold text-foreground">{g.clientName}</span>
-                        <ProgressPips states={groupPips} />
+                        {hasItems && <ProgressPips states={groupPips} />}
                       </span>
-                      {/* 複数内訳のクライアントは、ヘッダーに合計請求額と「入金確認（まとめて）」を置く */}
+                      {/* 複数内訳のクライアントは、ヘッダーに合計請求額と「入金確認（まとめて）」を置く。
+                          行が無い月（まとめ済みの情報行だけ）は入金確認の対象が無いので合計だけにする。 */}
                       {multi && (
                         <span className="flex shrink-0 items-center gap-3 text-sm">
                           <span>
                             <span className="text-xs text-muted-foreground mr-1">合計</span>
                             <span className="font-semibold text-foreground">¥{total.toLocaleString()}</span>
                           </span>
-                          <span className="flex flex-col items-center gap-0.5">
-                            <span className="text-xs text-muted-foreground">入金確認</span>
-                            <MoneyCheckControl
-                              checked={allConfirmed}
-                              pending={pendingGroupUncheck?.kind === 'client' && pendingGroupUncheck.ids.join(',') === confirmIds.join(',')}
-                              label={`${g.clientName}の入金確認（まとめて）`}
-                              onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
-                              onConfirm={confirmGroupUncheck}
-                              onCancel={() => setPendingGroupUncheck(null)}
-                            />
-                          </span>
+                          {hasItems && (
+                            <span className="flex flex-col items-center gap-0.5">
+                              <span className="text-xs text-muted-foreground">入金確認</span>
+                              <MoneyCheckControl
+                                checked={allConfirmed}
+                                pending={pendingGroupUncheck?.kind === 'client' && pendingGroupUncheck.ids.join(',') === confirmIds.join(',')}
+                                label={`${g.clientName}の入金確認（まとめて）`}
+                                onRequest={() => requestBulkClientConfirmed(confirmIds, allConfirmed)}
+                                onConfirm={confirmGroupUncheck}
+                                onCancel={() => setPendingGroupUncheck(null)}
+                              />
+                            </span>
+                          )}
                         </span>
                       )}
                     </div>
@@ -3430,6 +3509,16 @@ export default function DashboardClient({
                           </div>
                         )
                       })}
+                      {/* 前の月の行でまとめ済みの内訳。この月は請求しないので金額もチェック欄も出さない。 */}
+                      {g.lumps.map((l) => (
+                        <div key={`clump-${l.id}`} className="flex items-start justify-between gap-2 text-sm">
+                          <span className="min-w-0 text-muted-foreground">
+                            {l.label || '（内訳名なし）'}
+                            <span className="block text-xs">{coveredLumpNote(l.year, l.month, l.months_covered)}</span>
+                          </span>
+                          <span className="shrink-0 text-muted-foreground">—</span>
+                        </div>
+                      ))}
                       {expenseTotal > 0 && (
                         <div className="text-sm">
                           <div className="flex items-start justify-between gap-2">
@@ -3864,7 +3953,7 @@ export default function DashboardClient({
           <div className="bg-secondary rounded-lg p-3">
             <p className="text-xs text-muted-foreground mb-1">売上</p>
             <p className="text-xl font-medium text-foreground">¥{revenue.toLocaleString()}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">クライアント {clientGroups.length}件 / 内訳 {localClientRecords.length}件</p>
+            <p className="text-xs text-muted-foreground mt-0.5">クライアント {clientGroups.filter((g) => g.items.length > 0).length}件 / 内訳 {localClientRecords.length}件</p>
           </div>
           <div className="bg-secondary rounded-lg p-3">
             <p className="text-xs text-muted-foreground mb-1">外注費</p>
