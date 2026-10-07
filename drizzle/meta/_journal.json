@@ -239,6 +239,13 @@
       "when": 1791353416057,
       "tag": "0033_omniscient_the_santerians",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791368647886,
+      "tag": "0034_sparkling_tombstone",
+      "breakpoints": true
     }
   ]
 }

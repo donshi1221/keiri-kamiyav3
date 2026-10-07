@@ -38,6 +38,9 @@ export async function findInvoiceReminderCandidates(
   const byContractor = new Map<string, ReminderCandidate>()
   for (const r of rows) {
     if (r.invoice_received_at) continue
+    // スキップした行はその月に払わない＝請求書を待っていない行。その月の行が全部スキップの委託者は
+    // 催促する理由が無いので対象にならない。
+    if (r.skipped_at) continue
     // 終了したアサインの行が残っていても催促の理由にはならないため、稼働中のものだけ見る。
     if (!r.assignments?.active) continue
     const c = r.assignments.contractors

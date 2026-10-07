@@ -2,7 +2,7 @@ import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, monthlyPayrollRecords, payrollReimbursementItems, expenseUploads } from '@/lib/schema'
-import { and, eq, gte, lt } from 'drizzle-orm'
+import { and, eq, gte, isNull, lt } from 'drizzle-orm'
 import { getResend } from '@/lib/resend'
 import { nowJST, getLastDayOfMonth, isInReminderWindow, TZ } from '@/lib/dates'
 import { fromZonedTime } from 'date-fns-tz'
@@ -116,8 +116,9 @@ export async function GET(req: NextRequest) {
     const remindLastDay = isInReminderWindow(day, lastDay)
 
     const [records, clientRecords, globalTask, customTasks, payrollRecords, payrollReimbursements] = await Promise.all([
+      // スキップした行はその月に払わない行。受領・予約・支払いの催促に載せない。
       db.query.monthlyRecords.findMany({
-        where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
+        where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month), isNull(monthlyRecords.skipped_at)),
         columns: { invoice_received_at: true, payment_reserved_at: true, contractor_paid_at: true },
         with: {
           assignments: {
@@ -166,7 +167,7 @@ export async function GET(req: NextRequest) {
         invoice_received_at: monthlyRecords.invoice_received_at,
         payment_reserved_at: monthlyRecords.payment_reserved_at,
         contractor_paid_at: monthlyRecords.contractor_paid_at,
-      }).from(monthlyRecords),
+      }).from(monthlyRecords).where(isNull(monthlyRecords.skipped_at)),
       db.select({
         year: monthlyClientRecords.year,
         month: monthlyClientRecords.month,

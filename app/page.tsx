@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { monthlyRecords, monthlyClientRecords, monthlyGlobalTasks, monthlyCustomGlobalTasks, oneTimeTasks, moneyforwardExpenses, moneyforwardTokens, expenses, clientExpenses, invoiceUploads, monthlyPayrollRecords, payrollReimbursementItems, paymentRequests } from '@/lib/schema'
-import { and, eq, asc, sql } from 'drizzle-orm'
+import { and, eq, asc, isNull, sql } from 'drizzle-orm'
 import type { InvoiceAlertCounts, PaymentAlertCounts, CoveredClientLump } from '@/lib/ui-types'
 import { nowJST, nextMonthOf } from '@/lib/dates'
 import { computeCarryOver } from '@/lib/carry-over'
@@ -79,18 +79,21 @@ export default async function DashboardPage({
       billed: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.invoice_sent_at} is not null), 0)`,
       paid: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null), 0)`,
     }).from(monthlyClientRecords).groupBy(monthlyClientRecords.billing_item_id),
+    // スキップした月は払わずに終わる月なので、支払回数（予定・支払い済みとも）には数えない。
     db.select({
       assignment_id: monthlyRecords.assignment_id,
       scheduled: sql<number>`coalesce(sum(${monthlyRecords.months_covered}), 0)`,
       paid: sql<number>`coalesce(sum(${monthlyRecords.months_covered}) filter (where ${monthlyRecords.contractor_paid_at} is not null), 0)`,
-    }).from(monthlyRecords).groupBy(monthlyRecords.assignment_id),
+    }).from(monthlyRecords).where(isNull(monthlyRecords.skipped_at)).groupBy(monthlyRecords.assignment_id),
+    // 繰越（過去月の未完了）の材料。スキップした行は受領も支払いも永久に付かないため、
+    // 含めると「未完了」としていつまでも繰り越され続ける。
     db.select({
       year: monthlyRecords.year,
       month: monthlyRecords.month,
       invoice_received_at: monthlyRecords.invoice_received_at,
       payment_reserved_at: monthlyRecords.payment_reserved_at,
       contractor_paid_at: monthlyRecords.contractor_paid_at,
-    }).from(monthlyRecords),
+    }).from(monthlyRecords).where(isNull(monthlyRecords.skipped_at)),
     db.select({
       year: monthlyClientRecords.year,
       month: monthlyClientRecords.month,

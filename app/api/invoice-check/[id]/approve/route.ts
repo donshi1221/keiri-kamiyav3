@@ -68,7 +68,7 @@ export async function POST(
     const records = await findPayoutMonthlyRecords(invoice.contractor_id, payout.year, payout.month)
     if (records.length === 0) {
       return Response.json(
-        { error: `${payout.year}年${payout.month}月分（支払月）の月次レコードが見つかりません` },
+        { error: `${payout.year}年${payout.month}月分（支払月）に金額を入れられる月次レコードが見つかりません（スキップした行は対象外です）` },
         { status: 400 }
       )
     }

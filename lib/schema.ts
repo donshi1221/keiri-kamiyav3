@@ -111,6 +111,9 @@ export const monthlyRecords = pgTable('monthly_records', {
   // この1行で何か月分をまかなうか。残りの支払いを1回にまとめた行だけ 2 以上になり、
   // その後の月は行を作らない（lib/lump-sum）。支払回数の集計もこの値の合計で数える。
   months_covered: integer('months_covered').notNull().default(1),
+  // その月の支払いをスキップした日時。null は通常の行。行を消さずに印で持つのは、消すと月次生成が
+  // 同じ月の行を作り直してしまうため。真偽値でなく日時にするのは「いつ決めたか」を後から追えるようにするため。
+  skipped_at: timestamp('skipped_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.assignment_id)])
 

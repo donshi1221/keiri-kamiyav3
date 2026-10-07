@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_records" ADD COLUMN "skipped_at" timestamp with time zone;

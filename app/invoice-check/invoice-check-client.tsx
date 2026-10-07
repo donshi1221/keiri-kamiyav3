@@ -35,6 +35,7 @@ import type {
   InvoiceNoteMark,
   InvoiceReplyAction,
   InvoiceReplyInfo,
+  InvoiceSkippableRecord,
 } from '@/lib/ui-types'
 
 const STATUS_LABEL: Record<InvoiceCheckRow['status'], string> = {
@@ -384,6 +385,11 @@ function UsageNotes() {
             立替経費として登録できます（登録後は自動で再チェックまで行います）。
           </li>
           <li>
+            「◯◯: 予定 ¥X が請求書に見当たりません」でNGになった行には「今月はスキップ」ボタンが出ます。
+            その月はそのクライアント分を支払わないと決まっているときに押すと、支払予定と支払回数から外して
+            自動で再チェックまで行います（支払い前ならダッシュボードから取り消せます）。
+          </li>
+          <li>
             判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、
             PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
           </li>
@@ -587,6 +593,30 @@ function canRegisterExpense(r: InvoiceCheckRow): boolean {
     r.expense_assignments.length > 0 &&
     r.payout_year !== null &&
     r.payout_month !== null
+  )
+}
+
+// ─── 今月はスキップ ─────────────────────────────────────────────
+// 「予定はあるのに請求書に載っていない」NGのうち、その月は払わないのが正しいものを、
+// ダッシュボードへ移動せずこの場で片付けるための口。
+
+// 照合本体（lib/invoice-check の compareInvoiceItems）が出す「◯◯: 予定 ¥X が請求書に見当たりません」の
+// 前後の決まり文句。立替経費の同じ形の行は、クライアント名の完全一致で引く時点で当たらない。
+const CLIENT_MISSING_AFTER_NAME = ': 予定 '
+const CLIENT_MISSING_SUFFIX = 'が請求書に見当たりません'
+
+// その請求書で「今月はスキップ」を出す月次レコード。NG行の先頭がクライアント名と完全一致するものだけを拾う。
+// 同じクライアント名の行が複数ある委託者は、NG行がどちらを指すか決められないので出さない
+// （違う行をスキップさせるより、ダッシュボードで行を見て操作してもらう方が安全なため）。
+function skipCandidatesOf(r: InvoiceCheckRow): InvoiceSkippableRecord[] {
+  const missing = parseInvoiceNotes(r.check_notes)
+    .filter((line) => line.mark === 'ng' && line.text.endsWith(CLIENT_MISSING_SUFFIX))
+    .map((line) => line.text)
+  if (missing.length === 0) return []
+  return r.skippable_records.filter(
+    (rec) =>
+      missing.some((text) => text.startsWith(`${rec.clientName}${CLIENT_MISSING_AFTER_NAME}`)) &&
+      r.skippable_records.filter((other) => other.clientName === rec.clientName).length === 1
   )
 }
 
@@ -1000,6 +1030,7 @@ export default function InvoiceCheckClient() {
   const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
   const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
   const [approveTarget, setApproveTarget] = useState<InvoiceCheckRow | null>(null)
+  const [skipTarget, setSkipTarget] = useState<{ row: InvoiceCheckRow; record: InvoiceSkippableRecord } | null>(null)
   const [cautionBusyId, setCautionBusyId] = useState<string | null>(null)
   // 返信の文面の編集中の値（請求書ごと）。base は編集を始めたときの下書きで、再チェックなどで
   // サーバーの下書きが作り直されたら（＝判定が変わったら）古い編集は捨てて新しい下書きを見せる。
@@ -1130,6 +1161,26 @@ export default function InvoiceCheckClient() {
   async function handleExpensesRegistered(id: string) {
     setExpenseTarget(null)
     await recheck(id)
+  }
+
+  // スキップしただけでは判定は変わらない（経費の登録と同じく、保存済みの check_notes を見ているため）。
+  // 目的は「見当たりません」のNGを消すことなので、続けて再チェックまで自動で走らせる。
+  async function confirmSkip() {
+    const target = skipTarget
+    setSkipTarget(null)
+    if (!target) return
+    setError(null)
+    try {
+      const res = await fetch(`/api/checklist/records/${target.record.id}/skip`, { method: 'POST' })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, 'スキップに失敗しました。'))
+        return
+      }
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+      return
+    }
+    await recheck(target.row.id)
   }
 
   function replyTextOf(r: InvoiceCheckRow): string {
@@ -1308,6 +1359,20 @@ export default function InvoiceCheckClient() {
                           </Button>
                         </div>
                       )}
+                      {/* 「見当たりません」のNGも、その月は払わないと決まっていればこの場で終わらせられる。 */}
+                      {skipCandidatesOf(r).map((rec) => (
+                        <div key={rec.id} className="mt-2 flex justify-end">
+                          <Button
+                            size="sm"
+                            // クライアント名が入って長くなるため、狭い列では折り返して収める。
+                            className="h-auto min-h-11 whitespace-normal md:min-h-7"
+                            disabled={busy(r.id)}
+                            onClick={() => setSkipTarget({ row: r, record: rec })}
+                          >
+                            今月はスキップ（{shortenClientName(rec.clientName)}）
+                          </Button>
+                        </div>
+                      ))}
                       {r.reply && <div className="mt-2">{renderReply(r)}</div>}
                     </td>
                     <td className="px-3 py-3">
@@ -1442,6 +1507,19 @@ export default function InvoiceCheckClient() {
                   </div>
                 )}
 
+                {skipCandidatesOf(r).map((rec) => (
+                  <div key={rec.id} className="mt-2">
+                    <Button
+                      size="sm"
+                      className="h-auto min-h-11 w-full whitespace-normal"
+                      disabled={busy(r.id)}
+                      onClick={() => setSkipTarget({ row: r, record: rec })}
+                    >
+                      今月はスキップ（{shortenClientName(rec.clientName)}）
+                    </Button>
+                  </div>
+                ))}
+
                 {r.reply && <div className="mt-2">{renderReply(r)}</div>}
 
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -1529,6 +1607,28 @@ export default function InvoiceCheckClient() {
         onApproved={handleApproved}
         onError={setError}
       />
+
+      {/* 支払予定から外す操作なので、どのクライアントの何月分かをもう一度見せてから実行する。 */}
+      <AlertDialog open={!!skipTarget} onOpenChange={(open) => { if (!open) setSkipTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>今月の支払いをスキップしますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {skipTarget && (
+                <>
+                  {skipTarget.record.clientName} の {skipTarget.row.payout_month}月の支払い
+                  {skipTarget.record.amount !== null && `（${formatAmount(skipTarget.record.amount)}）`}
+                  をスキップします。支払予定と支払回数から外れます。支払い前ならダッシュボードから取り消せます。
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSkip}>スキップする</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 送信は取り消せないので、宛先と文面をもう一度見せてから送る。 */}
       <AlertDialog open={!!replySendTarget} onOpenChange={(open) => { if (!open) setReplySendTarget(null) }}>

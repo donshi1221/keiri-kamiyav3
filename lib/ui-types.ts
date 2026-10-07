@@ -211,6 +211,15 @@ export interface InvoiceExpenseAssignment {
   matchNames: string[]
 }
 
+// 「今月はスキップ」の対象にできる月次レコード1件。判定理由のNG行は文字列でしかないため、
+// どの行を指すかは画面がクライアント名の完全一致でここから引く（文字列から id は復元できない）。
+// amount は確認ダイアログに出す予定額。納品チェック未反映の編集者の行は金額が決まっていないので null。
+export interface InvoiceSkippableRecord {
+  id: string
+  clientName: string
+  amount: number | null
+}
+
 // 一覧APIが返す1行。PDF本体（file_data）は重いので一覧には載せず、
 // 表示が必要なときだけ /api/invoice-check/[id]/pdf から取り出す。
 // contractor_name は照合で特定した委託者名。IDだけでは画面で誰か分からないため結合して持たせる。
@@ -218,6 +227,7 @@ export interface InvoiceExpenseAssignment {
 // payout_year / payout_month は照合に使った支払月（記載月の翌月）。経費は支払月の行に登録する
 // 決まりなので、画面側で月をずらす計算をやり直さずに済むようサーバーで確定させて渡す。
 // expense_assignments は経費の登録先候補（その委託者のアクティブなアサイン）。
+// skippable_records は支払月の月次レコードのうち、スキップできるもの（支払い・予約・まとめ・スキップ済みを除く）。
 // reply は委託者への返信（下書き・送信済みなど）。保留・未照合の請求書には無いので null。
 // has_chatwork_room は委託者の Chatwork の宛先が登録済みか。画面が知りたいのは送れるかどうかだけ
 // なので、ルームIDそのものは返さない（不要な識別子を出さない。リマインドと同じ流儀）。
@@ -227,6 +237,7 @@ export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'> & {
   payout_year: number | null
   payout_month: number | null
   expense_assignments: InvoiceExpenseAssignment[]
+  skippable_records: InvoiceSkippableRecord[]
   reply: InvoiceReplyInfo | null
   has_chatwork_room: boolean
 }

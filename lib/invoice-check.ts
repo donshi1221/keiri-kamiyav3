@@ -174,6 +174,13 @@ async function computeExpectedPayout(
     if (!assignment) continue
     const client = assignment.clients
     const clientName = client?.name ?? '?'
+    // スキップした月は払わないと決めた行。金額にも内訳にも入れないことで、請求書に載っていなくても
+    // 「見当たりません」にならない。逆に請求書へ載ってきた場合は内訳に相手がいないので保留になり、人が見る。
+    // 納品シートも読まない（払わない行のために保留になったり、支払額を書き戻したりしないため）。
+    if (record.skipped_at) {
+      notes.push(`${clientName}: 今月の支払いはスキップ（¥0）`)
+      continue
+    }
     // クライアントが引けない行は照合の当たり先にならないよう候補名を空にする
     // （'?' を候補にすると、記号を含む明細に誤って吸い付いてしまう）。
     const matchNames = client ? clientMatchNames(client.name, client.aliases) : []
@@ -592,6 +599,7 @@ async function resolveContractor(issuer: string): Promise<{ contractor: Contract
 // 「請求書1件に対応する月次レコードはどれか」の答えを1か所にまとめるための関数。
 // 受領チェックの自動付与（markInvoiceReceived）と、保留の手動OK（app/api/invoice-check/[id]/approve）が
 // 別々の条件で行を探すと、片方だけ当たって食い違うため共用する。
+// スキップした行は払わない行なので含めない（受領の印を付けたり支払額を入れたりする相手ではないため）。
 export async function findPayoutMonthlyRecords(
   contractorId: string,
   year: number,
@@ -611,7 +619,8 @@ export async function findPayoutMonthlyRecords(
         eq(assignments.contractor_id, contractorId),
         eq(assignments.active, true),
         eq(monthlyRecords.year, year),
-        eq(monthlyRecords.month, month)
+        eq(monthlyRecords.month, month),
+        isNull(monthlyRecords.skipped_at)
       )
     )
 }

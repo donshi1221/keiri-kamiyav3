@@ -1,10 +1,11 @@
 import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
-import { assignments, clients, contractors, invoiceReplies, invoiceUploads } from '@/lib/schema'
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
+import { assignments, clients, contractors, invoiceReplies, invoiceUploads, monthlyRecords } from '@/lib/schema'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { payoutMonthOf } from '@/lib/invoice-check'
 import { clientMatchNames } from '@/lib/invoice-match'
-import type { InvoiceDeliverySheetLink, InvoiceExpenseAssignment, InvoiceReplyInfo } from '@/lib/ui-types'
+import { monthIndex } from '@/lib/lump-sum'
+import type { InvoiceDeliverySheetLink, InvoiceExpenseAssignment, InvoiceReplyInfo, InvoiceSkippableRecord } from '@/lib/ui-types'
 
 // 受け付けた請求書の一覧。
 // PDF本体（file_data）は1件で数MBになりうるため列ごと除外し、必要なときだけ
@@ -56,7 +57,9 @@ export async function GET() {
         desc(invoiceUploads.created_at)
       )
 
-    return Response.json(await withExpenseTargets(await withDeliverySheets(rows.map(withReply))))
+    return Response.json(
+      await withSkippableRecords(await withExpenseTargets(await withDeliverySheets(rows.map(withReply))))
+    )
   } catch (err) {
     return serverError(err)
   }
@@ -146,6 +149,73 @@ async function withExpenseTargets<
       expense_assignments: (r.contractor_id && byContractor.get(r.contractor_id)) || [],
     }
   })
+}
+
+// 「今月はスキップ」の対象にできる月次レコードを各行に付ける。
+// 支払月（payout_year / payout_month）は withExpenseTargets が確定させた値をそのまま使う
+// （ここで月をずらし直すと照合とズレる）。条件は skip API が断る条件（支払い済み・振込予約済み・まとめ行）と
+// 揃えてあり、押してから断られるボタンを出さないようにしている。
+// 他の付加情報と同じく、行ごとに引かずまとめて1回で引いて配る。
+async function withSkippableRecords<
+  T extends { contractor_id: string | null; payout_year: number | null; payout_month: number | null },
+>(rows: T[]): Promise<(T & { skippable_records: InvoiceSkippableRecord[] })[]> {
+  const keyOf = (contractorId: string, year: number, month: number) => `${contractorId}:${monthIndex(year, month)}`
+  const targets = rows.filter(
+    (r): r is T & { contractor_id: string; payout_year: number; payout_month: number } =>
+      r.contractor_id !== null && r.payout_year !== null && r.payout_month !== null
+  )
+  const contractorIds = [...new Set(targets.map((r) => r.contractor_id))]
+  const monthIndexes = [...new Set(targets.map((r) => monthIndex(r.payout_year, r.payout_month)))]
+
+  const records = targets.length === 0 ? [] : await db
+    .select({
+      id: monthlyRecords.id,
+      year: monthlyRecords.year,
+      month: monthlyRecords.month,
+      contractor_id: assignments.contractor_id,
+      contractor_type: contractors.contractor_type,
+      clientName: clients.name,
+      snapshot: monthlyRecords.payout_amount_snapshot,
+      actual: monthlyRecords.actual_payout_amount,
+      masterAmount: assignments.contractor_payout_amount,
+    })
+    .from(monthlyRecords)
+    .innerJoin(assignments, eq(monthlyRecords.assignment_id, assignments.id))
+    .innerJoin(clients, eq(assignments.client_id, clients.id))
+    .innerJoin(contractors, eq(assignments.contractor_id, contractors.id))
+    .where(
+      and(
+        inArray(assignments.contractor_id, contractorIds),
+        eq(assignments.active, true),
+        inArray(sql<number>`${monthlyRecords.year} * 12 + ${monthlyRecords.month}`, monthIndexes),
+        isNull(monthlyRecords.skipped_at),
+        isNull(monthlyRecords.contractor_paid_at),
+        isNull(monthlyRecords.payment_reserved_at),
+        eq(monthlyRecords.months_covered, 1)
+      )
+    )
+
+  const byTarget = new Map<string, InvoiceSkippableRecord[]>()
+  for (const rec of records) {
+    const entry: InvoiceSkippableRecord = {
+      id: rec.id,
+      clientName: rec.clientName,
+      // 予定額の出し方は照合本体（lib/invoice-check の computeExpectedPayout）と同じ。
+      amount: rec.contractor_type === 'video_editor' ? rec.actual : (rec.snapshot ?? rec.masterAmount),
+    }
+    const key = keyOf(rec.contractor_id, rec.year, rec.month)
+    const list = byTarget.get(key)
+    if (list) list.push(entry)
+    else byTarget.set(key, [entry])
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    skippable_records:
+      r.contractor_id !== null && r.payout_year !== null && r.payout_month !== null
+        ? byTarget.get(keyOf(r.contractor_id, r.payout_year, r.payout_month)) ?? []
+        : [],
+  }))
 }
 
 // 編集者の納品シートURLを各行に付ける。NGの多くは本数ズレで、確かめるにはシートを開く必要があるため。

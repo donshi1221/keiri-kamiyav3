@@ -527,6 +527,46 @@ function LumpSumControl({ monthsCovered, periodLabel, undoLabel = 'まとめを�
   )
 }
 
+// 委託者支払いの行内の「今月はスキップ」。その月だけ払わないと決めた行を、支払予定と支払回数から外す。
+// 合計額が変わる操作なので、まとめの取り消しと同じく一度確認を挟む。
+function SkipControl({ pending, onRequest, onConfirm, onCancel }: {
+  pending: boolean
+  onRequest: () => void
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  if (pending) {
+    return (
+      <span className="flex flex-wrap items-center gap-1 text-xs">
+        <span className="text-muted-foreground">今月の支払いをスキップしますか？</span>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="flex h-11 items-center rounded px-2 font-medium text-danger hover:bg-danger-subtle md:h-6"
+        >
+          スキップする
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
+        >
+          戻る
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onRequest}
+      className="flex h-11 items-center text-xs text-muted-foreground hover:text-danger hover:underline md:h-5"
+    >
+      今月はスキップ
+    </button>
+  )
+}
+
 // 金銭に関わるチェック用の操作部品。チェックを外すときだけ確認ステップを挟む（誤タップ防止）。
 // タップ領域はスマホで44px以上を確保し、PCの表では詰めて表示する。
 function MoneyCheckControl({ checked, checkedAt, pending, label, onRequest, onConfirm, onCancel, badge }: {
@@ -1374,6 +1414,7 @@ export default function DashboardClient({
   const [advanceTarget, setAdvanceTarget] = useState<AdvanceBillingTarget | null>(null)
   // まとめを取り消すときの確認待ち（金額が1か月分に戻るため、チェックを外すときと同じ誤タップ防止）。
   const [pendingLumpUndo, setPendingLumpUndo] = useState<{ kind: LumpSumTarget['kind']; id: string } | null>(null)
+  const [pendingSkipId, setPendingSkipId] = useState<string | null>(null)
   // 経費行（立替経費・自社経費）の送付チェックを外すときの確認待ち。クライアント単位で持つ。
   const [pendingExpenseUncheck, setPendingExpenseUncheck] = useState<{ kind: 'expense' | 'clientExpense'; clientId: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -1825,7 +1866,10 @@ export default function DashboardClient({
   const expenseTotalAll = localExpenses.reduce((sum, e) => sum + e.amount, 0)
   const clientExpenseTotalAll = localClientExpenses.reduce((sum, e) => sum + e.amount, 0)
   const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotalAll + clientExpenseTotalAll
-  const contractorCost = localRecords.reduce((sum, r) => {
+  // スキップした行（skipped_at あり）はその月に払わない行。画面には残すが、金額の合計・未完了の数え上げ・
+  // 期限の判定からは外す。数える側は必ずこの activeRecords か、ここから作る contractorGroups の items を使う。
+  const activeRecords = localRecords.filter((r) => !r.skipped_at)
+  const contractorCost = activeRecords.reduce((sum, r) => {
     const asgn = r.assignments
     if (asgn?.contractors?.contractor_type === 'video_editor') {
       return sum + (r.actual_payout_amount ?? 0)
@@ -2327,6 +2371,64 @@ export default function DashboardClient({
     </button>
   )
 
+  // ─── 今月はスキップ ─────────────────────────────
+  // 合計額と回数の集計（サーバーから渡る値）が変わるので、楽観更新せずサーバーが返した行で差し替える。
+  async function setRecordSkipped(id: string, skipped: boolean) {
+    setPendingSkipId(null)
+    const fallback = skipped ? 'スキップできませんでした。もう一度お試しください。' : 'スキップを取り消せませんでした。もう一度お試しください。'
+    try {
+      const res = await fetch(`/api/checklist/records/${id}/skip`, { method: skipped ? 'POST' : 'DELETE' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        showError((data as { error?: string } | null)?.error ?? fallback)
+        return
+      }
+      setLocalRecords((prev) => prev.map((r) => r.id === id ? { ...r, ...(data as MonthlyRecord) } : r))
+      startTransition(() => router.refresh())
+    } catch {
+      showError(fallback)
+    }
+  }
+
+  // スキップできる行だけに操作を出す。条件は API（/api/checklist/records/[id]/skip）が断る条件と揃えてあり、
+  // 押してから断られるボタンを出さない。
+  const renderRecordSkip = (r: RecordWithRelations) =>
+    !r.contractor_paid_at && !r.payment_reserved_at && r.months_covered === 1 && (
+      <SkipControl
+        pending={pendingSkipId === r.id}
+        onRequest={() => setPendingSkipId(r.id)}
+        onConfirm={() => setRecordSkipped(r.id, true)}
+        onCancel={() => setPendingSkipId(null)}
+      />
+    )
+
+  // スキップ中の行の印と取り消し。取り消しは元の通常の行に戻るだけで失うものが無いので確認は挟まない。
+  const renderSkippedNote = (r: RecordWithRelations) => (
+    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <Badge variant="outline" className="text-xs">スキップ中</Badge>
+      <button
+        type="button"
+        onClick={() => setRecordSkipped(r.id, false)}
+        className="flex h-11 items-center text-muted-foreground hover:text-danger hover:underline md:h-5"
+      >
+        取り消す
+      </button>
+    </span>
+  )
+
+  // スキップ中の行の金額。払わない金額だと分かるよう打ち消し線で薄く出す。
+  // 立替経費はスキップしても支払いに乗る（請求書チェックの支払予定にも入る）ので、打ち消さずに出す。
+  const renderSkippedAmount = (r: RecordWithRelations) => {
+    const payout = recordPayout(r)
+    const expense = expenseTotalOf(r.assignments?.id)
+    return (
+      <>
+        <span className="text-muted-foreground line-through">{payout ? `¥${payout.toLocaleString()}` : '—'}</span>
+        {expense > 0 && <span className="block text-xs text-muted-foreground">＋経費 ¥{expense.toLocaleString()}</span>}
+      </>
+    )
+  }
+
   const renderRecordLump = (r: RecordWithRelations) => (
     <LumpSumControl
       monthsCovered={r.months_covered}
@@ -2513,7 +2615,9 @@ export default function DashboardClient({
 
   // 委託者請求記録を「委託者単位」でグループ化する（1委託者が複数クライアントを担当しうる）。
   // クライアント側と同じく、created_at 順で飛び飛びに並んでも同じ委託者の行が隣り合うようまとめ直す。
-  const contractorGroups: { contractorId: string; contractorName: string; items: RecordWithRelations[] }[] = []
+  // skipped は「今月はスキップ」した行。チェックも支払いも無いので items（集計・チェックの対象）には混ぜず別に持つ
+  // （クライアント側の lumps と同じ考え方）。件数・未完了・期限・進み具合・合計はすべて items だけを数える。
+  const contractorGroups: { contractorId: string; contractorName: string; items: RecordWithRelations[]; skipped: RecordWithRelations[] }[] = []
   const groupIndexByContractor = new Map<string, number>()
   for (const r of localRecords) {
     const cid = r.assignments?.contractor_id ?? `__none__${r.id}`
@@ -2521,10 +2625,16 @@ export default function DashboardClient({
     if (idx === undefined) {
       idx = contractorGroups.length
       groupIndexByContractor.set(cid, idx)
-      contractorGroups.push({ contractorId: cid, contractorName: r.assignments?.contractors?.name ?? '?', items: [] })
+      contractorGroups.push({ contractorId: cid, contractorName: r.assignments?.contractors?.name ?? '?', items: [], skipped: [] })
     }
-    contractorGroups[idx].items.push(r)
+    if (r.skipped_at) contractorGroups[idx].skipped.push(r)
+    else contractorGroups[idx].items.push(r)
   }
+  // 委託者単位の合計報酬（各アサインの報酬＋立替経費の合算）。スキップした行は報酬を足さないが、
+  // 立替経費はスキップしても支払いに乗るので足す（請求書チェックの支払予定額と同じ数字にするため）。
+  const contractorGroupTotal = (g: (typeof contractorGroups)[number]): number =>
+    g.items.reduce((sum, r) => sum + (recordPayout(r) ?? 0) + expenseTotalOf(r.assignments?.id), 0) +
+    g.skipped.reduce((sum, r) => sum + expenseTotalOf(r.assignments?.id), 0)
 
   // 支払い確認のチェックは、アサインが複数ある委託者ではグループ見出しに集約されている。
   // 未完了項目の飛び先も、行ではなくその見出しにする。
@@ -2537,7 +2647,7 @@ export default function DashboardClient({
   // ローカル状態から数えることで、受領チェックを付けた瞬間にボタンが消える。
   // 対象はAPI側でも数え直すため、ここでの用途はボタンを出すかどうかの判断だけ。
   const unreceivedContractorCount = new Set(
-    localRecords
+    activeRecords
       .filter((r) => !r.invoice_received_at && r.assignments?.active)
       .map((r) => r.assignments!.contractor_id)
   ).size
@@ -2656,7 +2766,7 @@ export default function DashboardClient({
       if (confirmedState === 'overdue') overdueItems.push({ label: confirmedLabel, group: 'clientPayment', target: confirmedTarget })
       else if (confirmedState === 'inWindow') inWindowItems.push({ label: confirmedLabel, group: 'clientPayment', target: confirmedTarget })
     }
-    for (const r of localRecords) {
+    for (const r of activeRecords) {
       const name = r.assignments?.contractors?.name ?? '?'
       const rowTarget = `rec-${r.id}`
       const paidTarget = contractorPaidTarget(r)
@@ -3011,11 +3121,7 @@ export default function DashboardClient({
                 <tbody>
                   {contractorGroups.flatMap((g) => {
                     const multi = g.items.length > 1
-                    // 委託者単位の合計報酬（各アサインの報酬＋立替経費の合算）。
-                    const total = g.items.reduce(
-                      (sum, r) => sum + (recordPayout(r) ?? 0) + expenseTotalOf(r.assignments?.id),
-                      0
-                    )
+                    const total = contractorGroupTotal(g)
                     // 複数クライアントを担当する委託者は「ヘッダー行（名前＋合計）＋明細行（インデント）」で表示する。
                     // 1クライアントだけの委託者は従来どおり1行にまとめ、冗長な行を増やさない。
                     // 受領・支払い予約・支払い確認は、いずれもこの委託者の全アサインに一括で付ける
@@ -3128,6 +3234,7 @@ export default function DashboardClient({
                               />
                             )}
                             {renderRecordLump(r)}
+                            {renderRecordSkip(r)}
                             {isVideoEditor && (() => {
                               const result = deliveryResult(asgn?.id)
                               if (!result) return null
@@ -3206,7 +3313,35 @@ export default function DashboardClient({
                         </tr>
                       )
                     })
-                    return [...headerRow, ...itemRows]
+                    // スキップ中の行。通常の行が1つも無い委託者は名前を出す場所が無くなるので、この行に名前を出す。
+                    const skippedRows = g.skipped.map((r) => {
+                      const asgn = r.assignments
+                      const indented = g.items.length > 0
+                      return (
+                        <tr
+                          key={r.id}
+                          data-pending-row={`rec-${r.id}`}
+                          className={`${indented ? 'border-b last:border-0' : 'border-y-2 border-border'} ${rowBg(`rec-${r.id}`, 'hover:bg-accent')}`}
+                        >
+                          <td className={indented ? 'py-3 pl-10 pr-4' : 'py-3 px-4 border-l-4 border-l-transparent'}>
+                            {indented ? (
+                              <div className="text-muted-foreground">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                            ) : (
+                              <>
+                                <div className="font-semibold text-foreground">{g.contractorName}</div>
+                                <div className="text-xs text-muted-foreground">{asgn?.clients?.name ?? '?'} · {asgn?.role_name}</div>
+                              </>
+                            )}
+                            {renderSkippedNote(r)}
+                          </td>
+                          <td className="py-3 px-3 text-right">{renderSkippedAmount(r)}</td>
+                          <td colSpan={3} className="py-3 px-3 text-center text-xs text-muted-foreground">
+                            この月は支払いません
+                          </td>
+                        </tr>
+                      )
+                    })
+                    return [...headerRow, ...itemRows, ...skippedRows]
                   })}
                 </tbody>
               </table>
@@ -3216,10 +3351,7 @@ export default function DashboardClient({
             <div className="divide-y md:hidden">
               {contractorGroups.map((g) => {
                 const multi = g.items.length > 1
-                const total = g.items.reduce(
-                  (sum, r) => sum + (recordPayout(r) ?? 0) + expenseTotalOf(r.assignments?.id),
-                  0
-                )
+                const total = contractorGroupTotal(g)
                 const paidIds = g.items.map((r) => r.id)
                 const allReceived = g.items.every((r) => !!r.invoice_received_at)
                 const allReserved = g.items.every((r) => !!r.payment_reserved_at)
@@ -3249,7 +3381,8 @@ export default function DashboardClient({
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <span className="flex min-w-0 flex-col gap-1">
                           <span className="font-semibold text-foreground">{g.contractorName}</span>
-                          <ProgressPips states={groupPips} />
+                          {/* スキップ中の行しか無い委託者は進み具合を測る対象が無いので、点を出さない（全部済みに見えてしまうため）。 */}
+                          {g.items.length > 0 && <ProgressPips states={groupPips} />}
                         </span>
                         {multi && (
                           <span className="shrink-0 text-sm">
@@ -3320,6 +3453,7 @@ export default function DashboardClient({
                                   />
                                 )}
                                 {renderRecordLump(r)}
+                                {renderRecordSkip(r)}
                                 {isVideoEditor && (() => {
                                   const result = deliveryResult(asgn?.id)
                                   if (!result) return null
@@ -3405,6 +3539,17 @@ export default function DashboardClient({
                           </div>
                         )
                       })}
+                      {g.skipped.map((r) => (
+                        <div key={r.id} data-pending-row={`rec-${r.id}`} className={`rounded-lg ${rowBg(`rec-${r.id}`, '')}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm text-muted-foreground">{r.assignments?.clients?.name ?? '?'} · {r.assignments?.role_name}</div>
+                              {renderSkippedNote(r)}
+                            </div>
+                            <span className="shrink-0 text-right text-sm">{renderSkippedAmount(r)}</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )
@@ -4261,7 +4406,7 @@ export default function DashboardClient({
           <div className="bg-secondary rounded-lg p-3">
             <p className="text-xs text-muted-foreground mb-1">外注費</p>
             <p className="text-xl font-medium text-muted-foreground">¥{contractorCost.toLocaleString()}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">委託者 {localRecords.length}件</p>
+            <p className="text-xs text-muted-foreground mt-0.5">委託者 {activeRecords.length}件</p>
           </div>
           <div className="bg-secondary rounded-lg p-3">
             <div className="flex items-center justify-between mb-1">
