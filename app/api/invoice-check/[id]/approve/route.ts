@@ -101,7 +101,7 @@ export async function POST(
       .where(eq(monthlyRecords.id, pending[0].id))
 
     // 金額を入れただけでは判定（status）も判定理由も変わらないため、続けて照合まで終わらせる。
-    const outcome = await checkInvoiceAndSave(id)
+    const outcome = await checkInvoiceAndSave(id, { trigger: 'approve', origin: req.nextUrl.origin })
     if (!outcome) return Response.json({ error: 'Not found' }, { status: 404 })
     // 照合しなかった理由（読み取り失敗）も画面に出す必要があるため、内容として200で返す。
     return Response.json(outcome)

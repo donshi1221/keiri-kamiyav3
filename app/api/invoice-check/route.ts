@@ -1,15 +1,16 @@
 import { serverError } from '@/lib/api-error'
 import { db } from '@/lib/db'
-import { assignments, clients, contractors, invoiceUploads } from '@/lib/schema'
+import { assignments, clients, contractors, invoiceReplies, invoiceUploads } from '@/lib/schema'
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import { payoutMonthOf } from '@/lib/invoice-check'
 import { clientMatchNames } from '@/lib/invoice-match'
-import type { InvoiceDeliverySheetLink, InvoiceExpenseAssignment } from '@/lib/ui-types'
+import type { InvoiceDeliverySheetLink, InvoiceExpenseAssignment, InvoiceReplyInfo } from '@/lib/ui-types'
 
 // 受け付けた請求書の一覧。
 // PDF本体（file_data）は1件で数MBになりうるため列ごと除外し、必要なときだけ
 // /api/invoice-check/[id]/pdf から取り出す。
 // 委託者名は照合で特定したIDを引き当てたもの（未特定なら null）。
+// 返信（invoice_replies）は請求書1件につき最大1行なので、結合しても行は増えない。
 export async function GET() {
   try {
     const rows = await db
@@ -35,10 +36,19 @@ export async function GET() {
         checked_at: invoiceUploads.checked_at,
         drive_file_id: invoiceUploads.drive_file_id,
         drive_link: invoiceUploads.drive_link,
+        notified_at: invoiceUploads.notified_at,
         created_at: invoiceUploads.created_at,
+        // ルームIDそのものは画面に要らないので、登録済みかどうかだけに落として返す。
+        has_chatwork_room: sql<boolean>`coalesce(${contractors.chatwork_room_id}, '') <> ''`,
+        reply_kind: invoiceReplies.kind,
+        reply_state: invoiceReplies.state,
+        reply_draft_body: invoiceReplies.draft_body,
+        reply_sent_body: invoiceReplies.sent_body,
+        reply_sent_at: invoiceReplies.sent_at,
       })
       .from(invoiceUploads)
       .leftJoin(contractors, eq(invoiceUploads.contractor_id, contractors.id))
+      .leftJoin(invoiceReplies, eq(invoiceReplies.upload_id, invoiceUploads.id))
       // 人の対応が要る行（NG・保留）を先頭に出す。放置すると支払いが止まるのはこの2つだけで、
       // 件数が増えるほど新しい順だけでは埋もれてしまうため。同じ区分の中は新しい順。
       .orderBy(
@@ -46,10 +56,35 @@ export async function GET() {
         desc(invoiceUploads.created_at)
       )
 
-    return Response.json(await withExpenseTargets(await withDeliverySheets(rows)))
+    return Response.json(await withExpenseTargets(await withDeliverySheets(rows.map(withReply))))
   } catch (err) {
     return serverError(err)
   }
+}
+
+// 結合で横に並んだ返信の列を、画面が扱いやすい1つの入れ物（reply）にまとめる。
+// 返信の無い行（保留・未照合など）は列がすべて null で返るため、reply ごと null にする。
+function withReply<
+  T extends {
+    reply_kind: InvoiceReplyInfo['kind'] | null
+    reply_state: InvoiceReplyInfo['state'] | null
+    reply_draft_body: string | null
+    reply_sent_body: string | null
+    reply_sent_at: string | null
+  },
+>(row: T) {
+  const { reply_kind, reply_state, reply_draft_body, reply_sent_body, reply_sent_at, ...rest } = row
+  const reply: InvoiceReplyInfo | null =
+    reply_kind === null || reply_state === null || reply_draft_body === null
+      ? null
+      : {
+          kind: reply_kind,
+          state: reply_state,
+          draft_body: reply_draft_body,
+          sent_body: reply_sent_body,
+          sent_at: reply_sent_at,
+        }
+  return { ...rest, reply }
 }
 
 // 経費のその場登録に必要な情報を各行に付ける。

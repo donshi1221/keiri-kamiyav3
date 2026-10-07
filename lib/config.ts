@@ -122,6 +122,74 @@ export const INVOICE_REMINDER_TEMPLATE =
     '{url}',
   ].join('\n')
 
+// ─── 請求書チェック結果の返信（Chatwork）─────────────────────────────
+// 自動チェックがどの操作で走ったか（invoice_check_history.trigger）。DB列は text のため、
+// 取りうる値の正本をここに置く（PAYMENT_REQUEST_STATUSES と同じ流儀）。
+export const INVOICE_CHECK_TRIGGERS = ['upload', 'recheck', 'extract', 'edit', 'approve', 'confirm_caution'] as const
+
+// 返信の種類（ok＝受領の連絡 / ng＝修正のお願い）と進み具合（invoice_replies の text 列）。
+// sending は Chatwork へ送っている最中だけ入る印。同時に2回押されたときに二重送信しないための
+// 歯止めで、送信が終われば sent（成功）か draft（失敗）に必ず戻す。
+export const INVOICE_REPLY_KINDS = ['ok', 'ng'] as const
+export const INVOICE_REPLY_STATES = ['draft', 'sending', 'sent', 'skipped'] as const
+
+// sending のまま残った行を「送信が途中で落ちた」とみなして送り直しを許すまでの時間（ミリ秒）。
+// Chatwork への送信は15秒で打ち切る（lib/chatwork）ため、それより十分長ければ進行中の送信と重ならない。
+export const INVOICE_REPLY_SENDING_STALE_MS = intFromEnv('INVOICE_REPLY_SENDING_STALE_MS', 60_000)
+
+function templateFromEnv(name: string, fallback: string[]): string {
+  return process.env[name]?.replace(/\\n/g, '\n') ?? fallback.join('\n')
+}
+
+// 返信の下書きのひな形。AIは使わず、プレースホルダの置き換えだけで作る（lib/invoice-reply）:
+//   {name} 委託者名 / {month} 請求書の対象月 / {amount} 請求額（数字のみ・桁区切りあり）
+//   {reasons} 合わなかった点の箇条書き / {url} 請求書受付URL
+// 支払日を入れていないのは、アプリに支払日の設定が無く、書くと根拠の無い約束になるため。
+// 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
+export const INVOICE_REPLY_OK_TEMPLATE = templateFromEnv('INVOICE_REPLY_OK_TEMPLATE', [
+  '{name}さん',
+  'お疲れさまです。{month}月分の請求書（¥{amount}）を受領しました。内容に問題ありませんでした。ありがとうございます。',
+])
+
+export const INVOICE_REPLY_NG_TEMPLATE = templateFromEnv('INVOICE_REPLY_NG_TEMPLATE', [
+  '{name}さん',
+  'お疲れさまです。{month}月分の請求書を確認したところ、下記の点がこちらの控えと合いませんでした。',
+  '{reasons}',
+  'お手数ですが、ご確認のうえ修正版を再度お送りください。',
+  '{url}',
+])
+
+// 対象月が読み取れていない請求書で「{month}月分」の代わりに入れる言葉。
+export const INVOICE_REPLY_UNKNOWN_MONTH = process.env.INVOICE_REPLY_UNKNOWN_MONTH ?? '今回'
+
+// NGの理由1件を相手に伝える文。判定理由（check_notes）は「支払予定」「マスタ」など社内の言葉で
+// 書かれていて、そのまま送っても相手には何を直せばよいか伝わらないため、種類ごとに言い換える。
+//   {client} クライアント名 / {billed} 請求書の値 / {expected} こちらの控えの値 / {diff} 差
+//   {actual} 請求書の宛名 / {correct} 正しい宛名 / {text} 判定理由の本文
+// 金額は「¥」付き、本数は数字だけが入る。種類ごとに INVOICE_REPLY_REASON_<種類の大文字> で上書きできる。
+const INVOICE_REPLY_REASON_DEFAULTS = {
+  total: 'ご請求額 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
+  client_count: '「{client}」分：ご請求 {billed}本に対し、こちらで確認できている納品は {expected}本です。',
+  client_amount: '「{client}」分：ご請求 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
+  client_missing: '「{client}」分（こちらの控えでは {expected}）が請求書に見当たりません。',
+  expense_missing: '立替経費（こちらの控えでは {expected}）が請求書に見当たりません。',
+  expense_unregistered: '請求書に経費 {billed} の記載がありますが、こちらでは該当する経費を確認できていません。',
+  expense_amount: '経費：ご請求 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
+  addressee: '宛名が「{actual}」になっています。正しくは「{correct}」です。',
+  other: '{text}',
+} as const
+
+export const INVOICE_REPLY_REASON_TEMPLATES = Object.fromEntries(
+  Object.entries(INVOICE_REPLY_REASON_DEFAULTS).map(([kind, fallback]) => [
+    kind,
+    templateFromEnv(`INVOICE_REPLY_REASON_${kind.toUpperCase()}`, [fallback]),
+  ])
+) as Record<keyof typeof INVOICE_REPLY_REASON_DEFAULTS, string>
+
+// 請求書を受け付けたときの経理への通知メールを待つ上限（ミリ秒）。受付のルートは読み取りと照合で
+// 60秒枠の大半を使うため、メールの応答が遅いときは諦めて受付の応答を先に返す。
+export const INVOICE_NOTIFY_TIMEOUT_MS = intFromEnv('INVOICE_NOTIFY_TIMEOUT_MS', 5_000)
+
 // ─── 経費アップロード（モバイルICOCA・特急券など）─────────────────────────────
 // 明細1行の用途。金額の行き先がそれぞれ違うため、読み取り後に代表が必ずどれかを選ぶ。
 //   client_billed: クライアントに請求する（client_expenses へ登録される）

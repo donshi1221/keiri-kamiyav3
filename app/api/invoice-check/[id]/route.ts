@@ -39,7 +39,7 @@ export async function PATCH(
     if (!updated) return Response.json({ error: 'Not found' }, { status: 404 })
 
     // 直した値での判定を人が押し直さずに済むよう、保存と同じ操作で照合まで終わらせる。
-    const check = await checkInvoiceAndSave(id, { manuallyEdited: true })
+    const check = await checkInvoiceAndSave(id, { trigger: 'edit', origin: req.nextUrl.origin, manuallyEdited: true })
     return Response.json({ ok: true, check })
   } catch (err) {
     return serverError(err)

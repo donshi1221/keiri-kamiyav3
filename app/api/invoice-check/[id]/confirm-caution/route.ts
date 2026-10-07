@@ -38,7 +38,7 @@ export async function POST(
       .where(eq(invoiceUploads.id, id))
 
     // 判定理由は保存済みの文字列を画面が読むだけなので、ここで照合をやり直さないと表示が変わらない。
-    const outcome = await checkInvoiceAndSave(id)
+    const outcome = await checkInvoiceAndSave(id, { trigger: 'confirm_caution', origin: req.nextUrl.origin })
     if (!outcome) return Response.json({ error: 'Not found' }, { status: 404 })
     return Response.json(outcome)
   } catch (err) {

@@ -1,13 +1,30 @@
 import 'server-only'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { assignments, clients, contractors, expenses, invoiceUploads, monthlyRecords } from '@/lib/schema'
+import {
+  assignments,
+  clients,
+  contractors,
+  expenses,
+  invoiceCheckHistory,
+  invoiceReplies,
+  invoiceUploads,
+  monthlyRecords,
+} from '@/lib/schema'
 import { checkAssignmentDelivery } from '@/lib/sheets'
 import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delivery-status'
-import { COMPANY_NAME } from '@/lib/config'
+import {
+  COMPANY_NAME,
+  INVOICE_REPLY_NG_TEMPLATE,
+  INVOICE_REPLY_OK_TEMPLATE,
+  INVOICE_REPLY_REASON_TEMPLATES,
+  INVOICE_REPLY_UNKNOWN_MONTH,
+} from '@/lib/config'
 import { nowJST } from '@/lib/dates'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
+import { buildInvoiceReplyBody } from '@/lib/invoice-reply'
+import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
 import {
   CAUTION_LABEL_SEPARATOR,
   cautionKeyOf,
@@ -23,8 +40,11 @@ import type {
   InvoiceCheckOutcome,
   InvoiceCheckResult,
   InvoiceCheckStatus,
+  InvoiceCheckTrigger,
   InvoiceExtractedItem,
+  InvoiceNgReason,
   InvoicePayoutBreakdownRow,
+  InvoiceReplyKind,
 } from '@/lib/ui-types'
 
 // 3観点（差出人・対象月＋金額・宛名）それぞれの結論。
@@ -32,6 +52,11 @@ import type {
 // - ng   : 不一致（人が中身を直す必要がある）
 // - hold : 判定材料が足りず結論を出せない（マスタ登録漏れ・納品未反映など）
 type Verdict = 'ok' | 'ng' | 'hold'
+
+// 照合1観点の結果。reason はNGのときだけ付ける「何が・いくつ違ったか」の控えで、
+// 委託者への返信文（lib/invoice-reply）がここから相手向けの言葉を作る。note（社内向けの文）とは
+// 同じ事実を別の形で持っているだけなので、判定には使わない。
+type Compared = { verdict: Verdict; note: string; reason?: InvoiceNgReason }
 
 // 名前の正規化・呼び名の展開・ラベルとの一致判定は lib/invoice-match に集約している
 // （経費のその場登録ダイアログでも同じ基準で明細をクライアントへ割り当てるため）。
@@ -368,11 +393,17 @@ function checkPaymentCount(
 function compareExpenses(
   expenseItems: InvoiceExtractedItem[],
   expenseTotal: number
-): { verdict: Verdict; note: string }[] {
+): Compared[] {
   if (expenseItems.length === 0) {
     // 経費が無い月まで指摘すると、立替の無い請求書が全件NGになってしまう。
     if (expenseTotal === 0) return []
-    return [{ verdict: 'ng', note: `${EXPENSE_LABEL}: 予定 ${yen(expenseTotal)} が請求書に見当たりません` }]
+    return [
+      {
+        verdict: 'ng',
+        note: `${EXPENSE_LABEL}: 予定 ${yen(expenseTotal)} が請求書に見当たりません`,
+        reason: { kind: 'expense_missing', expected: expenseTotal },
+      },
+    ]
   }
   const billed = sumKnown(expenseItems.map((i) => i.amount))
   if (billed === null) {
@@ -383,6 +414,7 @@ function compareExpenses(
       {
         verdict: 'ng',
         note: `経費 ${yen(billed)} が請求書にありますが、経費が未登録です（ダッシュボードの＋経費から登録してください）`,
+        reason: { kind: 'expense_unregistered', billed },
       },
     ]
   }
@@ -391,6 +423,7 @@ function compareExpenses(
     {
       verdict: 'ng',
       note: `経費　請求 ${yen(billed)}　登録 ${yen(expenseTotal)}（${yen(Math.abs(billed - expenseTotal))}相違）`,
+      reason: { kind: 'expense_amount', billed, expected: expenseTotal },
     },
   ]
 }
@@ -410,8 +443,8 @@ function compareInvoiceItems(
   invoiceAmount: number | null,
   payout: YearMonth,
   confirmedCautions: Set<string>
-): { results: { verdict: Verdict; note: string }[]; countNotes: PaymentCountNote[] } {
-  const results: { verdict: Verdict; note: string }[] = []
+): { results: Compared[]; countNotes: PaymentCountNote[] } {
+  const results: Compared[] = []
   const countNotes: PaymentCountNote[] = []
   const addCountNote = (label: string, target: InvoicePayoutBreakdownRow | null) => {
     const note = checkPaymentCount(label, target, payout, confirmedCautions)
@@ -453,7 +486,11 @@ function compareInvoiceItems(
     if (!matched) {
       // 予定0円（納品予定なしの月）は請求書に出てこないのが正しい姿なので指摘しない。
       if (target.amount === 0) return
-      results.push({ verdict: 'ng', note: `${target.clientName}: 予定 ${yen(target.amount)} が請求書に見当たりません` })
+      results.push({
+        verdict: 'ng',
+        note: `${target.clientName}: 予定 ${yen(target.amount)} が請求書に見当たりません`,
+        reason: { kind: 'client_missing', client: target.clientName, expected: target.amount },
+      })
       return
     }
     const billedCount = sumKnown(matched.map((m) => m.count))
@@ -480,6 +517,12 @@ function compareInvoiceItems(
         countDiff,
         amountDiff
       )}`,
+      // formatMismatchNote と同じ分かれ方にする（本数がズレていれば本数、そうでなければ金額）。
+      // 片方だけ別の基準にすると、画面の判定理由と相手に送る文面が別のことを言ってしまう。
+      reason:
+        target.count !== null && billedCount !== null && countDiff !== null && countDiff !== 0
+          ? { kind: 'client_count', client: target.clientName, billed: billedCount, expected: target.count }
+          : { kind: 'client_amount', client: target.clientName, billed: billedAmount, expected: target.amount },
     })
   })
 
@@ -646,14 +689,93 @@ async function saveInvoiceToDrive(
   return uploadFileToDrive(driveFileName(year, month, contractorName, file.file_name), file.file_data, year, month)
 }
 
+// チェック1回分を履歴（invoice_check_history）に積む。履歴は後から経緯を追うための控えで、
+// 書けなくても判定そのものは済んでいるため、失敗はログに残すだけにしてチェック本体は成功させる。
+async function appendCheckHistory(entry: {
+  uploadId: string
+  trigger: InvoiceCheckTrigger
+  status: InvoiceCheckStatus
+  checkNotes: string
+  extractedAmount: number | null
+  expectedAmount: number | null
+  ngReasons: InvoiceNgReason[]
+}): Promise<void> {
+  try {
+    await db.insert(invoiceCheckHistory).values({
+      upload_id: entry.uploadId,
+      trigger: entry.trigger,
+      status: entry.status,
+      check_notes: entry.checkNotes,
+      extracted_amount: entry.extractedAmount,
+      expected_amount: entry.expectedAmount,
+      ng_reasons: entry.ngReasons,
+    })
+  } catch (err) {
+    console.error('[invoice-check] appendCheckHistory failed:', err)
+  }
+}
+
+// 委託者への返信の下書きを、今回の判定に合わせて作り直す。
+// 下書きを作るのは OK / NG で委託者が分かっているときだけ。保留はこちら側の設定不足
+// （マスタ未登録・納品チェック未反映など）が原因のことが多く、相手に送る内容ではないため作らない。
+// 触るのは state が draft の行だけにする。送信済み（sent）は相手に届いた文面の記録、
+// 送らない（skipped）は人が決めた結果で、どちらも再チェックで書き換えてはいけない。
+// 履歴と同じく、失敗してもチェック本体は成功させる。
+async function syncReplyDraft(
+  uploadId: string,
+  draft: {
+    kind: InvoiceReplyKind
+    contractorName: string
+    month: number | null
+    amount: number | null
+    reasons: InvoiceNgReason[]
+  } | null,
+  origin: string
+): Promise<void> {
+  try {
+    if (!draft) {
+      await db
+        .delete(invoiceReplies)
+        .where(and(eq(invoiceReplies.upload_id, uploadId), eq(invoiceReplies.state, 'draft')))
+      return
+    }
+    // 受付URLは催促（app/api/invoice-reminder）と同じ作り方。修正版の送り先が要るのはNGだけなので、
+    // OKのときはトークンを読みにいかない。
+    const url = draft.kind === 'ng' ? `${origin}/invoice/${await getOrCreateInvoiceUploadToken()}` : ''
+    const body = buildInvoiceReplyBody(
+      { kind: draft.kind, name: draft.contractorName, month: draft.month, amount: draft.amount, reasons: draft.reasons, url },
+      {
+        ok: INVOICE_REPLY_OK_TEMPLATE,
+        ng: INVOICE_REPLY_NG_TEMPLATE,
+        unknownMonth: INVOICE_REPLY_UNKNOWN_MONTH,
+        reasons: INVOICE_REPLY_REASON_TEMPLATES,
+      }
+    )
+    // 「無ければ作る・draft なら作り直す・それ以外は触らない」を1文で行う。先に読んでから分岐すると、
+    // 読んだ直後に人が送信したとき、送信済みの行を下書きで上書きしてしまう。
+    await db
+      .insert(invoiceReplies)
+      .values({ upload_id: uploadId, kind: draft.kind, draft_body: body })
+      .onConflictDoUpdate({
+        target: invoiceReplies.upload_id,
+        set: { kind: draft.kind, draft_body: body, updated_at: new Date().toISOString() },
+        setWhere: eq(invoiceReplies.state, 'draft'),
+      })
+  } catch (err) {
+    console.error('[invoice-check] syncReplyDraft failed:', err)
+  }
+}
+
 // 受け付けた請求書1件を自動照合し、結果を同じ行に書き戻す。
 // 受付直後・再読み取り後・画面からの再チェック・手動修正後で同じ処理を使う。
+// trigger はどの操作で走ったか（履歴に残す）。origin は呼び出し元リクエストのオリジンで、
+// 返信の下書きに入れる受付URLの組み立てに使う（環境ごとにドメインが違うため固定値にしない）。
 // manuallyEdited は「今の extracted_* が人の手入力か」。true=手動修正直後 / false=AIが読み直した直後 /
 // 未指定=値は変わっていないので前回の判定理由から引き継ぐ、の3通りで呼び分ける。
 // 行が無ければ null（呼び出し側が404を返す）。
 export async function checkInvoiceAndSave(
   id: string,
-  options?: { manuallyEdited?: boolean }
+  options: { trigger: InvoiceCheckTrigger; origin: string; manuallyEdited?: boolean }
 ): Promise<InvoiceCheckOutcome | null> {
   const [row] = await db
     .select({
@@ -687,16 +809,22 @@ export async function checkInvoiceAndSave(
   let hasHold = false
   // 印を付けて保存するのは、画面がNG・保留だけを既定表示にできるようにするため。
   // 保存形式は「[NG] 本文」の1行1件（lib/invoice-notes）。
-  const record = (verdict: Verdict, note: string) => {
+  // NGは理由の控え（ngReasons）も同時に積む。言い換えを用意していないNGは本文をそのまま持たせ、
+  // 相手への文面から黙って抜け落ちないようにする。
+  const ngReasons: InvoiceNgReason[] = []
+  const record = (verdict: Verdict, note: string, reason?: InvoiceNgReason) => {
     notes.push(formatInvoiceNote(verdict, note))
-    if (verdict === 'ng') hasNg = true
+    if (verdict === 'ng') {
+      hasNg = true
+      ngReasons.push(reason ?? { kind: 'other', text: note })
+    }
     if (verdict === 'hold') hasHold = true
   }
 
   // 手動修正の事実は check_notes にしか残らないうえ、再チェックのたびに notes は作り直される。
   // 呼び出し側が値を触っていないとき（未指定）だけ前回の印を引き継ぐことで、
   // 「AIが読んだ値か人が直した値か」を再チェックを挟んでも見分けられる状態に保つ。
-  const manuallyEdited = options?.manuallyEdited ?? hasInvoiceNoteMark(row.check_notes, 'fixed')
+  const manuallyEdited = options.manuallyEdited ?? hasInvoiceNoteMark(row.check_notes, 'fixed')
   if (manuallyEdited) notes.push(formatInvoiceNote('fixed', INVOICE_MANUAL_EDIT_NOTE))
 
   // ─── A. 差出人 → 委託者の特定 ───────────────────────────────
@@ -760,7 +888,8 @@ export async function checkInvoiceAndSave(
         const hint = items.length === 0 ? unitCountHint(contractor, diff) : ''
         record(
           'ng',
-          `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）${hint}`
+          `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）${hint}`,
+          { kind: 'total', billed: row.extracted_amount, expected: expectedAmount }
         )
       }
       // ─── D. 明細（クライアント別内訳）の照合 ──────────────────
@@ -777,7 +906,7 @@ export async function checkInvoiceAndSave(
           confirmedCautions
         )
         for (const item of compared.results) {
-          record(item.verdict, item.note)
+          record(item.verdict, item.note, item.reason)
         }
         // 支払回数の確認結果は record() を通さず直接積む。回数が合わなくても請求額そのものが
         // 誤っているとは限らないため、判定（status）は動かさず注意として見せるだけにする。
@@ -799,7 +928,13 @@ export async function checkInvoiceAndSave(
     const company = normalizeName(COMPANY_NAME)
     const matches = addressee === company || addressee.includes(company) || company.includes(addressee)
     if (matches) record('ok', `宛名「${row.extracted_addressee}」は自社宛です`)
-    else record('ng', `宛名が自社宛ではありません（「${row.extracted_addressee}」→ 正: ${COMPANY_NAME}）`)
+    else {
+      record('ng', `宛名が自社宛ではありません（「${row.extracted_addressee}」→ 正: ${COMPANY_NAME}）`, {
+        kind: 'addressee',
+        actual: row.extracted_addressee,
+        correct: COMPANY_NAME,
+      })
+    }
   }
 
   const status: InvoiceCheckStatus = hasNg ? 'ng' : hasHold ? 'hold' : 'ok'
@@ -880,6 +1015,34 @@ export async function checkInvoiceAndSave(
       drive_link: driveLink,
     })
     .where(eq(invoiceUploads.id, id))
+
+  await appendCheckHistory({
+    uploadId: id,
+    trigger: options.trigger,
+    status,
+    checkNotes: notes.join('\n'),
+    extractedAmount: row.extracted_amount,
+    expectedAmount,
+    ngReasons,
+  })
+
+  // OKの文面には請求額を入れるため、金額が無ければ下書きにしない（OKは金額が一致した結果なので
+  // 実際には必ず入っているが、型の上では null がありうる）。
+  const replyKind: InvoiceReplyKind | null =
+    status === 'ng' ? 'ng' : status === 'ok' && row.extracted_amount !== null ? 'ok' : null
+  await syncReplyDraft(
+    id,
+    contractor && replyKind
+      ? {
+          kind: replyKind,
+          contractorName: contractor.name,
+          month: resolvedMonth,
+          amount: row.extracted_amount,
+          reasons: ngReasons,
+        }
+      : null,
+    options.origin
+  )
 
   return result
 }

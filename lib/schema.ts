@@ -1,6 +1,6 @@
 import { pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb, unique } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
-import type { PAYROLL_KINDS } from './config'
+import type { INVOICE_CHECK_TRIGGERS, INVOICE_REPLY_KINDS, INVOICE_REPLY_STATES, PAYROLL_KINDS } from './config'
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -327,7 +327,48 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // 「保存済み」の印になり、再チェック時に二重アップロードするか再試行するかの判断に使う。
   drive_file_id: text('drive_file_id'),
   drive_link: text('drive_link'),
+  // 受付時に経理へ通知メールを送れた日時。null は未通知（メール未設定・送信失敗を含む）。
+  notified_at: timestamp('notified_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// 自動チェックの履歴（追記のみ。チェックが走るたびに1行）。
+// invoice_uploads の status / check_notes は再チェックのたびに上書きされ、「最初はなぜNGだったか」
+// 「どの操作でOKに変わったか」が後から追えないため、その時点の結果を別に積んでいく。
+// 請求書を消したら履歴だけ残っても意味が無いので、親の削除に合わせて消す（cascade）。
+export const invoiceCheckHistory = pgTable('invoice_check_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  upload_id: uuid('upload_id').notNull().references(() => invoiceUploads.id, { onDelete: 'cascade' }),
+  // どの操作でチェックが走ったか。取りうる値は lib/config の INVOICE_CHECK_TRIGGERS。
+  // enum ではなく text にしているのは、入口を足すときにDBの型変更を伴わせないため。
+  trigger: text('trigger').$type<(typeof INVOICE_CHECK_TRIGGERS)[number]>().notNull(),
+  status: invoiceCheckStatusEnum('status').notNull(),
+  check_notes: text('check_notes'),
+  extracted_amount: integer('extracted_amount'),
+  expected_amount: integer('expected_amount'),
+  // NGの理由を種類と数値に分けたもの（lib/ui-types の InvoiceNgReason と同じ形）。check_notes の文は
+  // 人が読むためのもので、あとから「どの種類のNGが多いか」を数えるには向かないため別に残す。
+  // schema は ui-types を import できない（ui-types が schema の型に依存している）ので緩い型で持ち、
+  // 書き込む側（lib/invoice-check）が InvoiceNgReason の形を保証する。
+  ng_reasons: jsonb('ng_reasons').$type<({ kind: string } & Record<string, string | number | null>)[]>(),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+})
+
+// チェック結果を委託者へ返す連絡（Chatwork）。請求書1件につき1行。
+// draft_body は自動で作った下書き、sent_body は実際に送った文面。人が直してから送っても draft_body は
+// 上書きしない（自動の文面と人が直した文面の差が、ひな形を見直すときの材料になるため）。
+// 取りうる値は lib/config の INVOICE_REPLY_KINDS / INVOICE_REPLY_STATES。
+export const invoiceReplies = pgTable('invoice_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  upload_id: uuid('upload_id').notNull().unique().references(() => invoiceUploads.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<(typeof INVOICE_REPLY_KINDS)[number]>().notNull(),
+  draft_body: text('draft_body').notNull(),
+  sent_body: text('sent_body'),
+  state: text('state').$type<(typeof INVOICE_REPLY_STATES)[number]>().notNull().default('draft'),
+  chatwork_message_id: text('chatwork_message_id'),
+  sent_at: timestamp('sent_at', { withTimezone: true, mode: 'string' }),
+  created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
 // 代表から届く経費ファイル（モバイルICOCAの利用履歴PDF・特急券の領収書画像）の受け皿。
@@ -651,6 +692,8 @@ export type Expense = typeof expenses.$inferSelect
 export type ClientExpense = typeof clientExpenses.$inferSelect
 export type AppSetting = typeof appSettings.$inferSelect
 export type InvoiceUpload = typeof invoiceUploads.$inferSelect
+export type InvoiceCheckHistory = typeof invoiceCheckHistory.$inferSelect
+export type InvoiceReply = typeof invoiceReplies.$inferSelect
 export type ExpenseUpload = typeof expenseUploads.$inferSelect
 export type ExpenseUploadItem = typeof expenseUploadItems.$inferSelect
 export type PaymentRequest = typeof paymentRequests.$inferSelect

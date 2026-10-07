@@ -187,6 +187,17 @@ export const cautionConfirmSchema = z.object({
   confirmed: z.boolean({ message: 'confirmed は true / false で指定してください' }),
 })
 
+// 委託者への返信（チェック結果の連絡）の操作。send だけ本文を伴う（画面で直した文面をそのまま送るため）。
+// 空のまま送ると相手に空のメッセージが届くので、前後の空白を落としたうえで空文字を弾く。
+export const invoiceReplyActionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('send'),
+    body: z.string({ message: '文面を入力してください' }).trim().min(1, { message: '文面を入力してください' }),
+  }),
+  z.object({ action: z.literal('skip') }),
+  z.object({ action: z.literal('reopen') }),
+])
+
 // ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
 // template は画面で編集された文面。プレースホルダの置換はサーバー側で行うため、ここでは中身を検証しない。
 // 誤って全員に空文にすることを防ぐため、空文字だけは弾く。

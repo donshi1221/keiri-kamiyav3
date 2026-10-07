@@ -16,7 +16,13 @@ import type {
 } from './schema'
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
 // import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
-import type { EXPENSE_ITEM_KINDS, PAYMENT_REQUEST_STATUSES } from './config'
+import type {
+  EXPENSE_ITEM_KINDS,
+  INVOICE_CHECK_TRIGGERS,
+  INVOICE_REPLY_KINDS,
+  INVOICE_REPLY_STATES,
+  PAYMENT_REQUEST_STATUSES,
+} from './config'
 
 // ダッシュボード（app/page.tsx）が使う「月次レコード + リレーション」の型。
 // 以前はコンポーネント側にコピペされ、実クエリと形が食い違ったまま `as any` で握りつぶされていた。
@@ -212,12 +218,17 @@ export interface InvoiceExpenseAssignment {
 // payout_year / payout_month は照合に使った支払月（記載月の翌月）。経費は支払月の行に登録する
 // 決まりなので、画面側で月をずらす計算をやり直さずに済むようサーバーで確定させて渡す。
 // expense_assignments は経費の登録先候補（その委託者のアクティブなアサイン）。
+// reply は委託者への返信（下書き・送信済みなど）。保留・未照合の請求書には無いので null。
+// has_chatwork_room は委託者の Chatwork の宛先が登録済みか。画面が知りたいのは送れるかどうかだけ
+// なので、ルームIDそのものは返さない（不要な識別子を出さない。リマインドと同じ流儀）。
 export type InvoiceCheckRow = Omit<InvoiceUpload, 'file_data'> & {
   contractor_name: string | null
   delivery_sheets: InvoiceDeliverySheetLink[]
   payout_year: number | null
   payout_month: number | null
   expense_assignments: InvoiceExpenseAssignment[]
+  reply: InvoiceReplyInfo | null
+  has_chatwork_room: boolean
 }
 
 // 自動照合（lib/invoice-check）の判定結果。DBの列と1対1に対応させ、
@@ -271,6 +282,43 @@ export interface InvoiceAlertCounts {
 // 読み取りに失敗している行は照合できない（判定材料が無い）ため、status を pending のまま据え置く。
 // 「照合したが保留」と区別できるよう、実行しなかったことを理由付きで返す。
 export type InvoiceCheckOutcome = InvoiceCheckResult | { skipped: string }
+
+// ─── 請求書チェックの履歴と返信 ─────────────────────────────
+// 選択肢そのものは lib/config に置き、型はそこから導く（ExpenseItemKind と同じ流儀）。
+export type InvoiceCheckTrigger = (typeof INVOICE_CHECK_TRIGGERS)[number]
+export type InvoiceReplyKind = (typeof INVOICE_REPLY_KINDS)[number]
+export type InvoiceReplyState = (typeof INVOICE_REPLY_STATES)[number]
+
+// NGになった理由1件を、種類と数値に分けて持つ形。判定理由（check_notes）の文は社内向けの言い回しで、
+// 相手に送る文面へ言い換えるには「何が・いくつ違ったか」が要る。文を後から解析すると文言を
+// 1文字直しただけで壊れるため、照合（lib/invoice-check）が判定と同時にこの形でも残す。
+// other は言い換えを用意していない種類のNG。相手に黙って伏せないよう、判定理由の本文をそのまま持つ。
+export type InvoiceNgReason =
+  | { kind: 'total'; billed: number; expected: number }
+  | { kind: 'client_count'; client: string; billed: number; expected: number }
+  | { kind: 'client_amount'; client: string; billed: number | null; expected: number }
+  | { kind: 'client_missing'; client: string; expected: number }
+  | { kind: 'expense_missing'; expected: number }
+  | { kind: 'expense_unregistered'; billed: number }
+  | { kind: 'expense_amount'; billed: number; expected: number }
+  | { kind: 'addressee'; actual: string; correct: string }
+  | { kind: 'other'; text: string }
+
+// 一覧APIが返す返信1件。draft_body は自動で作った下書き、sent_body は実際に送った文面
+// （人が直してから送ることがあるため別に持つ）。
+export interface InvoiceReplyInfo {
+  kind: InvoiceReplyKind
+  state: InvoiceReplyState
+  draft_body: string
+  sent_body: string | null
+  sent_at: string | null
+}
+
+// POST /api/invoice-check/[id]/reply に送る操作。
+export type InvoiceReplyAction =
+  | { action: 'send'; body: string }
+  | { action: 'skip' }
+  | { action: 'reopen' }
 
 // ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
 // disabled は「CHATWORK_API_TOKEN 未設定＝この機能を使わない運用」。失敗(error)と区別できないと、

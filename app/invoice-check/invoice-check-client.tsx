@@ -33,6 +33,8 @@ import type {
   InvoiceExtractedPatch,
   InvoiceNoteLine,
   InvoiceNoteMark,
+  InvoiceReplyAction,
+  InvoiceReplyInfo,
 } from '@/lib/ui-types'
 
 const STATUS_LABEL: Record<InvoiceCheckRow['status'], string> = {
@@ -386,6 +388,10 @@ function UsageNotes() {
             PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
           </li>
           <li>判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。</li>
+          <li>
+            判定がOK・NGの請求書には、委託者への返信の下書きが自動で付きます。内容を確かめて（必要なら直して）
+            「Chatwork で送信」を押すと送られます。自動では送りません。保留の請求書には下書きを作りません。
+          </li>
         </ul>
       )}
     </div>
@@ -776,6 +782,124 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
   )
 }
 
+// ─── 委託者への返信 ─────────────────────────────────────────────
+// チェックの結果（受領した／直してほしい）を委託者へ返す連絡。下書きはサーバーが判定から自動で作り、
+// 送る・送らないは人が決める（相手のある連絡なので、自動では送らない）。
+
+const REPLY_KIND_LABEL: Record<InvoiceReplyInfo['kind'], string> = {
+  ok: '受領の連絡',
+  ng: '修正のお願い',
+}
+
+// 送信日はサーバー保存の UTC 文字列。受付日時と同じく JST 固定で表示する。
+function formatSentDate(iso: string): string {
+  return formatInTimeZone(iso, TZ, 'M/d')
+}
+
+// text / onChange を親から受け取るのは、編集中の文面を親が請求書ごとに覚えておくため。
+// この部品の中に持たせると、PC用の表とスマホ用のカードで別々の値になるうえ、
+// 他の行の操作で一覧を取り直したときに打ちかけの文面が消えてしまう。
+function ReplyBlock({ reply, hasRoom, text, onChange, onSend, onSkip, onReopen, onError, busy }: {
+  reply: InvoiceReplyInfo
+  hasRoom: boolean
+  text: string
+  onChange: (text: string) => void
+  onSend: () => void
+  onSkip: () => void
+  onReopen: () => void
+  onError: (msg: string) => void
+  busy: boolean
+}) {
+  const [copied, setCopied] = useState(false)
+  const [sentOpen, setSentOpen] = useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      onError('コピーできませんでした。文面を選択して手動でコピーしてください。')
+    }
+  }
+
+  if (reply.state === 'sent') {
+    return (
+      <div className="space-y-1 rounded-lg border bg-secondary/50 px-3 py-2">
+        <p className="text-xs text-success">
+          {reply.sent_at ? `${formatSentDate(reply.sent_at)} ` : ''}返信済み
+          <span className="ml-1 text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
+        </p>
+        <button
+          type="button"
+          onClick={() => setSentOpen((v) => !v)}
+          aria-expanded={sentOpen}
+          // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+          className="flex min-h-11 w-full items-center gap-1 text-left text-xs text-info md:min-h-0"
+        >
+          <ChevronRight size={12} className={cn('shrink-0 transition-transform', sentOpen && 'rotate-90')} />
+          <span>{sentOpen ? '送った文面を閉じる' : '送った文面を見る'}</span>
+        </button>
+        {sentOpen && (
+          <p className="text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground">
+            {reply.sent_body ?? reply.draft_body}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (reply.state === 'skipped') {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-secondary/50 px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          返信しない
+          <span className="ml-1">（{REPLY_KIND_LABEL[reply.kind]}）</span>
+        </p>
+        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={onReopen} disabled={busy}>
+          下書きに戻す
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border bg-secondary/50 px-3 py-2">
+      <p className="text-xs font-medium text-foreground">
+        返信の下書き
+        <span className="ml-1 font-normal text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
+      </p>
+      {/* sending は前回の送信が終わったか分からないまま残った状態。届いているかもしれないので、確かめてから送り直してもらう。 */}
+      {reply.state === 'sending' && (
+        <p className="rounded bg-warning-subtle px-2 py-1 text-xs text-warning">
+          前回の送信が完了したか確認できていません。Chatwork に届いていないことを確かめてから送り直してください。
+        </p>
+      )}
+      <textarea
+        aria-label="返信の文面"
+        rows={6}
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded border bg-card px-3 py-2 text-sm"
+      />
+      {!hasRoom && (
+        <p className="text-xs text-warning">Chatwork の宛先が未登録です（マスタの委託者で登録）</p>
+      )}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={copy} disabled={!text.trim()}>
+          {copied ? 'コピーしました' : 'コピー'}
+        </Button>
+        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={onSkip} disabled={busy}>
+          送らない
+        </Button>
+        <Button size="sm" className="h-11 md:h-7" onClick={onSend} disabled={busy || !hasRoom || !text.trim()}>
+          {busy ? '処理中…' : 'Chatwork で送信'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ─── 保留の手動OK ───────────────────────────────────────────────
 // 納品シートを読めない・本数が揃わないといった理由で保留のまま止まる行がある。金額そのものは
 // 人が納品状況を見れば確認できるため、実支払額を入力して照合をやり直せる口をここに置く。
@@ -877,6 +1001,12 @@ export default function InvoiceCheckClient() {
   const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
   const [approveTarget, setApproveTarget] = useState<InvoiceCheckRow | null>(null)
   const [cautionBusyId, setCautionBusyId] = useState<string | null>(null)
+  // 返信の文面の編集中の値（請求書ごと）。base は編集を始めたときの下書きで、再チェックなどで
+  // サーバーの下書きが作り直されたら（＝判定が変わったら）古い編集は捨てて新しい下書きを見せる。
+  // 下書きが同じままなら、他の行の操作で一覧を取り直しても打ちかけの文面は残る。
+  const [replyEdits, setReplyEdits] = useState<Record<string, { base: string; text: string }>>({})
+  const [replyBusyId, setReplyBusyId] = useState<string | null>(null)
+  const [replySendTarget, setReplySendTarget] = useState<{ row: InvoiceCheckRow; body: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1002,6 +1132,76 @@ export default function InvoiceCheckClient() {
     await recheck(id)
   }
 
+  function replyTextOf(r: InvoiceCheckRow): string {
+    if (!r.reply) return ''
+    const edit = replyEdits[r.id]
+    return edit && edit.base === r.reply.draft_body ? edit.text : r.reply.draft_body
+  }
+
+  // 返信の操作（送信・送らない・下書きに戻す）。相手に届くかどうかが掛かっているので見た目を先に
+  // 切り替えることはせず、サーバーが返した状態でその行の返信だけを差し替える。
+  async function postReply(id: string, action: InvoiceReplyAction) {
+    setReplyBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoice-check/${id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action),
+      })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '返信の操作に失敗しました。'))
+        // 断られた理由の多くは画面が古いこと（別のタブで送信済みなど）なので、最新の状態に揃える。
+        await load()
+        return
+      }
+      const data = (await res.json().catch(() => null)) as { reply?: InvoiceReplyInfo } | null
+      const reply = data?.reply
+      if (!reply) {
+        await load()
+        return
+      }
+      setRows((prev) => (prev ? prev.map((r) => (r.id === id ? { ...r, reply } : r)) : prev))
+      if (action.action === 'send') {
+        setReplyEdits((prev) => {
+          const { [id]: _sent, ...rest } = prev
+          return rest
+        })
+      }
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setReplyBusyId(null)
+    }
+  }
+
+  async function confirmSendReply() {
+    const target = replySendTarget
+    setReplySendTarget(null)
+    if (!target) return
+    await postReply(target.row.id, { action: 'send', body: target.body })
+  }
+
+  // PC用の表とスマホ用のカードの両方から同じ内容で出すため、1か所で組み立てる。
+  function renderReply(r: InvoiceCheckRow) {
+    const reply = r.reply
+    if (!reply) return null
+    const text = replyTextOf(r)
+    return (
+      <ReplyBlock
+        reply={reply}
+        hasRoom={r.has_chatwork_room}
+        text={text}
+        onChange={(next) => setReplyEdits((prev) => ({ ...prev, [r.id]: { base: reply.draft_body, text: next } }))}
+        onSend={() => setReplySendTarget({ row: r, body: text.trim() })}
+        onSkip={() => postReply(r.id, { action: 'skip' })}
+        onReopen={() => postReply(r.id, { action: 'reopen' })}
+        onError={setError}
+        busy={replyBusyId === r.id}
+      />
+    )
+  }
+
   const busy = (id: string) => extractingId === id || recheckingId === id
 
   return (
@@ -1108,6 +1308,7 @@ export default function InvoiceCheckClient() {
                           </Button>
                         </div>
                       )}
+                      {r.reply && <div className="mt-2">{renderReply(r)}</div>}
                     </td>
                     <td className="px-3 py-3">
                       {/* 操作は5つあり横一列だと判定列を圧迫する。折り返して2〜3行に収め、全機能を残す。 */}
@@ -1241,6 +1442,8 @@ export default function InvoiceCheckClient() {
                   </div>
                 )}
 
+                {r.reply && <div className="mt-2">{renderReply(r)}</div>}
+
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button
                     variant="outline"
@@ -1326,6 +1529,25 @@ export default function InvoiceCheckClient() {
         onApproved={handleApproved}
         onError={setError}
       />
+
+      {/* 送信は取り消せないので、宛先と文面をもう一度見せてから送る。 */}
+      <AlertDialog open={!!replySendTarget} onOpenChange={(open) => { if (!open) setReplySendTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>この文面を Chatwork で送信しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {replySendTarget?.row.contractor_name ?? '委託者'}さんへ送ります。送信後は取り消せません。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <p className="max-h-60 overflow-y-auto rounded border bg-secondary px-3 py-2 text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground">
+            {replySendTarget?.body}
+          </p>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSendReply}>送信する</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <AlertDialogContent>

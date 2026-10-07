@@ -12,7 +12,7 @@ export const maxDuration = 60
 // 再読み取り。AI側の一時的な失敗（レート制限・タイムアウト）は再実行で直ることが多いので、
 // 受付時に失敗した行を画面から叩き直せるようにする。
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: RouteContext<'/api/invoice-check/[id]/extract'>
 ) {
   try {
@@ -28,7 +28,9 @@ export async function POST(
     // 「材料が無い」保留が並ぶだけなので、成功したときだけ続けて実行する。
     // manuallyEdited: false は、手動修正した値をAIが読み直して上書きした以上、
     // 過去の「手動修正」の印を引き継がせないため（引き継ぐと今の値の出どころを誤解させる）。
-    const check = !('error' in outcome) ? await checkInvoiceAndSave(id, { manuallyEdited: false }) : null
+    const check = !('error' in outcome)
+      ? await checkInvoiceAndSave(id, { trigger: 'extract', origin: req.nextUrl.origin, manuallyEdited: false })
+      : null
     // 読み取れなかった理由は画面に出す必要があるため、失敗も200で内容として返す
     // （HTTPエラーにすると「通信に失敗しました」に丸められ、理由が伝わらない）。
     return Response.json({ ...outcome, check })
