@@ -78,16 +78,20 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ok: 'text-muted-foreground',
 }
 
+// NG行の右端に出す「今月はスキップ」の口。押せるときはボタン、できないときは理由の1行を出す。
+type SkipSlot = { kind: 'button'; onSkip: () => void } | { kind: 'reason'; text: string }
+
 // 注意（[注意]）は「自動では判断できないので人が見てください」という案内。人が見終わったら
 // 消し込めるようにする。確認済みの印はサーバー側（invoice_uploads.confirmed_cautions）に貯め、
 // 注意1件を指すキーは注意行の本文から復元する（lib/invoice-match の cautionKeyFromNoteText）。
 // 判定理由に「|key=…」のような機械用の文字列を埋め込む方式は、そのまま人の目に触れるうえ
 // 文言を1文字変えるとキーが壊れるため採らない。本文の先頭が必ず明細ラベルの原文になっている
 // という約束だけを守れば、サーバーと画面が同じキーを作れる。
-function NoteLine({ line, onConfirmCaution, busy }: {
+function NoteLine({ line, onConfirmCaution, busy, skipSlot }: {
   line: InvoiceNoteLine
   onConfirmCaution: (key: string, confirmed: boolean) => void
   busy: boolean
+  skipSlot?: SkipSlot | null
 }) {
   // キーを復元できない行（この仕組みより前に保存された注意など）は操作の対象外。
   const key = cautionKeyFromNoteText(line.text)
@@ -102,6 +106,32 @@ function NoteLine({ line, onConfirmCaution, busy }: {
         : confirmed
           ? { kind: 'revert', key }
           : null
+
+  // 「今月はスキップ」の口（ボタンか、できない理由）が付くのは「見当たりません」のNG行だけ。
+  // 注意行と同じく、背景は外側の箱に移して、右端のボタンまで同じ枠に収める。
+  if (skipSlot) {
+    return (
+      <div className="rounded bg-danger-subtle pr-1">
+        <div className="flex flex-wrap items-start justify-between gap-x-2">
+          <p className="min-w-0 flex-1 basis-40 px-2 py-1 text-xs leading-relaxed font-medium text-danger">{line.text}</p>
+          {skipSlot.kind === 'button' && (
+            <button
+              type="button"
+              onClick={skipSlot.onSkip}
+              disabled={busy}
+              // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+              className="flex min-h-11 shrink-0 items-center rounded border border-danger/40 bg-card px-2 text-xs font-medium whitespace-nowrap text-danger hover:bg-secondary disabled:opacity-40 md:min-h-7"
+            >
+              今月はスキップ
+            </button>
+          )}
+        </div>
+        {skipSlot.kind === 'reason' && (
+          <p className="px-2 pb-1 text-[11px] leading-relaxed text-muted-foreground">{skipSlot.text}</p>
+        )}
+      </div>
+    )
+  }
 
   // 印が読めない行は印を付ける前に保存された過去データ。内容が判断できないので中立表示にする。
   return (
@@ -240,10 +270,13 @@ function CautionGroup({ items, onConfirmCaution, busy }: {
 // 判定理由は観点ごとに1行。全行を並べるとOK行がノイズになりNGが埋もれるため、
 // 既定ではNG・保留（と受領・修正の記録、印なしの過去データ）だけを出し、OK行は開いたときだけ見せる。
 // 注意（caution）行だけは複数件並ぶと冗長なので、他の行とは別にまとめて1つの枠に集約する。
-function CheckNotes({ notes, onConfirmCaution, busy }: {
+function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
   notes: string | null
   onConfirmCaution: (key: string, confirmed: boolean) => void
   busy: boolean
+  // NG行ごとに「今月はスキップ」の口を引く。NG行は既定表示（primary）にしか出ない
+  // （details は OK 行だけ）ので、口を付けるのはここ1か所でよい。
+  skipSlotOf: (line: InvoiceNoteLine) => SkipSlot | null
 }) {
   const [open, setOpen] = useState(false)
   const lines = useMemo(() => parseInvoiceNotes(notes), [notes])
@@ -266,7 +299,7 @@ function CheckNotes({ notes, onConfirmCaution, busy }: {
   return (
     <div className="space-y-1">
       {otherPrimary.map((line, i) => (
-        <NoteLine key={`other-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} />
+        <NoteLine key={`other-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} skipSlot={skipSlotOf(line)} />
       ))}
       <CautionGroup items={keyedCautions} onConfirmCaution={onConfirmCaution} busy={busy} />
       {legacyCautions.map((line, i) => (
@@ -385,9 +418,10 @@ function UsageNotes() {
             立替経費として登録できます（登録後は自動で再チェックまで行います）。
           </li>
           <li>
-            「◯◯: 予定 ¥X が請求書に見当たりません」でNGになった行には「今月はスキップ」ボタンが出ます。
+            「◯◯: 予定 ¥X が請求書に見当たりません」のNG行には、その行の右端に「今月はスキップ」ボタンが出ます。
             その月はそのクライアント分を支払わないと決まっているときに押すと、支払予定と支払回数から外して
             自動で再チェックまで行います（支払い前ならダッシュボードから取り消せます）。
+            振込予約済み・支払い済み・まとめ済みなどでスキップできないときは、ボタンの代わりに理由が出ます。
           </li>
           <li>
             判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、
@@ -605,19 +639,32 @@ function canRegisterExpense(r: InvoiceCheckRow): boolean {
 const CLIENT_MISSING_AFTER_NAME = ': 予定 '
 const CLIENT_MISSING_SUFFIX = 'が請求書に見当たりません'
 
-// その請求書で「今月はスキップ」を出す月次レコード。NG行の先頭がクライアント名と完全一致するものだけを拾う。
-// 同じクライアント名の行が複数ある委託者は、NG行がどちらを指すか決められないので出さない
+// スキップできない理由の文言。コードは API（app/api/invoice-check）が skip API の断る条件と同じ順で付ける。
+const SKIP_BLOCK_MESSAGE: Record<NonNullable<InvoiceSkippableRecord['blockReason']>, string> = {
+  paid: '支払い済みのためスキップできません',
+  reserved: '振込予約済みです。ダッシュボードで支払い予約のチェックを外すとスキップできます',
+  lump: '残りをまとめた行です。先にまとめを取り消してください',
+}
+const SKIP_MULTIPLE_MESSAGE = '同じクライアントの行が複数あります。ダッシュボードから行を選んでスキップしてください'
+
+// 判定理由の1行に出す「今月はスキップ」の口。NG行の先頭がクライアント名と完全一致する月次レコードだけを引く
+// （立替経費の同じ形の行は完全一致で当たらないので対象外のまま）。対応するレコードが無い行は何も出さない。
+// 同じクライアント名の行が複数ある委託者は、NG行がどちらを指すか決められないのでボタンを出さず理由だけ出す
 // （違う行をスキップさせるより、ダッシュボードで行を見て操作してもらう方が安全なため）。
-function skipCandidatesOf(r: InvoiceCheckRow): InvoiceSkippableRecord[] {
-  const missing = parseInvoiceNotes(r.check_notes)
-    .filter((line) => line.mark === 'ng' && line.text.endsWith(CLIENT_MISSING_SUFFIX))
-    .map((line) => line.text)
-  if (missing.length === 0) return []
-  return r.skippable_records.filter(
-    (rec) =>
-      missing.some((text) => text.startsWith(`${rec.clientName}${CLIENT_MISSING_AFTER_NAME}`)) &&
-      r.skippable_records.filter((other) => other.clientName === rec.clientName).length === 1
-  )
+function skipSlotOfLine(
+  r: InvoiceCheckRow,
+  line: InvoiceNoteLine,
+  onSkip: (record: InvoiceSkippableRecord) => void
+): SkipSlot | null {
+  if (line.mark !== 'ng' || !line.text.endsWith(CLIENT_MISSING_SUFFIX)) return null
+  const matched = r.skippable_records.filter((rec) => line.text.startsWith(`${rec.clientName}${CLIENT_MISSING_AFTER_NAME}`))
+  if (matched.length === 0) return null
+  const [rec] = matched
+  if (matched.length > 1) {
+    return { kind: 'reason', text: SKIP_MULTIPLE_MESSAGE }
+  }
+  if (rec.blockReason) return { kind: 'reason', text: SKIP_BLOCK_MESSAGE[rec.blockReason] }
+  return { kind: 'button', onSkip: () => onSkip(rec) }
 }
 
 // 明細から登録先アサインを推定する。照合本体（lib/invoice-check）と同じ resolveItemClient を使い、
@@ -1346,6 +1393,7 @@ export default function InvoiceCheckClient() {
                           notes={r.check_notes}
                           onConfirmCaution={(key, confirmed) => confirmCaution(r.id, key, confirmed)}
                           busy={cautionBusyId === r.id || busy(r.id)}
+                          skipSlotOf={(line) => skipSlotOfLine(r, line, (record) => setSkipTarget({ row: r, record }))}
                         />
                       </div>
                       {r.delivery_sheets.length > 0 && (
@@ -1359,20 +1407,6 @@ export default function InvoiceCheckClient() {
                           </Button>
                         </div>
                       )}
-                      {/* 「見当たりません」のNGも、その月は払わないと決まっていればこの場で終わらせられる。 */}
-                      {skipCandidatesOf(r).map((rec) => (
-                        <div key={rec.id} className="mt-2 flex justify-end">
-                          <Button
-                            size="sm"
-                            // クライアント名が入って長くなるため、狭い列では折り返して収める。
-                            className="h-auto min-h-11 whitespace-normal md:min-h-7"
-                            disabled={busy(r.id)}
-                            onClick={() => setSkipTarget({ row: r, record: rec })}
-                          >
-                            今月はスキップ（{shortenClientName(rec.clientName)}）
-                          </Button>
-                        </div>
-                      ))}
                       {r.reply && <div className="mt-2">{renderReply(r)}</div>}
                     </td>
                     <td className="px-3 py-3">
@@ -1490,6 +1524,7 @@ export default function InvoiceCheckClient() {
                       notes={r.check_notes}
                       onConfirmCaution={(key, confirmed) => confirmCaution(r.id, key, confirmed)}
                       busy={cautionBusyId === r.id || busy(r.id)}
+                      skipSlotOf={(line) => skipSlotOfLine(r, line, (record) => setSkipTarget({ row: r, record }))}
                     />
                   </div>
                 )}
@@ -1506,19 +1541,6 @@ export default function InvoiceCheckClient() {
                     </Button>
                   </div>
                 )}
-
-                {skipCandidatesOf(r).map((rec) => (
-                  <div key={rec.id} className="mt-2">
-                    <Button
-                      size="sm"
-                      className="h-auto min-h-11 w-full whitespace-normal"
-                      disabled={busy(r.id)}
-                      onClick={() => setSkipTarget({ row: r, record: rec })}
-                    >
-                      今月はスキップ（{shortenClientName(rec.clientName)}）
-                    </Button>
-                  </div>
-                ))}
 
                 {r.reply && <div className="mt-2">{renderReply(r)}</div>}
 

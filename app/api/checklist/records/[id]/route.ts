@@ -84,6 +84,12 @@ export async function PATCH(
     const [current] = await db.select().from(monthlyRecords).where(eq(monthlyRecords.id, id))
     if (!current) return Response.json({ error: 'Not found' }, { status: 404 })
 
+    // スキップ中の行は「その月は払わない」と決めた行。受領・予約・支払いの印を付けると、
+    // 払わない行に支払いの記録が残って食い違う。外す操作（checked=false）は戻すだけなので通す。
+    if (body.checked && current.skipped_at) {
+      return Response.json({ error: 'スキップ中の行にはチェックを付けられません。先にスキップを取り消してください。' }, { status: 400 })
+    }
+
     const toggleField = field as ToggleField
     // 既にチェック済みで再度 checked=true が来た場合は、最初のチェック日時を保持する。
     const existing = current[toggleField] as string | null

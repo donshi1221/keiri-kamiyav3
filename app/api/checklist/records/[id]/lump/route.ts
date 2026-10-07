@@ -138,7 +138,7 @@ export async function POST(
     // 「まとめたのに後ろの月の行が残って二重払い」になる。neon-http は対話的なトランザクション
     // （db.transaction）が使えないが、db.batch は1回の通信で全部成功か全部失敗かになるためこれを使う。
     // where に手つかずの条件を重ねているのは、判定から削除までの間に人が付けた記録を消さないための二重の歯止め
-    // （立替経費だけは別テーブルなので、直前の判定に任せる）。
+    // （立替経費だけは別テーブルなので、直前の判定に任せる）。スキップ印も同じ理由で重ねている。
     const [, [data]] = await db.batch([
       db.delete(monthlyRecords).where(
         and(
@@ -146,6 +146,7 @@ export async function POST(
           isNull(monthlyRecords.invoice_received_at),
           isNull(monthlyRecords.payment_reserved_at),
           isNull(monthlyRecords.contractor_paid_at),
+          isNull(monthlyRecords.skipped_at),
           isNull(monthlyRecords.actual_payout_amount),
           isNull(monthlyRecords.delivered_video_count),
           eq(monthlyRecords.months_covered, 1)

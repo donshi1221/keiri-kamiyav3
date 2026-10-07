@@ -151,10 +151,11 @@ async function withExpenseTargets<
   })
 }
 
-// 「今月はスキップ」の対象にできる月次レコードを各行に付ける。
+// 「今月はスキップ」の候補になる月次レコード（スキップ済み以外の全部）を、スキップできない理由つきで各行に付ける。
 // 支払月（payout_year / payout_month）は withExpenseTargets が確定させた値をそのまま使う
-// （ここで月をずらし直すと照合とズレる）。条件は skip API が断る条件（支払い済み・振込予約済み・まとめ行）と
-// 揃えてあり、押してから断られるボタンを出さないようにしている。
+// （ここで月をずらし直すと照合とズレる）。理由の判定順と条件は skip API が断る条件
+// （支払い済み → 振込予約済み → まとめ行）と揃えてあり、押してから断られるボタンを出さないようにしている。
+// 理由ごと返すのは、できない行でボタンが黙って消えると利用者が理由を探すしかなくなるため。
 // 他の付加情報と同じく、行ごとに引かずまとめて1回で引いて配る。
 async function withSkippableRecords<
   T extends { contractor_id: string | null; payout_year: number | null; payout_month: number | null },
@@ -178,6 +179,9 @@ async function withSkippableRecords<
       snapshot: monthlyRecords.payout_amount_snapshot,
       actual: monthlyRecords.actual_payout_amount,
       masterAmount: assignments.contractor_payout_amount,
+      paidAt: monthlyRecords.contractor_paid_at,
+      reservedAt: monthlyRecords.payment_reserved_at,
+      monthsCovered: monthlyRecords.months_covered,
     })
     .from(monthlyRecords)
     .innerJoin(assignments, eq(monthlyRecords.assignment_id, assignments.id))
@@ -188,10 +192,7 @@ async function withSkippableRecords<
         inArray(assignments.contractor_id, contractorIds),
         eq(assignments.active, true),
         inArray(sql<number>`${monthlyRecords.year} * 12 + ${monthlyRecords.month}`, monthIndexes),
-        isNull(monthlyRecords.skipped_at),
-        isNull(monthlyRecords.contractor_paid_at),
-        isNull(monthlyRecords.payment_reserved_at),
-        eq(monthlyRecords.months_covered, 1)
+        isNull(monthlyRecords.skipped_at)
       )
     )
 
@@ -202,6 +203,7 @@ async function withSkippableRecords<
       clientName: rec.clientName,
       // 予定額の出し方は照合本体（lib/invoice-check の computeExpectedPayout）と同じ。
       amount: rec.contractor_type === 'video_editor' ? rec.actual : (rec.snapshot ?? rec.masterAmount),
+      blockReason: rec.paidAt ? 'paid' : rec.reservedAt ? 'reserved' : rec.monthsCovered > 1 ? 'lump' : null,
     }
     const key = keyOf(rec.contractor_id, rec.year, rec.month)
     const list = byTarget.get(key)

@@ -109,11 +109,16 @@ type DeliveryPayoutApply = { recordId: string; amount: number; videoCount: numbe
 // 相殺していることがあるため、請求書の明細と突き合わせる相手として合計と一緒に持ち回る。
 // expenseTotal（登録済みの立替経費の合計）は breakdown に混ぜず別に持つ。経費の請求は
 // クライアント別ではなく「実費の合計」で書かれるため、突き合わせる相手が違うため。
+// skipped は今月の支払いをスキップ中のクライアント。breakdown（金額・内訳・合計）には入れず、
+// 請求書にそのクライアント分の明細が載ってきたときに専用の文言で保留にするためだけに持つ。
+type SkippedClient = { clientName: string; matchNames: string[] }
+
 type ExpectedOutcome =
   | {
       amount: number
       notes: string[]
       breakdown: InvoicePayoutBreakdownRow[]
+      skipped: SkippedClient[]
       expenseTotal: number
       payouts: DeliveryPayoutApply[]
     }
@@ -167,6 +172,7 @@ async function computeExpectedPayout(
   let total = 0
   const notes: string[] = []
   const breakdown: InvoicePayoutBreakdownRow[] = []
+  const skipped: SkippedClient[] = []
   const payouts: DeliveryPayoutApply[] = []
 
   for (const record of records) {
@@ -175,10 +181,12 @@ async function computeExpectedPayout(
     const client = assignment.clients
     const clientName = client?.name ?? '?'
     // スキップした月は払わないと決めた行。金額にも内訳にも入れないことで、請求書に載っていなくても
-    // 「見当たりません」にならない。逆に請求書へ載ってきた場合は内訳に相手がいないので保留になり、人が見る。
+    // 「見当たりません」にならない。逆に請求書へ載ってきた場合は内訳に相手がいないので保留になり、人が見る
+    // （skipped に照合名だけ控えておき、明細が当たったらスキップ中だと伝える）。
     // 納品シートも読まない（払わない行のために保留になったり、支払額を書き戻したりしないため）。
     if (record.skipped_at) {
       notes.push(`${clientName}: 今月の支払いはスキップ（¥0）`)
+      if (client) skipped.push({ clientName, matchNames: clientMatchNames(client.name, client.aliases) })
       continue
     }
     // クライアントが引けない行は照合の当たり先にならないよう候補名を空にする
@@ -254,7 +262,7 @@ async function computeExpectedPayout(
   const expenseTotal = expenseRows.reduce((sum, e) => sum + e.amount, 0)
   total += expenseTotal
 
-  return { amount: total, notes, breakdown, expenseTotal, payouts }
+  return { amount: total, notes, breakdown, skipped, expenseTotal, payouts }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -446,6 +454,7 @@ function compareExpenses(
 function compareInvoiceItems(
   items: InvoiceExtractedItem[],
   breakdown: InvoicePayoutBreakdownRow[],
+  skipped: SkippedClient[],
   expenseTotal: number,
   invoiceAmount: number | null,
   payout: YearMonth,
@@ -464,10 +473,23 @@ function compareInvoiceItems(
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
   const matchedItems = new Map<number, InvoiceExtractedItem[]>()
   const candidateNames = breakdown.map((target) => target.matchNames)
+  const skippedNames = skipped.map((client) => client.matchNames)
 
   for (const item of workItems) {
     const { indexes } = resolveItemClient(item, candidateNames)
     if (indexes.length === 0) {
+      // 内訳に当たらなかった明細がスキップ中のクライアント分なら、「特定できません」ではなく
+      // 「スキップ中のクライアントの分が載っている」と伝える（マスタの別名を疑わせないため）。
+      const skippedHit = resolveItemClient(item, skippedNames).indexes
+      if (skippedHit.length === 1) {
+        const name = skipped[skippedHit[0]].clientName
+        results.push({
+          verdict: 'hold',
+          note: `明細「${item.label}」は ${name} 分ですが、${name} は今月の支払いをスキップ中です（スキップを取り消すか、請求内容をご確認ください）`,
+        })
+        addCountNote(item.label, null)
+        continue
+      }
       // AIが取引先名を読めているのに当たらない＝マスタの名称・別名が足りていない可能性が高い。
       // 読み取れた名称を添えて、別名登録で直せることが分かるようにする。
       const hint = item.client ? `（請求書の記載「${item.client}」はマスタに見つかりません）` : ''
@@ -909,6 +931,7 @@ export async function checkInvoiceAndSave(
         const compared = compareInvoiceItems(
           items,
           expected.breakdown,
+          expected.skipped,
           expected.expenseTotal,
           row.extracted_amount,
           payout,

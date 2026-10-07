@@ -140,11 +140,13 @@ export function clientLumpBlockReason(
 // 委託者支払いの行をまとめられない理由。まとめられるなら null。
 // 編集者は納品本数で毎月の金額が変わるため、先の月の分を前払いでまとめる対象にしない。
 export function payoutLumpBlockReason(
-  row: YearMonth & { contractor_paid_at: string | null; months_covered: number },
+  row: YearMonth & { contractor_paid_at: string | null; skipped_at: string | null; months_covered: number },
   assignment: { payment_start_month: string | null; payment_count: number | null } | null | undefined,
   contractorType: string | null | undefined,
 ): string | null {
   if (row.contractor_paid_at) return '支払い済みの行はまとめられません。'
+  // スキップ中の行は支払わない行なので、まとめると「払わないと決めた月」を含む金額で払うことになる。
+  if (row.skipped_at) return 'スキップ中の行はまとめられません。先にスキップを取り消してください。'
   if (row.months_covered !== 1) return 'この行はすでにまとめてあります。'
   if (!assignment) return 'アサインが見つかりません。'
   if (contractorType === 'video_editor') return '編集者への支払いはまとめられません。'
@@ -179,12 +181,15 @@ export function payoutLaterRowBlockCause(
     invoice_received_at: string | null
     payment_reserved_at: string | null
     contractor_paid_at: string | null
+    skipped_at: string | null
     actual_payout_amount: number | null
     delivered_video_count: number | null
     months_covered: number
   },
   hasExpense: boolean,
 ): string | null {
+  // スキップ中の行は取り込んで消すと「払わない」という決定の記録ごと失われるため、まとめの対象にしない。
+  if (row.skipped_at) return '支払いをスキップしている'
   if (row.invoice_received_at || row.payment_reserved_at || row.contractor_paid_at) return '受領・支払いの記録がある'
   if (row.actual_payout_amount != null || row.delivered_video_count != null) return '納品チェックの結果が入っている'
   if (hasExpense) return '立替経費が付いている'
