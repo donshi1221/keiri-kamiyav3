@@ -213,14 +213,17 @@ export interface InvoicePayoutBreakdownRow {
   nmAsDate: boolean
 }
 
-// 手動OKの割り当て案（GET /api/invoice-check/[id]/approve）の1行。金額を入れる先＝実支払額が
-// 未入力の月次レコード1件に対応する。
-// expectedAmount は支払予定額（納品シートを読めないなど、算出できなければ null）。
+// 手動OKの割り当て案（GET /api/invoice-check/[id]/approve）の1行。金額を入れる先の月次レコード1件に
+// 対応する（実支払額が未入力の行だけでなく、入力済みで直したい行も含む）。
+// currentAmount は今入っている実支払額（未入力は null）。
+// expectedAmount は入力前の支払予定額（納品シートを読めないなど、算出できなければ null）。
+// 入力済みの行は今の実支払額がそのまま支払予定になっているので null にし、画面は currentAmount と比べる。
 // billedAmount は請求書でそのクライアント分と特定できた業務明細の金額合計
 // （特定できた明細が無い・金額が読めていない場合は null）。
 export interface InvoiceManualApproveRow {
   recordId: string
   clientName: string
+  currentAmount: number | null
   expectedAmount: number | null
   billedAmount: number | null
 }
@@ -235,7 +238,7 @@ export interface InvoiceManualApprovePreview {
   targetTotal: number | null
 }
 
-// POST /api/invoice-check/[id]/approve に送る内容。未入力の月次レコードすべてに金額を1つずつ付ける。
+// POST /api/invoice-check/[id]/approve に送る内容。割り当て案の行（対象の月次レコード）すべてに金額を1つずつ付ける。
 export interface InvoiceManualApproveInput {
   allocations: { recordId: string; amount: number }[]
 }

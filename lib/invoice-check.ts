@@ -681,17 +681,18 @@ export async function findPayoutMonthlyRecords(
     )
 }
 
-// 手動OKのダイアログに出す割り当て案。未入力の月次レコード（pending）ごとに、支払予定額と
+// 手動OKのダイアログに出す割り当て案。対象の月次レコード（targets）ごとに、今の実支払額・支払予定額と
 // 「請求書でそのクライアント分として書かれた金額」を並べ、人が行ごとの実支払額を決める材料にする。
 // 帰属は照合本体と同じ attributeWorkItems の結果を使う（判定理由の表示と食い違わせないため）。
 // 追加費用・経費の明細は別の仕組み（認める／経費登録）で扱うので、ここには出さない。
-// payout は支払月。pending は呼び出し側が findPayoutMonthlyRecords で引いた未入力行。
+// payout は支払月。targets は呼び出し側が findPayoutMonthlyRecords で引いた行すべて
+// （入力済みの金額が後から合わなくなったときに直せるよう、未入力の行に限らない）。
 // 請求書か委託者が引けなければ null（呼び出し側が404を返す）。
 export async function buildManualApprovePreview(
   invoiceId: string,
   contractorId: string,
   payout: YearMonth,
-  pending: { id: string; clientName: string }[]
+  targets: { id: string; clientName: string; currentAmount: number | null }[]
 ): Promise<InvoiceManualApprovePreview | null> {
   const [invoice] = await db
     .select({
@@ -720,7 +721,13 @@ export async function buildManualApprovePreview(
   if ('hold' in expected) {
     // 内訳が組めないと明細の帰属先も決められない。行だけ返し、金額は人に入れてもらう。
     return {
-      rows: pending.map((r) => ({ recordId: r.id, clientName: r.clientName, expectedAmount: null, billedAmount: null })),
+      rows: targets.map((r) => ({
+        recordId: r.id,
+        clientName: r.clientName,
+        currentAmount: r.currentAmount,
+        expectedAmount: null,
+        billedAmount: null,
+      })),
       unassigned: [],
       invoiceAmount: invoice.extracted_amount,
       targetTotal: null,
@@ -730,29 +737,32 @@ export async function buildManualApprovePreview(
   const items = invoice.extracted_items ?? []
   const attribution = attributeWorkItems(items, expected.breakdown.map((target) => target.matchNames))
   const unresolved = new Set(expected.unresolvedRecordIds)
-  // 未入力行の支払予定のうち、支払予定額（expected.amount）に含まれている分。
-  let pendingExpected = 0
-  const rows = pending.map((r) => {
+  // 対象行の支払予定のうち、支払予定額（expected.amount）に含まれている分。
+  // 入力済みの行は今の実支払額がそのまま支払予定に入っているので、それも含める。
+  let targetsExpected = 0
+  const rows = targets.map((r) => {
     const index = expected.breakdown.findIndex((target) => target.recordId === r.id)
-    const expectedAmount = index >= 0 && !unresolved.has(r.id) ? expected.breakdown[index].amount : null
-    pendingExpected += expectedAmount ?? 0
+    const inExpected = index >= 0 && !unresolved.has(r.id) ? expected.breakdown[index].amount : null
+    targetsExpected += inExpected ?? 0
     return {
       recordId: r.id,
       clientName: r.clientName,
-      expectedAmount,
+      currentAmount: r.currentAmount,
+      // 入力済みの行は「入力前の支払予定」が残っていない。画面は currentAmount との差を見せる。
+      expectedAmount: r.currentAmount === null ? inExpected : null,
       billedAmount: index >= 0 ? attribution.billedAmounts[index] : null,
     }
   })
 
   // 再照合は「未承認の追加費用を除いた請求額」と支払予定額を比べる（compareTotalWithExtras）。
-  // 支払予定額のうち未入力行の分だけが今回の入力で置き換わるので、残り（入力済みの行・経費・
-  // 認め済みの追加費用）を請求額から引いた額が、入力の合計の目標になる。
+  // 支払予定額のうち対象行の分が今回の入力で置き換わるので、残り（経費・認め済みの追加費用）を
+  // 請求額から引いた額が、入力の合計の目標になる。
   // 代行者は契約額で照合され、ここで入れた金額は判定に使われないため目標を出さない。
   let targetTotal: number | null = null
   if (contractor.contractor_type === 'video_editor' && invoice.extracted_amount !== null) {
     const extras = decideExtraItems(items, expected.approvedExtraKeys, new Set(invoice.rejected_extras ?? []))
     const total = compareTotalWithExtras(invoice.extracted_amount, expected.amount, extras)
-    targetTotal = total.billedWithoutExtras - (expected.amount - pendingExpected)
+    targetTotal = total.billedWithoutExtras - (expected.amount - targetsExpected)
   }
 
   return {

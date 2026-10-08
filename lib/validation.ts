@@ -190,7 +190,7 @@ export const invoiceExtractedPatchSchema = z.object({
 
 // 保留の手動OK。納品シートの照合を飛ばし、人が確認した金額を月次レコードの実支払額として確定する。
 // 金額以外は請求書側の値をそのまま使うため、受け取る入力は「どの月次レコードにいくら入れるか」だけ。
-// 行の過不足（未入力の行すべてに1つずつ）はDBを見ないと分からないため、API側で確かめる。
+// 行の過不足（対象の行すべてに1つずつ）はDBを見ないと分からないため、API側で確かめる。
 export const invoiceManualApproveSchema = z.object({
   allocations: z
     .array(

@@ -1209,6 +1209,7 @@ function ReplyBlock({ reply, hasRoom, recipientName, wide = false, text, onChang
 // ─── 保留の手動OK ───────────────────────────────────────────────
 // 納品シートを読めない・本数が揃わないといった理由で保留のまま止まる行がある。金額そのものは
 // 人が納品状況を見れば確認できるため、実支払額を入力して照合をやり直せる口をここに置く。
+// すでに入っている実支払額も同じ口で直せる（入れた金額が後から請求書と合わなくなることがあるため）。
 
 function ManualApproveDialog({ target, onClose, onApproved, onError }: {
   target: InvoiceCheckRow | null
@@ -1242,13 +1243,15 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
         const data = (await res.json()) as InvoiceManualApprovePreview
         if (cancelled) return
         // 請求書でそのクライアント分と特定できた金額を初期値にする（多くの場合「請求書のとおりに支払う」ため）。
-        // 特定できなかった行は、行が1つなら残り全部がその行の分なので目標額（無ければ請求額）を入れる。
+        // 特定できなかった行は、入力済みなら今の金額をそのまま置く（触らなければ変更なしになる）。
+        // 未入力の行は、行が1つなら残り全部がその行の分なので目標額（無ければ請求額）を入れる。
         // 複数行あるときは按分の根拠が無いので空欄のままにし、人に入れてもらう。
         const single = data.rows.length === 1
         setAmounts(
           Object.fromEntries(
             data.rows.map((r) => {
-              const initial = r.billedAmount ?? (single ? (data.targetTotal ?? data.invoiceAmount) : null)
+              const initial =
+                r.billedAmount ?? r.currentAmount ?? (single ? (data.targetTotal ?? data.invoiceAmount) : null)
               return [r.recordId, initial === null ? '' : String(initial)]
             })
           )
@@ -1263,6 +1266,7 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
 
   const rows = preview?.rows ?? []
   const multiple = rows.length > 1
+  const hasEntered = rows.some((r) => r.currentAmount !== null)
   const parsedAmounts = rows.map((r) => {
     const text = (amounts[r.recordId] ?? '').trim()
     const value = text === '' ? null : Number(text)
@@ -1307,6 +1311,7 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
         <p className="text-xs leading-relaxed text-muted-foreground">
           「{target?.file_name}」について、納品シートの照合をスキップし、入力した金額を
           {multiple ? 'クライアントごとの' : ''}実支払額として確定します。
+          {hasEntered ? 'すでに入っている金額は、入力した金額で上書きされます。' : ''}
           確定後は入力した金額で自動照合をやり直すため、請求額と合っていなければNGになります。
         </p>
         {!preview && !loadError && <p className="text-sm text-muted-foreground">読み込み中…</p>}
@@ -1330,13 +1335,21 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
         {rows.map((r, index) => {
           // 支払予定額が分かっていて、入力中の金額も有効なら、差額をその場で見せる。
           // ダッシュボードに移動しなくても「これで確定して大丈夫か」がこの画面だけで判断できるようにするため。
+          // 入力済みの行は今の金額が支払予定そのものなので、今の金額からいくら変わるかを見せる。
           const value = parsedAmounts[index]
-          const diff = r.expectedAmount !== null && value !== null ? value - r.expectedAmount : null
+          const base = r.currentAmount ?? r.expectedAmount
+          const diff = base !== null && value !== null ? value - base : null
+          const diffText = diff === null ? '' : `${diff > 0 ? '+' : '-'}¥${Math.abs(diff).toLocaleString('ja-JP')}`
           const inputId = `manual-approve-${r.recordId}`
           return (
             <div key={r.recordId}>
               <label htmlFor={inputId} className="text-sm font-medium block mb-1 break-words">
                 {multiple ? `${r.clientName} の実支払額` : '実支払額'}
+                {r.currentAmount !== null && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                    現在 {formatAmount(r.currentAmount)}
+                  </span>
+                )}
               </label>
               <input
                 id={inputId}
@@ -1348,12 +1361,13 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="0"
               />
-              {r.expectedAmount !== null && diff !== null && (
+              {diff !== null && (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  支払予定 {formatAmount(r.expectedAmount)}
-                  {diff === 0
-                    ? ' と一致します'
-                    : ` に対し差額 ${diff > 0 ? '+' : '-'}¥${Math.abs(diff).toLocaleString('ja-JP')}`}
+                  {r.currentAmount !== null
+                    ? diff === 0
+                      ? '現在の金額から変更なし'
+                      : `現在 ${formatAmount(r.currentAmount)} から ${diffText}`
+                    : `支払予定 ${formatAmount(r.expectedAmount)}${diff === 0 ? ' と一致します' : ` に対し差額 ${diffText}`}`}
                 </p>
               )}
             </div>
