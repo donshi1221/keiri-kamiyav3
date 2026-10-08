@@ -1,6 +1,6 @@
 import { pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb, unique } from 'drizzle-orm/pg-core'
 import { relations, sql } from 'drizzle-orm'
-import type { INVOICE_CHECK_TRIGGERS, INVOICE_REPLY_KINDS, INVOICE_REPLY_STATES, PAYROLL_KINDS } from './config'
+import type { EXPENSE_CATEGORIES, INVOICE_CHECK_TRIGGERS, INVOICE_EXTRA_DECISIONS, INVOICE_REPLY_KINDS, INVOICE_REPLY_STATES, PAYROLL_KINDS } from './config'
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -10,6 +10,16 @@ export const chatRoleEnum = pgEnum('chat_role_enum', ['user', 'assistant'])
 // 受け付けた請求書の確認状態。今は受付(pending)しか使わないが、
 // 後続フェーズの突き合わせ結果（ok / ng / 保留）まで含めて先に定義しておく。
 export const invoiceCheckStatusEnum = pgEnum('invoice_check_status_enum', ['pending', 'ok', 'ng', 'hold'])
+
+// 追加費用の明細1件と扱い（invoice_uploads.extra_items / invoice_check_history.extra_items の要素）。
+// 2つの列で同じ形を使うためここに置く。画面・照合では lib/ui-types の InvoiceExtraItem として使う。
+type InvoiceExtraItemColumn = {
+  key: string
+  label: string
+  amount: number | null
+  client: string | null
+  decision: (typeof INVOICE_EXTRA_DECISIONS)[number]
+}
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
 
@@ -242,6 +252,17 @@ export const expenses = pgTable('expenses', {
   note: text('note'),
   // 請求書送付チェック。内訳（monthly_client_records）の送付とは別に、経費分の請求漏れを追えるようにする。
   invoice_sent_at: timestamp('invoice_sent_at', { withTimezone: true, mode: 'string' }),
+  // 種類（lib/config の EXPENSE_CATEGORIES）。expense は実費の立て替え、extra は請求書チェックで認めた
+  // 追加費用（修正費・特急料金など、通常の作業分とは別の請求）。別テーブルにしないのは、委託者への
+  // 支払いに足すという扱いが立替経費と同じで、支払額を出す箇所を二重に持たずに済むため。
+  category: text('category').$type<(typeof EXPENSE_CATEGORIES)[number]>().notNull().default('expense'),
+  // 同額をクライアントへ請求するか。立替経費は必ず請求する（true）。追加費用は自社が負担することが
+  // あるため選べるようにしてあり、false の行は委託者への支払い・外注費にだけ足し、請求・売上には足さない。
+  bill_client: boolean('bill_client').notNull().default(true),
+  // 追加費用の出どころの請求書と、その中のどの明細か（lib/invoice-extra の extraItemKey）。
+  // 請求書チェックが「この明細は認め済みか」を引くのに使う。請求書を消しても認めた支払いは残すため set null。
+  invoice_upload_id: uuid('invoice_upload_id').references(() => invoiceUploads.id, { onDelete: 'set null' }),
+  invoice_item_key: text('invoice_item_key'),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 
@@ -294,6 +315,8 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // kind は明細の種別。業務の対価（work）はクライアント別の支払予定と、実費・立替（expense）は
   // 登録済みの立替経費と突き合わせる＝照合相手が別物なので、読み取り時に分けておく。
   // kind を追加する前に保存された行には入っていないため任意にし、照合側で work とみなす。
+  // extra は作業の対価でも実費でもない追加の請求（追加費用・修正費・特急料金など）。支払予定に相手がおらず、
+  // 認めるかどうかを人が決めるまで判定できないため、他の2つと分けて読み取る。
   // client はその明細がどのクライアント分かをAIが請求書全体（摘要・備考など）から判断した名称。
   // 明細が動画タイトルで書かれ、クライアント名は摘要欄にしか無い請求書があり、ラベルの文字列照合だけでは
   // 帰属を決められないため、読み取りの時点で別項目として残す。client を追加する前に保存された行には
@@ -304,7 +327,7 @@ export const invoiceUploads = pgTable('invoice_uploads', {
       label: string
       count: number | null
       amount: number | null
-      kind?: 'work' | 'expense'
+      kind?: 'work' | 'expense' | 'extra'
       client?: string | null
     }[]
   >(),
@@ -325,6 +348,13 @@ export const invoiceUploads = pgTable('invoice_uploads', {
   // check_notes は再チェックのたびに丸ごと作り直されるため、確認済みの事実を注意行そのものには残せない。
   // 別列に持たせることで、マスタ修正・再読み取りを挟んでも「人が見た」ことが消えないようにする。
   confirmed_cautions: jsonb('confirmed_cautions').$type<string[]>(),
+  // 人が「認めない」と決めた追加費用の明細のキー一覧（lib/invoice-extra の extraItemKey）。
+  // confirmed_cautions と同じ理由で、再チェックのたびに作り直される check_notes には残せないため別列に持つ。
+  // 「認めた」ほうは expenses の行（category='extra'）がその記録になるので、ここには入れない。
+  rejected_extras: jsonb('rejected_extras').$type<string[]>(),
+  // 直近のチェックで見つかった追加費用の明細と、その時点の扱い（未決定／認めた／認めなかった）。
+  // 画面が「認める／認めない」の口を出すのに使う。判定理由の文から復元させないのは、文言を直すと壊れるため。
+  extra_items: jsonb('extra_items').$type<InvoiceExtraItemColumn[]>(),
   checked_at: timestamp('checked_at', { withTimezone: true, mode: 'string' }),
   // 照合OK後にGoogleドライブへ保存した控え。drive_file_id が入っていること自体が
   // 「保存済み」の印になり、再チェック時に二重アップロードするか再試行するかの判断に使う。
@@ -354,6 +384,9 @@ export const invoiceCheckHistory = pgTable('invoice_check_history', {
   // schema は ui-types を import できない（ui-types が schema の型に依存している）ので緩い型で持ち、
   // 書き込む側（lib/invoice-check）が InvoiceNgReason の形を保証する。
   ng_reasons: jsonb('ng_reasons').$type<({ kind: string } & Record<string, string | number | null>)[]>(),
+  // その時点の追加費用の明細と扱い（invoice_uploads.extra_items と同じ形）。AIが追加費用と見分けた行を
+  // 人が認めたか・認めなかったかが後から数えられるよう、チェックのたびに残す。
+  extra_items: jsonb('extra_items').$type<InvoiceExtraItemColumn[]>(),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 })
 

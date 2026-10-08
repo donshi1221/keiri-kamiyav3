@@ -246,6 +246,13 @@
       "when": 1791368647886,
       "tag": "0034_sparkling_tombstone",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791419607817,
+      "tag": "0035_outgoing_the_hunter",
+      "breakpoints": true
     }
   ]
 }

@@ -17,8 +17,10 @@ import type {
 // 選択肢の実体は lib/config（設定値の集約先）にあり、ここでは型を導くためだけに参照する。
 // import type なので実行時のimportは生成されず、画面・サーバーのどちらから読んでも副作用が無い。
 import type {
+  EXPENSE_CATEGORIES,
   EXPENSE_ITEM_KINDS,
   INVOICE_CHECK_TRIGGERS,
+  INVOICE_EXTRA_DECISIONS,
   INVOICE_REPLY_KINDS,
   INVOICE_REPLY_STATES,
   PAYMENT_REQUEST_STATUSES,
@@ -172,6 +174,21 @@ export type InvoiceExtractedItem = NonNullable<InvoiceUpload['extracted_items']>
 // 登録済みの立替経費と照合する。列の型から派生させ、AIに返させる値と照合の分岐を1か所に揃える。
 export type InvoiceItemKind = NonNullable<InvoiceExtractedItem['kind']>
 
+// 追加費用の明細1件と、直近のチェック時点での扱い。列の型（lib/schema）から派生させる。
+// key は請求書の中でその明細を指す名前（lib/invoice-extra の extraItemKey）。
+export type InvoiceExtraItem = NonNullable<InvoiceUpload['extra_items']>[number]
+export type InvoiceExtraDecision = (typeof INVOICE_EXTRA_DECISIONS)[number]
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]
+
+// POST /api/invoice-check/[id]/extra に送る操作。
+//   approve  … 認める（委託者へ払う経費として登録する。bill_client でクライアントへの請求に乗せるかを選ぶ）
+//   reject   … 認めない（請求書はNGになる）
+//   unreject … 「認めない」を取り消して未決定に戻す
+export type InvoiceExtraAction =
+  | { action: 'approve'; key: string; assignment_id: string; amount: number; note: string | null; bill_client: boolean }
+  | { action: 'reject'; key: string }
+  | { action: 'unreject'; key: string }
+
 // 支払予定額のアサイン別内訳1行。合計だけでは「どのクライアントでズレたか」が出せないため、
 // 照合（lib/invoice-check）が請求書の明細と突き合わせる相手として使う。
 // count は編集者の本数。代行者は契約額での支払いで本数の概念が無いため null になる。
@@ -267,7 +284,9 @@ export interface InvoiceCheckResult {
 // saveFailed だけは記録でありながら人の対応（再チェック）を促すため、警告として見せる。
 // caution は判定（ok/ng/hold）とは独立の注意喚起。明細の支払回数（「19/24」）が支払予定と
 // 合わないときのように、判定を変えずに「人が確認して」と伝えるためだけに使う。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed'
+// confirm は「人が決めないと判定できない」問いかけ（追加費用を認めるかどうか）。決まるまで保留になる点は
+// hold と同じだが、直す場所がマスタや納品シートではなくこの画面の「認める／認めない」なので印を分ける。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'confirm' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed'
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {
@@ -309,6 +328,10 @@ export type InvoiceReplyState = (typeof INVOICE_REPLY_STATES)[number]
 // other は言い換えを用意していない種類のNG。相手に黙って伏せないよう、判定理由の本文をそのまま持つ。
 export type InvoiceNgReason =
   | { kind: 'total'; billed: number; expected: number }
+  // 追加費用（未決定・認めなかった分）を除いた金額どうしで比べても合わなかったとき。
+  // 請求書の合計そのものを書くと追加費用の指摘と二重になるため、除いた金額で伝える。
+  | { kind: 'total_without_extras'; billed: number; expected: number }
+  | { kind: 'extra_rejected'; label: string; amount: number | null }
   | { kind: 'client_count'; client: string; billed: number; expected: number }
   | { kind: 'client_amount'; client: string; billed: number | null; expected: number }
   | { kind: 'client_missing'; client: string; expected: number }

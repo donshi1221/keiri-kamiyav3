@@ -198,6 +198,23 @@ export const invoiceReplyActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('reopen') }),
 ])
 
+// 請求書の追加費用（通常の作業分とは別の請求）を認める・認めないの操作。
+// key は明細を指す名前（lib/invoice-extra の extraItemKey）。認めるときだけ、払う金額・内容・
+// どのアサイン（クライアント）の分か・クライアントへ請求するかを伴う。
+const extraItemKey = z.string().trim().min(1, { message: '対象の追加費用を特定できません' })
+export const invoiceExtraActionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('approve'),
+    key: extraItemKey,
+    assignment_id: z.uuid({ message: 'どのクライアントの分かを選んでください' }),
+    amount: moneyInt.refine((n) => n > 0, { message: '金額を入力してください' }),
+    note: z.string().trim().nullish(),
+    bill_client: z.boolean({ message: 'bill_client は true / false で指定してください' }),
+  }),
+  z.object({ action: z.literal('reject'), key: extraItemKey }),
+  z.object({ action: z.literal('unreject'), key: extraItemKey }),
+])
+
 // ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
 // template は画面で編集された文面。プレースホルダの置換はサーバー側で行うため、ここでは中身を検証しない。
 // 誤って全員に空文にすることを防ぐため、空文字だけは弾く。

@@ -180,8 +180,12 @@ function SectionHeader({ title, open, onToggle, amountLabel, amount, pending, ov
 // 既定の文言は立替経費（委託者への支払いと、担当クライアントへの請求の両方に同額が乗る）向け。
 // 自社経費は「委託者には払わない」＝意味が違うため、呼び出し側が文言を差し替えて誤解を防ぐ。
 // 項目の型は Expense / ClientExpense のどちらでも通るよう、表示に使う列だけを要求する。
-function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelete, totalLabel = '経費 計', totalNote = '（請求にも同額を加算）', addLabel = '＋経費' }: {
-  items: Pick<Expense, 'id' | 'expense_date' | 'amount' | 'note'>[]
+// category / bill_client は立替経費の表（expenses）にだけある列。請求書チェックで認めた追加費用
+// （category が extra）には印を付け、クライアントへ請求しない分は合計の注記からも外す
+// （全部が「請求にも同額を加算」と読めると、請求しない追加費用まで請求漏れに見えてしまう）。
+// canAdd が false のときは一覧と削除だけにする（編集者の行。追加費用は請求書チェックから入るため）。
+function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelete, totalLabel = '経費 計', totalNote = '（請求にも同額を加算）', addLabel = '＋経費', canAdd = true }: {
+  items: (Pick<Expense, 'id' | 'expense_date' | 'amount' | 'note'> & Partial<Pick<Expense, 'category' | 'bill_client'>>)[]
   formOpen: boolean
   onOpenForm: () => void
   onCloseForm: () => void
@@ -190,6 +194,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
   totalLabel?: string
   totalNote?: string
   addLabel?: string
+  canAdd?: boolean
 }) {
   const [date, setDate] = useState('')
   const [amount, setAmount] = useState('')
@@ -202,6 +207,13 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
   }
 
   const total = items.reduce((s, e) => s + e.amount, 0)
+  // bill_client を持たない項目（自社経費）は従来どおり全額が請求に乗る扱い。
+  const billedTotal = items.reduce((s, e) => s + (e.bill_client === false ? 0 : e.amount), 0)
+  const shownTotalNote = billedTotal === total
+    ? totalNote
+    : billedTotal === 0
+      ? '（クライアントには請求しません）'
+      : `（うち請求に加算 ¥${billedTotal.toLocaleString()}）`
 
   return (
     <div className="mt-1 text-xs">
@@ -211,6 +223,11 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
             <div key={e.id} className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
               <span className="text-muted-foreground">{e.expense_date ? formatShortDate(e.expense_date) : '日付なし'}</span>
               <span className="font-medium">¥{e.amount.toLocaleString()}</span>
+              {e.category === 'extra' && (
+                <span className="rounded bg-secondary px-1 text-muted-foreground">
+                  追加費用{e.bill_client === false ? '・請求なし' : ''}
+                </span>
+              )}
               {e.note && <span className="text-muted-foreground">{e.note}</span>}
               <button
                 type="button"
@@ -222,10 +239,10 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
               </button>
             </div>
           ))}
-          <div className="text-muted-foreground">{totalLabel} ¥{total.toLocaleString()}{totalNote}</div>
+          <div className="text-muted-foreground">{totalLabel} ¥{total.toLocaleString()}{shownTotalNote}</div>
         </div>
       )}
-      {formOpen ? (
+      {canAdd && (formOpen ? (
         <div className="mt-1 flex flex-wrap items-center gap-1">
           <input
             type="date"
@@ -277,7 +294,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
         >
           {addLabel}
         </button>
-      )}
+      ))}
     </div>
   )
 }
@@ -1863,9 +1880,12 @@ export default function DashboardClient({
   // 自社経費は売上にだけ足す。コスト側に足さないのは、自社が直接払った支出は
   // マネーフォワードから取り込む経費（otherExpenses）に既に含まれており、ここで足すと二重計上になるため。
   // 売上に足すのは、クライアントへ請求する分だから。
+  // 請求書チェックで認めた追加費用のうち「クライアントに請求しない」もの（bill_client が false）は
+  // 自社が負担する支払い。外注費には足すが売上には足さない（その分だけ利益が減るのが正しい姿）。
   const expenseTotalAll = localExpenses.reduce((sum, e) => sum + e.amount, 0)
+  const billedExpenseTotalAll = localExpenses.reduce((sum, e) => sum + (e.bill_client ? e.amount : 0), 0)
   const clientExpenseTotalAll = localClientExpenses.reduce((sum, e) => sum + e.amount, 0)
-  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + expenseTotalAll + clientExpenseTotalAll
+  const revenue = localClientRecords.reduce((sum, cr) => sum + (cr.billing_amount_snapshot ?? 0), 0) + billedExpenseTotalAll + clientExpenseTotalAll
   // スキップした行（skipped_at あり）はその月に払わない行。画面には残すが、金額の合計・未完了の数え上げ・
   // 期限の判定からは外す。数える側は必ずこの activeRecords か、ここから作る contractorGroups の items を使う。
   const activeRecords = localRecords.filter((r) => !r.skipped_at)
@@ -2442,8 +2462,11 @@ export default function DashboardClient({
     />
   )
 
-  // ─── 立替経費（代行者のみ）─────────────────────────────
+  // ─── 立替経費・追加費用 ─────────────────────────────
   // アサインに紐づくため、委託者への支払いとクライアントへの請求の両方に同額が乗る（パススルー）。
+  // 請求書チェックで認めた追加費用も同じ表に入る。委託者への支払いには必ず足し、クライアントへの請求には
+  // bill_client が true のものだけ足す。画面からの追加は代行者だけ（canAddExpense）だが、
+  // 追加費用は編集者にも付くので、表示と支払額への加算は種別を問わず行う。
   const expensesByAssignment = new Map<string, Expense[]>()
   for (const e of localExpenses) {
     expensesByAssignment.set(e.assignment_id, [...(expensesByAssignment.get(e.assignment_id) ?? []), e])
@@ -2456,8 +2479,9 @@ export default function DashboardClient({
   for (const r of localRecords) {
     if (r.assignments) clientIdByAssignment.set(r.assignments.id, r.assignments.client_id)
   }
+  // クライアント側（請求の行・送付チェック・合計）に出すのは請求する分だけ。
   const expensesOfClient = (clientId: string): Expense[] =>
-    localExpenses.filter((e) => clientIdByAssignment.get(e.assignment_id) === clientId)
+    localExpenses.filter((e) => e.bill_client && clientIdByAssignment.get(e.assignment_id) === clientId)
 
   // ─── 自社経費（クライアントのみ）─────────────────────────────
   // クライアントに直接紐づくため、委託者への支払いには乗らずクライアントへの請求にだけ加算される。
@@ -2478,9 +2502,13 @@ export default function DashboardClient({
       clientExpenseTotalOf(clientId) > 0
   }
 
-  // 経費は代行者にのみ紐づける運用のため、編集者のアサインには入力欄を出さない。
+  // 立替経費は代行者にのみ紐づける運用のため、編集者のアサインには入力欄を出さない。
+  // ただし編集者にも請求書チェックで認めた追加費用が付くことがあるので、登録済みの分があれば一覧は出す
+  // （出さないと、支払額に足されている金額の中身が見えず、取り消す場所も無くなる）。
   const canAddExpense = (r: RecordWithRelations): boolean =>
     r.assignments?.contractors?.contractor_type !== 'video_editor'
+  const showExpenseBlock = (r: RecordWithRelations): boolean =>
+    canAddExpense(r) || (expensesByAssignment.get(r.assignments?.id ?? '')?.length ?? 0) > 0
 
   async function addExpense(assignmentId: string, input: { expense_date: string; amount: string; note: string }) {
     try {
@@ -3247,8 +3275,9 @@ export default function DashboardClient({
                                 />
                               )
                             })()}
-                            {asgn && canAddExpense(r) && (
+                            {asgn && showExpenseBlock(r) && (
                               <ExpenseBlock
+                                canAdd={canAddExpense(r)}
                                 items={expensesByAssignment.get(asgn.id) ?? []}
                                 formOpen={expenseFormFor === asgn.id}
                                 onOpenForm={() => setExpenseFormFor(asgn.id)}
@@ -3466,8 +3495,9 @@ export default function DashboardClient({
                                     />
                                   )
                                 })()}
-                                {asgn && canAddExpense(r) && (
+                                {asgn && showExpenseBlock(r) && (
                                   <ExpenseBlock
+                                    canAdd={canAddExpense(r)}
                                     items={expensesByAssignment.get(asgn.id) ?? []}
                                     formOpen={expenseFormFor === asgn.id}
                                     onOpenForm={() => setExpenseFormFor(asgn.id)}

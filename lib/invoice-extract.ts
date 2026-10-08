@@ -36,8 +36,9 @@ const RESPONSE_SCHEMA: ResponseSchema = {
           kind: {
             type: SchemaType.STRING,
             format: 'enum',
-            enum: ['work', 'expense'],
-            description: "明細の種別。交通費など実費の立替は 'expense'、業務の対価は 'work'",
+            enum: ['work', 'expense', 'extra'],
+            description:
+              "明細の種別。交通費など実費の立替は 'expense'、通常の業務の対価は 'work'、追加費用・修正費・特急料金などそれ以外の追加の請求は 'extra'",
           },
           client: {
             type: SchemaType.STRING,
@@ -71,6 +72,9 @@ const PROMPT = [
   "  かかった費用をそのまま請求している行は 'expense'。",
   "  台本作成費・編集費・作業費・撮影費など業務の対価にあたる行や、本数で数える行は 'work'。",
   '  移動区間（「渋谷→籠原」など）や日付だけが書かれた行も、交通費の明細なら expense にする。',
+  "  通常の作業（本数×単価や月額の業務委託料）でも実費の立て替えでもない追加の請求は 'extra'。",
+  '  追加費用・追加料金・修正費・特急料金・オプション料金・ボーナス・インセンティブなどが当たる。',
+  "  いつもの作業を別の名前で書いただけの行や、本数で数える行は extra にせず 'work' のままにする。",
   '  client はその明細がどの取引先（クライアント）に対する業務・費用かを表す名称。',
   '  明細行だけを見るのではなく、請求書全体（摘要欄・備考欄・見出し・グループの小見出し・宛先近くの記載など）',
   '  から判断し、請求書に書かれている名称のまま入れる（略さない・補わない・敬称はそのままでよい）。',
@@ -122,7 +126,8 @@ function normalizeItems(value: unknown): InvoiceExtractedItem[] {
         amount: normalizeInt(item.amount, 0, MAX_AMOUNT),
         // 判断がつかない値が返ってきたときは work に寄せる。expense と誤判定すると
         // クライアント別の照合から行が丸ごと消えて、本数のズレを見逃してしまうため。
-        kind: item.kind === 'expense' ? 'expense' : 'work',
+        // extra（追加費用）を取り違えた場合は人に確認が1回増えるだけで、金額の食い違いは見逃さない。
+        kind: item.kind === 'expense' ? 'expense' : item.kind === 'extra' ? 'extra' : 'work',
         // 空文字は「判断できなかった」と同じ意味なので null に揃える
         // （照合側で「値がある＝帰属が読めた」と単純に判定できるようにするため）。
         client: normalizeText(item.client),

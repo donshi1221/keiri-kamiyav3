@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { formatInTimeZone } from 'date-fns-tz'
 import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,8 @@ import type {
   InvoiceCheckRow,
   InvoiceDeliverySheetLink,
   InvoiceExpenseAssignment,
+  InvoiceExtraAction,
+  InvoiceExtraItem,
   InvoiceExtractedItem,
   InvoiceExtractedPatch,
   InvoiceNoteLine,
@@ -70,6 +72,7 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ng: 'rounded bg-danger-subtle px-2 py-1 font-medium text-danger',
   hold: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   caution: 'rounded bg-warning-subtle px-2 py-1 text-warning',
+  confirm: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   saveFailed: 'rounded bg-warning-subtle px-2 py-1 text-warning',
   received: 'text-muted-foreground',
   fixed: 'text-muted-foreground',
@@ -282,7 +285,9 @@ function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
   const lines = useMemo(() => parseInvoiceNotes(notes), [notes])
   if (lines.length === 0) return null
 
-  const primary = lines.filter((line) => line.mark !== 'ok')
+  // 追加費用の問いかけ（confirm）はここでは出さない。同じ内容を「認める／認めない」のボタン付きで
+  // ExtraItemsBlock が出すため、ここにも出すと同じ行が2回並ぶ。
+  const primary = lines.filter((line) => line.mark !== 'ok' && line.mark !== 'confirm')
   const details = lines.filter((line) => line.mark === 'ok')
 
   const otherPrimary = primary.filter((line) => line.mark !== 'caution')
@@ -426,6 +431,12 @@ function UsageNotes() {
           <li>
             判定がOKになった請求書は、対象月の「請求書受領」チェックが自動で付き、
             PDFがGoogleドライブへ保存されます（結果は判定理由に出ます）。
+          </li>
+          <li>
+            通常の作業分とは別の追加費用（修正費・特急料金など）が請求書にあると、保留にして
+            「認める／認めない」を尋ねます。認めると委託者への支払いに足して照合をやり直し、認めないとNGになって
+            返信の下書きが「修正のお願い」になります。認めた追加費用を取り消すときは、ダッシュボードの
+            委託者の行にある経費一覧から削除して再チェックしてください。
           </li>
           <li>判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。</li>
           <li>
@@ -859,6 +870,189 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
   )
 }
 
+// ─── 追加費用の確認 ─────────────────────────────────────────────
+// 通常の作業分とは別の請求（修正費・特急料金など）は、正当かどうかを請求書からは判断できない。
+// 人が「認める／認めない」を決めるまで保留になるので、決める口を判定のすぐ下に出す。
+// 認めたものはここには出さない（判定理由の詳細に「認め済み」と残り、取り消しはダッシュボードの経費一覧から）。
+
+function formatExtraItem(item: InvoiceExtraItem): string {
+  return `追加費用 ${item.amount === null ? '金額不明' : `¥${item.amount.toLocaleString()}`}（${item.label}）`
+}
+
+function ExtraItemsBlock({ items, onApprove, onReject, onUnreject, busy }: {
+  items: InvoiceExtraItem[]
+  onApprove: (item: InvoiceExtraItem) => void
+  onReject: (item: InvoiceExtraItem) => void
+  onUnreject: (item: InvoiceExtraItem) => void
+  busy: boolean
+}) {
+  const undecided = items.filter((item) => item.decision !== 'approved')
+  if (undecided.length === 0) return null
+  // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+  const buttonClass = 'flex min-h-11 shrink-0 items-center rounded border border-warning/40 px-2 text-xs font-medium whitespace-nowrap text-warning hover:bg-warning-subtle disabled:opacity-40 md:min-h-7'
+  return (
+    <div className="rounded bg-warning-subtle px-2 py-1.5">
+      <p className="mb-1 text-[10px] font-semibold tracking-wide text-warning">追加費用の確認</p>
+      <div className="space-y-1">
+        {undecided.map((item) => (
+          <div key={item.key} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <span className="min-w-0 flex-1 text-xs break-words text-warning">
+              {formatExtraItem(item)}
+              {item.decision === 'rejected' ? ' — 認めない' : 'を認めますか？'}
+            </span>
+            {item.decision === 'rejected' ? (
+              <button type="button" onClick={() => onUnreject(item)} disabled={busy} className={buttonClass}>
+                認めないを取り消す
+              </button>
+            ) : (
+              <span className="flex shrink-0 gap-1">
+                <button type="button" onClick={() => onApprove(item)} disabled={busy} className={buttonClass}>
+                  認める
+                </button>
+                <button type="button" onClick={() => onReject(item)} disabled={busy} className={buttonClass}>
+                  認めない
+                </button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// 追加費用を認めるときの確認。認めた金額は委託者への支払いに足されるので、金額・内容・
+// どのクライアントの分かを確かめてから登録する。クライアントへ請求するかは追加費用ごとに違う
+// （自社が負担することが多い）ため、既定は「請求しない」にして必要なときだけ入れてもらう。
+function ExtraApproveDialog({ target, busy, onClose, onSubmit }: {
+  target: { row: InvoiceCheckRow; item: InvoiceExtraItem } | null
+  busy: boolean
+  onClose: () => void
+  onSubmit: (action: InvoiceExtraAction) => void
+}) {
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [assignmentId, setAssignmentId] = useState('')
+  const [billClient, setBillClient] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    const { row, item } = target
+    setAmount(item.amount === null ? '' : String(item.amount))
+    setNote(item.label)
+    // 経費の登録と同じ推定（AIが読んだ取引先名 → 明細の名称）で初期選択する。
+    setAssignmentId(
+      guessAssignmentId(
+        { label: item.label, count: null, amount: item.amount, kind: 'extra', client: item.client },
+        row.expense_assignments
+      )
+    )
+    setBillClient(false)
+  }, [target])
+
+  const assignments = target?.row.expense_assignments ?? []
+  const row = target?.row
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!target) return
+    onSubmit({
+      action: 'approve',
+      key: target.item.key,
+      assignment_id: assignmentId,
+      amount: Number(amount),
+      note: note.trim() || null,
+      bill_client: billClient,
+    })
+  }
+
+  return (
+    <FormDialog open={!!target} onClose={onClose} title="追加費用を認める">
+      <form onSubmit={submit} className="space-y-4">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          「{target?.item.label}」を追加費用として認め、
+          {row && row.payout_year !== null && row.payout_month !== null
+            ? `${row.payout_year}年${row.payout_month}月（支払月）`
+            : '支払月'}
+          の{row?.contractor_name ?? '委託者'}さんへの支払いに足します。登録後は自動で再チェックを行います。
+        </p>
+        <div>
+          <label className="mb-1 block text-sm font-medium">
+            金額 <span className="text-danger">*</span>
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="min-h-11 w-full rounded border px-3 py-2 text-sm md:min-h-0"
+            placeholder="0"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">内容</label>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            className="min-h-11 w-full rounded border px-3 py-2 text-sm md:min-h-0"
+            placeholder="追加費用の内容"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">
+            どのクライアントの分か <span className="text-danger">*</span>
+          </label>
+          {assignments.length === 1 ? (
+            <p className="rounded border bg-secondary px-3 py-2 text-sm text-foreground">{assignments[0].clientName}</p>
+          ) : (
+            <select
+              value={assignmentId}
+              onChange={(e) => setAssignmentId(e.target.value)}
+              className="min-h-11 w-full rounded border bg-card px-3 py-2 text-sm md:min-h-0"
+            >
+              <option value="">選択してください</option>
+              {assignments.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.clientName}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <label className="flex min-h-11 items-start gap-2 text-sm md:min-h-0">
+          <input
+            type="checkbox"
+            checked={billClient}
+            onChange={(e) => setBillClient(e.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            クライアントにも請求する
+            <span className="block text-xs text-muted-foreground">
+              入れると立替経費と同じ扱いになり、同じ金額がクライアントへの請求と売上にも足されます。
+              入れなければ委託者への支払い（外注費）にだけ足します。
+            </span>
+          </span>
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button
+            size="sm"
+            className="h-11 md:h-7"
+            type="submit"
+            disabled={busy || assignmentId === '' || !(Number(amount) > 0)}
+          >
+            {busy ? '登録中…' : '認めて再チェック'}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
 // ─── 委託者への返信 ─────────────────────────────────────────────
 // チェックの結果（受領した／直してほしい）を委託者へ返す連絡。下書きはサーバーが判定から自動で作り、
 // 送る・送らないは人が決める（相手のある連絡なので、自動では送らない）。
@@ -866,6 +1060,17 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
 const REPLY_KIND_LABEL: Record<InvoiceReplyInfo['kind'], string> = {
   ok: '受領の連絡',
   ng: '修正のお願い',
+}
+
+// PCで文面の全体がスクロールなしで見える行数。折り返しも数に入れる（1行をおよそ全角60文字と見積もる。
+// 表の横幅いっぱいに出したときの目安で、多少ずれても1〜2行の余白か不足で済む）。
+// 短い文面でも直しやすいよう下限を、長文で画面を占領しないよう上限を設ける。
+const REPLY_ROWS_MIN = 8
+const REPLY_ROWS_MAX = 24
+const REPLY_CHARS_PER_ROW = 60
+function replyRows(text: string): number {
+  const lines = text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / REPLY_CHARS_PER_ROW)), 0)
+  return Math.min(REPLY_ROWS_MAX, Math.max(REPLY_ROWS_MIN, lines + 1))
 }
 
 // 送信日はサーバー保存の UTC 文字列。受付日時と同じく JST 固定で表示する。
@@ -876,9 +1081,13 @@ function formatSentDate(iso: string): string {
 // text / onChange を親から受け取るのは、編集中の文面を親が請求書ごとに覚えておくため。
 // この部品の中に持たせると、PC用の表とスマホ用のカードで別々の値になるうえ、
 // 他の行の操作で一覧を取り直したときに打ちかけの文面が消えてしまう。
-function ReplyBlock({ reply, hasRoom, text, onChange, onSend, onSkip, onReopen, onError, busy }: {
+// wide はPCの表で行の直下に横幅いっぱいで出すときの見た目。文面の全体が見える高さにし、
+// 見出しの右に宛先を出す（スマホのカードは幅が無いので従来の並びのまま）。
+function ReplyBlock({ reply, hasRoom, recipientName, wide = false, text, onChange, onSend, onSkip, onReopen, onError, busy }: {
   reply: InvoiceReplyInfo
   hasRoom: boolean
+  recipientName: string | null
+  wide?: boolean
   text: string
   onChange: (text: string) => void
   onSend: () => void
@@ -900,13 +1109,25 @@ function ReplyBlock({ reply, hasRoom, text, onChange, onSend, onSkip, onReopen, 
     }
   }
 
+  // 宛先。誰にどの手段で届くのかを、送る前に文面の隣で確かめられるようにする。
+  const recipient = wide && (
+    hasRoom ? (
+      <span className="text-xs text-muted-foreground">{recipientName ?? '委託者'}さん宛て・Chatwork</span>
+    ) : (
+      <span className="text-xs text-warning">Chatwork の宛先が未登録です（マスタの委託者で登録）</span>
+    )
+  )
+
   if (reply.state === 'sent') {
     return (
       <div className="space-y-1 rounded-lg border bg-secondary/50 px-3 py-2">
-        <p className="text-xs text-success">
-          {reply.sent_at ? `${formatSentDate(reply.sent_at)} ` : ''}返信済み
-          <span className="ml-1 text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <p className="text-xs text-success">
+            {reply.sent_at ? `${formatSentDate(reply.sent_at)} ` : ''}返信済み
+            <span className="ml-1 text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
+          </p>
+          {wide && <span className="text-xs text-muted-foreground">{recipientName ?? '委託者'}さん宛て・Chatwork</span>}
+        </div>
         <button
           type="button"
           onClick={() => setSentOpen((v) => !v)}
@@ -933,19 +1154,25 @@ function ReplyBlock({ reply, hasRoom, text, onChange, onSend, onSkip, onReopen, 
           返信しない
           <span className="ml-1">（{REPLY_KIND_LABEL[reply.kind]}）</span>
         </p>
-        <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={onReopen} disabled={busy}>
-          下書きに戻す
-        </Button>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {recipient}
+          <Button variant="outline" size="sm" className="h-11 md:h-7" onClick={onReopen} disabled={busy}>
+            下書きに戻す
+          </Button>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-2 rounded-lg border bg-secondary/50 px-3 py-2">
-      <p className="text-xs font-medium text-foreground">
-        返信の下書き
-        <span className="ml-1 font-normal text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <p className="text-xs font-medium text-foreground">
+          返信の下書き
+          <span className="ml-1 font-normal text-muted-foreground">（{REPLY_KIND_LABEL[reply.kind]}）</span>
+        </p>
+        {recipient}
+      </div>
       {/* sending は前回の送信が終わったか分からないまま残った状態。届いているかもしれないので、確かめてから送り直してもらう。 */}
       {reply.state === 'sending' && (
         <p className="rounded bg-warning-subtle px-2 py-1 text-xs text-warning">
@@ -954,12 +1181,12 @@ function ReplyBlock({ reply, hasRoom, text, onChange, onSend, onSkip, onReopen, 
       )}
       <textarea
         aria-label="返信の文面"
-        rows={6}
+        rows={wide ? replyRows(text) : 6}
         value={text}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded border bg-card px-3 py-2 text-sm"
       />
-      {!hasRoom && (
+      {!hasRoom && !wide && (
         <p className="text-xs text-warning">Chatwork の宛先が未登録です（マスタの委託者で登録）</p>
       )}
       <div className="flex flex-wrap justify-end gap-2">
@@ -1085,6 +1312,8 @@ export default function InvoiceCheckClient() {
   const [replyEdits, setReplyEdits] = useState<Record<string, { base: string; text: string }>>({})
   const [replyBusyId, setReplyBusyId] = useState<string | null>(null)
   const [replySendTarget, setReplySendTarget] = useState<{ row: InvoiceCheckRow; body: string } | null>(null)
+  const [extraApproveTarget, setExtraApproveTarget] = useState<{ row: InvoiceCheckRow; item: InvoiceExtraItem } | null>(null)
+  const [extraBusyId, setExtraBusyId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1280,8 +1509,53 @@ export default function InvoiceCheckClient() {
     await postReply(target.row.id, { action: 'send', body: target.body })
   }
 
+  // 追加費用の操作（認める・認めない・取り消し）。サーバーが記録と照合のやり直しまで済ませて返すので、
+  // 一覧を取り直せば判定・返信の下書きまで新しい内容になる。
+  async function postExtra(id: string, action: InvoiceExtraAction) {
+    setExtraBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoice-check/${id}/extra`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action),
+      })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, '追加費用の操作に失敗しました。'))
+        await load()
+        return
+      }
+      const data = (await res.json().catch(() => null)) as { skipped?: string } | null
+      if (typeof data?.skipped === 'string') setError(data.skipped)
+      setExtraApproveTarget(null)
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setExtraBusyId(null)
+    }
+  }
+
   // PC用の表とスマホ用のカードの両方から同じ内容で出すため、1か所で組み立てる。
-  function renderReply(r: InvoiceCheckRow) {
+  // 決めることが残っていない行では余白ごと出さない（外枠だけ残ると行の間隔が変わるため）。
+  function renderExtras(r: InvoiceCheckRow, className: string) {
+    const items = r.extra_items ?? []
+    if (!items.some((item) => item.decision !== 'approved')) return null
+    return (
+      <div className={className}>
+        <ExtraItemsBlock
+          items={items}
+          onApprove={(item) => setExtraApproveTarget({ row: r, item })}
+          onReject={(item) => postExtra(r.id, { action: 'reject', key: item.key })}
+          onUnreject={(item) => postExtra(r.id, { action: 'unreject', key: item.key })}
+          busy={extraBusyId === r.id || busy(r.id)}
+        />
+      </div>
+    )
+  }
+
+  // PC用の表とスマホ用のカードの両方から同じ内容で出すため、1か所で組み立てる。
+  function renderReply(r: InvoiceCheckRow, wide = false) {
     const reply = r.reply
     if (!reply) return null
     const text = replyTextOf(r)
@@ -1289,6 +1563,8 @@ export default function InvoiceCheckClient() {
       <ReplyBlock
         reply={reply}
         hasRoom={r.has_chatwork_room}
+        recipientName={r.contractor_name}
+        wide={wide}
         text={text}
         onChange={(next) => setReplyEdits((prev) => ({ ...prev, [r.id]: { base: reply.draft_body, text: next } }))}
         onSend={() => setReplySendTarget({ row: r, body: text.trim() })}
@@ -1348,7 +1624,10 @@ export default function InvoiceCheckClient() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-b align-top last:border-0">
+                  // 返信欄は判定の列に入れると狭くて文面が読めないため、行の直下に横幅いっぱいの行として出す。
+                  // 2つの行がひとまとまりに見えるよう、返信の行があるときは区切り線を返信の行の下へ移す。
+                  <Fragment key={r.id}>
+                  <tr className={cn('align-top', !r.reply && 'border-b last:border-0')}>
                     <td className="px-4 py-3">
                       <div className="whitespace-nowrap text-muted-foreground">{formatReceivedAt(r.created_at)}</div>
                       {/* ファイル名は長くて列幅を壊すので1行に省略し、全文は title（マウスを乗せると出る吹き出し）で読めるようにする。 */}
@@ -1396,6 +1675,7 @@ export default function InvoiceCheckClient() {
                           skipSlotOf={(line) => skipSlotOfLine(r, line, (record) => setSkipTarget({ row: r, record }))}
                         />
                       </div>
+                      {renderExtras(r, 'mt-1')}
                       {r.delivery_sheets.length > 0 && (
                         <div className="mt-1"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
                       )}
@@ -1407,7 +1687,6 @@ export default function InvoiceCheckClient() {
                           </Button>
                         </div>
                       )}
-                      {r.reply && <div className="mt-2">{renderReply(r)}</div>}
                     </td>
                     <td className="px-3 py-3">
                       {/* 操作は5つあり横一列だと判定列を圧迫する。折り返して2〜3行に収め、全機能を残す。 */}
@@ -1474,6 +1753,14 @@ export default function InvoiceCheckClient() {
                       </div>
                     </td>
                   </tr>
+                  {r.reply && (
+                    <tr className="border-b last:border-0">
+                      <td colSpan={5} className="px-4 pt-0 pb-3">
+                        {renderReply(r, true)}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -1528,6 +1815,7 @@ export default function InvoiceCheckClient() {
                     />
                   </div>
                 )}
+                {renderExtras(r, 'mt-2')}
                 {r.extract_error && <div className="mt-2 text-xs text-danger">{r.extract_error}</div>}
                 {r.delivery_sheets.length > 0 && (
                   <div className="mt-2"><DeliverySheetLinks sheets={r.delivery_sheets} /></div>
@@ -1621,6 +1909,13 @@ export default function InvoiceCheckClient() {
         onClose={() => setExpenseTarget(null)}
         onRegistered={handleExpensesRegistered}
         onError={setError}
+      />
+
+      <ExtraApproveDialog
+        target={extraApproveTarget}
+        busy={extraApproveTarget !== null && extraBusyId === extraApproveTarget.row.id}
+        onClose={() => setExtraApproveTarget(null)}
+        onSubmit={(action) => { if (extraApproveTarget) postExtra(extraApproveTarget.row.id, action) }}
       />
 
       <ManualApproveDialog

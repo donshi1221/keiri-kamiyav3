@@ -125,7 +125,22 @@ export const INVOICE_REMINDER_TEMPLATE =
 // ─── 請求書チェック結果の返信（Chatwork）─────────────────────────────
 // 自動チェックがどの操作で走ったか（invoice_check_history.trigger）。DB列は text のため、
 // 取りうる値の正本をここに置く（PAYMENT_REQUEST_STATUSES と同じ流儀）。
-export const INVOICE_CHECK_TRIGGERS = ['upload', 'recheck', 'extract', 'edit', 'approve', 'confirm_caution'] as const
+export const INVOICE_CHECK_TRIGGERS = [
+  'upload',
+  'recheck',
+  'extract',
+  'edit',
+  'approve',
+  'confirm_caution',
+  'approve_extra',
+  'reject_extra',
+] as const
+
+// 委託者へ払う経費の種類（expenses.category）。expense＝実費の立て替え、extra＝請求書チェックで認めた追加費用。
+export const EXPENSE_CATEGORIES = ['expense', 'extra'] as const
+
+// 請求書の追加費用の明細の扱い。pending はまだ人が決めていない状態で、決まるまで請求書は保留になる。
+export const INVOICE_EXTRA_DECISIONS = ['pending', 'approved', 'rejected'] as const
 
 // 返信の種類（ok＝受領の連絡 / ng＝修正のお願い）と進み具合（invoice_replies の text 列）。
 // sending は Chatwork へ送っている最中だけ入る印。同時に2回押されたときに二重送信しないための
@@ -144,12 +159,19 @@ function templateFromEnv(name: string, fallback: string[]): string {
 // 返信の下書きのひな形。AIは使わず、プレースホルダの置き換えだけで作る（lib/invoice-reply）:
 //   {name} 委託者名 / {month} 請求書の対象月 / {amount} 請求額（数字のみ・桁区切りあり）
 //   {reasons} 合わなかった点の箇条書き / {url} 請求書受付URL
+//   {extras} 認めた追加費用があるときだけ入る一文（下の INVOICE_REPLY_OK_EXTRAS_TEMPLATE）。無ければ空。
+//   env で上書きしたひな形に {extras} が無いと、追加費用の一文は入らない。
 // 支払日を入れていないのは、アプリに支払日の設定が無く、書くと根拠の無い約束になるため。
 // 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
 export const INVOICE_REPLY_OK_TEMPLATE = templateFromEnv('INVOICE_REPLY_OK_TEMPLATE', [
   '{name}さん',
-  'お疲れさまです。{month}月分の請求書（¥{amount}）を受領しました。内容に問題ありませんでした。ありがとうございます。',
+  'お疲れさまです。{month}月分の請求書（¥{amount}）を受領しました。{extras}内容に問題ありませんでした。ありがとうございます。',
 ])
+
+// 認めた追加費用をOKの文面で伝える一文。{items} は「サムネ修正 ¥5,000」を「、」でつないだもの。
+// 黙って受領だけ伝えると、追加分が通ったのかどうかが相手に分からないため。
+export const INVOICE_REPLY_OK_EXTRAS_TEMPLATE =
+  process.env.INVOICE_REPLY_OK_EXTRAS_TEMPLATE ?? '追加費用（{items}）を含めて確認しました。'
 
 export const INVOICE_REPLY_NG_TEMPLATE = templateFromEnv('INVOICE_REPLY_NG_TEMPLATE', [
   '{name}さん',
@@ -166,9 +188,14 @@ export const INVOICE_REPLY_UNKNOWN_MONTH = process.env.INVOICE_REPLY_UNKNOWN_MON
 // 書かれていて、そのまま送っても相手には何を直せばよいか伝わらないため、種類ごとに言い換える。
 //   {client} クライアント名 / {billed} 請求書の値 / {expected} こちらの控えの値 / {diff} 差
 //   {actual} 請求書の宛名 / {correct} 正しい宛名 / {text} 判定理由の本文
+//   {label} 追加費用の明細の名称 / {amount} その金額
 // 金額は「¥」付き、本数は数字だけが入る。種類ごとに INVOICE_REPLY_REASON_<種類の大文字> で上書きできる。
 const INVOICE_REPLY_REASON_DEFAULTS = {
   total: 'ご請求額 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
+  total_without_extras:
+    '追加費用を除いたご請求額 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
+  extra_rejected:
+    '追加費用 {amount}（{label}）について、こちらで事前の取り決めを確認できませんでした。内容をお知らせいただくか、除いた金額で再度お送りください。',
   client_count: '「{client}」分：ご請求 {billed}本に対し、こちらで確認できている納品は {expected}本です。',
   client_amount: '「{client}」分：ご請求 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
   client_missing: '「{client}」分（こちらの控えでは {expected}）が請求書に見当たりません。',

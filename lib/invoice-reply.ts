@@ -7,6 +7,8 @@ import type { InvoiceCheckStatus, InvoiceNgReason, InvoiceNoteMark, InvoiceReply
 
 export interface InvoiceReplyTemplates {
   ok: string
+  // OKの文面の {extras} に入る一文（認めた追加費用があるときだけ）。{items} に明細の列挙が入る。
+  okExtras: string
   ng: string
   // 対象月が分からないときに「{month}月分」の代わりに入れる言葉。
   unknownMonth: string
@@ -27,6 +29,7 @@ function fill(template: string, values: Record<string, string>): string {
 function reasonValues(reason: InvoiceNgReason): Record<string, string> {
   switch (reason.kind) {
     case 'total':
+    case 'total_without_extras':
     case 'expense_amount':
       return {
         billed: yen(reason.billed),
@@ -51,6 +54,8 @@ function reasonValues(reason: InvoiceNgReason): Record<string, string> {
       return { billed: yen(reason.billed) }
     case 'addressee':
       return { actual: reason.actual, correct: reason.correct }
+    case 'extra_rejected':
+      return { label: reason.label, amount: reason.amount === null ? '金額不明' : yen(reason.amount) }
     case 'other':
       return { text: reason.text }
   }
@@ -72,6 +77,8 @@ export interface InvoiceReplyParams {
   amount: number | null
   // kind が ng のときだけ使う。
   reasons: InvoiceNgReason[]
+  // 認めた追加費用。kind が ok のときだけ使う。
+  approvedExtras: { label: string; amount: number | null }[]
   url: string
 }
 
@@ -84,6 +91,14 @@ export function buildInvoiceReplyBody(params: InvoiceReplyParams, templates: Inv
     name: params.name,
     month: params.month === null ? '' : String(params.month),
     amount: params.amount === null ? '' : params.amount.toLocaleString('ja-JP'),
+    extras:
+      params.approvedExtras.length === 0
+        ? ''
+        : fill(templates.okExtras, {
+            items: params.approvedExtras
+              .map((extra) => (extra.amount === null ? extra.label : `${extra.label} ${yen(extra.amount)}`))
+              .join('、'),
+          }),
     reasons: buildInvoiceReplyReasons(params.reasons, templates.reasons)
       .map((line) => `・${line}`)
       .join('\n'),
@@ -102,7 +117,7 @@ const STATUS_LABEL: Record<InvoiceCheckStatus, string> = {
 
 // メールに載せる判定理由。一致した項目や「何をしたか」の記録まで並べると、対応が要る行が埋もれるため、
 // 人が見るべき印だけに絞る（画面の既定表示と同じ考え方）。
-const MAIL_NOTE_MARKS: InvoiceNoteMark[] = ['ng', 'hold', 'caution', 'saveFailed']
+const MAIL_NOTE_MARKS: InvoiceNoteMark[] = ['ng', 'hold', 'caution', 'confirm', 'saveFailed']
 
 export interface InvoiceNotificationParams {
   // 委託者名（特定できていれば）か、請求書から読み取った差出人。どちらも無ければ null。
@@ -123,7 +138,11 @@ export function buildInvoiceNotificationMail(p: InvoiceNotificationParams): { su
   const month = p.month === null ? '対象月不明' : `${p.month}月分`
   const amount = p.amount === null ? '金額不明' : yen(p.amount)
 
-  const reasons = parseInvoiceNotes(p.checkNotes)
+  const notes = parseInvoiceNotes(p.checkNotes)
+  // 追加費用の問いかけは、マスタを直せば消える他の保留と違い、人が決めるまで進まない。
+  // 同じ「保留」に埋もれると後回しにされやすいため、件名と本文の先頭で別に知らせる。
+  const needsExtraDecision = notes.some((line) => line.mark === 'confirm')
+  const reasons = notes
     .filter((line) => line.mark === null || MAIL_NOTE_MARKS.includes(line.mark))
     .map((line) => (line.mark ? `・[${INVOICE_NOTE_MARKS[line.mark]}] ${line.text}` : `・${line.text}`))
 
@@ -134,9 +153,10 @@ export function buildInvoiceNotificationMail(p: InvoiceNotificationParams): { su
       : ['理由: （指摘はありません）']
 
   return {
-    subject: `[請求書] ${sender} ${month} ${amount} — ${verdict}`,
+    subject: `[請求書] ${sender} ${month} ${amount} — ${verdict}${needsExtraDecision ? '（追加費用の確認が必要です）' : ''}`,
     text: [
       '請求書が届きました。',
+      ...(needsExtraDecision ? ['追加費用の確認が必要です。確認画面で「認める／認めない」を選んでください。'] : []),
       '',
       `判定: ${verdict}`,
       `差出人: ${sender}`,

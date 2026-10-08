@@ -16,6 +16,7 @@ import { deliveryTargetMonth, deliveryTone, suggestedPayout } from '@/lib/delive
 import {
   COMPANY_NAME,
   INVOICE_REPLY_NG_TEMPLATE,
+  INVOICE_REPLY_OK_EXTRAS_TEMPLATE,
   INVOICE_REPLY_OK_TEMPLATE,
   INVOICE_REPLY_REASON_TEMPLATES,
   INVOICE_REPLY_UNKNOWN_MONTH,
@@ -23,6 +24,7 @@ import {
 import { nowJST } from '@/lib/dates'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
+import { compareTotalWithExtras, decideExtraItems } from '@/lib/invoice-extra'
 import { buildInvoiceReplyBody } from '@/lib/invoice-reply'
 import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
 import {
@@ -41,6 +43,7 @@ import type {
   InvoiceCheckResult,
   InvoiceCheckStatus,
   InvoiceCheckTrigger,
+  InvoiceExtraItem,
   InvoiceExtractedItem,
   InvoiceNgReason,
   InvoicePayoutBreakdownRow,
@@ -120,6 +123,9 @@ type ExpectedOutcome =
       breakdown: InvoicePayoutBreakdownRow[]
       skipped: SkippedClient[]
       expenseTotal: number
+      // 認め済みの追加費用が指す明細のキー（lib/invoice-extra）。金額は amount に足し込み済みで、
+      // ここでは「請求書のどの明細が認め済みか」を引くためだけに持つ。
+      approvedExtraKeys: Set<string>
       payouts: DeliveryPayoutApply[]
     }
   | { hold: string }
@@ -255,14 +261,22 @@ async function computeExpectedPayout(
   }
 
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
+  // 認めた追加費用（category が extra）も同じ表にあり、委託者へ払う点は同じなので支払予定額には両方足す。
+  // 一方、請求書の経費明細と突き合わせる相手（expenseTotal）は立替経費だけにする。追加費用まで混ぜると、
+  // 経費明細の合計と合わなくなって経費のNGが出てしまう。
+  // 認めた追加費用を請求書ではなく委託者×支払月で引くのは、修正版が出し直されたとき（別の請求書として届く）に
+  // 同じ追加費用をもう一度聞かず、二重に認めてしまうのを防ぐため。
   const expenseRows = await db
-    .select({ amount: expenses.amount })
+    .select({ amount: expenses.amount, category: expenses.category, itemKey: expenses.invoice_item_key })
     .from(expenses)
     .where(and(inArray(expenses.assignment_id, assignmentIds), eq(expenses.year, year), eq(expenses.month, month)))
-  const expenseTotal = expenseRows.reduce((sum, e) => sum + e.amount, 0)
-  total += expenseTotal
+  const expenseTotal = expenseRows.filter((e) => e.category !== 'extra').reduce((sum, e) => sum + e.amount, 0)
+  total += expenseRows.reduce((sum, e) => sum + e.amount, 0)
+  const approvedExtraKeys = new Set(
+    expenseRows.filter((e) => e.category === 'extra' && e.itemKey !== null).map((e) => e.itemKey as string)
+  )
 
-  return { amount: total, notes, breakdown, skipped, expenseTotal, payouts }
+  return { amount: total, notes, breakdown, skipped, expenseTotal, approvedExtraKeys, payouts }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -467,7 +481,8 @@ function compareInvoiceItems(
     if (note) countNotes.push(note)
   }
   // kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
-  const workItems = items.filter((item) => item.kind !== 'expense')
+  // 追加費用（extra）はクライアント別の支払予定に相手がいないので、ここでは扱わず呼び出し側で別に見る。
+  const workItems = items.filter((item) => item.kind !== 'expense' && item.kind !== 'extra')
   const expenseItems = items.filter((item) => item.kind === 'expense')
   // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
@@ -557,6 +572,7 @@ function compareInvoiceItems(
 
   results.push(...compareExpenses(expenseItems, expenseTotal))
 
+  // 追加費用の行も請求額の一部なので、合計には含めて数える。
   // 明細の金額を全行読めているときだけ合計との整合を見る。1行でも読めていなければ
   // 差が出るのは当たり前で、指摘されても直しようがない。
   if (invoiceAmount !== null && items.every((item) => item.amount !== null)) {
@@ -730,6 +746,7 @@ async function appendCheckHistory(entry: {
   extractedAmount: number | null
   expectedAmount: number | null
   ngReasons: InvoiceNgReason[]
+  extraItems: InvoiceExtraItem[]
 }): Promise<void> {
   try {
     await db.insert(invoiceCheckHistory).values({
@@ -740,6 +757,7 @@ async function appendCheckHistory(entry: {
       extracted_amount: entry.extractedAmount,
       expected_amount: entry.expectedAmount,
       ng_reasons: entry.ngReasons,
+      extra_items: entry.extraItems,
     })
   } catch (err) {
     console.error('[invoice-check] appendCheckHistory failed:', err)
@@ -760,6 +778,7 @@ async function syncReplyDraft(
     month: number | null
     amount: number | null
     reasons: InvoiceNgReason[]
+    approvedExtras: { label: string; amount: number | null }[]
   } | null,
   origin: string
 ): Promise<void> {
@@ -774,9 +793,18 @@ async function syncReplyDraft(
     // OKのときはトークンを読みにいかない。
     const url = draft.kind === 'ng' ? `${origin}/invoice/${await getOrCreateInvoiceUploadToken()}` : ''
     const body = buildInvoiceReplyBody(
-      { kind: draft.kind, name: draft.contractorName, month: draft.month, amount: draft.amount, reasons: draft.reasons, url },
+      {
+        kind: draft.kind,
+        name: draft.contractorName,
+        month: draft.month,
+        amount: draft.amount,
+        reasons: draft.reasons,
+        approvedExtras: draft.approvedExtras,
+        url,
+      },
       {
         ok: INVOICE_REPLY_OK_TEMPLATE,
+        okExtras: INVOICE_REPLY_OK_EXTRAS_TEMPLATE,
         ng: INVOICE_REPLY_NG_TEMPLATE,
         unknownMonth: INVOICE_REPLY_UNKNOWN_MONTH,
         reasons: INVOICE_REPLY_REASON_TEMPLATES,
@@ -819,6 +847,7 @@ export async function checkInvoiceAndSave(
       extract_error: invoiceUploads.extract_error,
       check_notes: invoiceUploads.check_notes,
       confirmed_cautions: invoiceUploads.confirmed_cautions,
+      rejected_extras: invoiceUploads.rejected_extras,
       drive_file_id: invoiceUploads.drive_file_id,
       drive_link: invoiceUploads.drive_link,
     })
@@ -899,6 +928,9 @@ export async function checkInvoiceAndSave(
   let expectedAmount: number | null = null
   // expected はこのブロックのスコープから出られないため、後段のOK判定で使う納品実績だけ外へ持ち出す。
   let deliveryPayouts: DeliveryPayoutApply[] = []
+  // 追加費用の明細と今の扱い。支払予定が出せたときだけ埋まる（認め済みかどうかは支払月の経費を
+  // 引かないと分からないため。委託者や月が決まらない間は、そもそも認める先のアサインも選べない）。
+  let extraItems: InvoiceExtraItem[] = []
   if (contractor && payout) {
     const expected = await computeExpectedPayout(contractor, payout.year, payout.month, payout.month !== resolvedMonth)
     if ('hold' in expected) {
@@ -909,19 +941,50 @@ export async function checkInvoiceAndSave(
       for (const note of expected.notes) record('ok', note)
       // 明細が読めていれば、合計が合わない理由をクライアント単位まで落として出す。
       const items = row.extracted_items ?? []
+      extraItems = decideExtraItems(items, expected.approvedExtraKeys, new Set(row.rejected_extras ?? []))
       if (row.extracted_amount === null) {
         record('hold', `請求額が読み取れないため金額を照合できません（支払予定 ${yen(expectedAmount)}）`)
-      } else if (row.extracted_amount === expectedAmount) {
-        record('ok', `支払予定 ${yen(expectedAmount)} と一致`)
       } else {
-        const diff = row.extracted_amount - expectedAmount
-        // 本数換算は明細が無いときの代わりの手がかり。明細があれば下で内訳ごとに出るため付けない。
-        const hint = items.length === 0 ? unitCountHint(contractor, diff) : ''
-        record(
-          'ng',
-          `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）${hint}`,
-          { kind: 'total', billed: row.extracted_amount, expected: expectedAmount }
-        )
+        // 未決定・認めなかった追加費用は請求額から除いて比べる（理由は compareTotalWithExtras のコメント）。
+        const total = compareTotalWithExtras(row.extracted_amount, expectedAmount, extraItems)
+        const diff = total.billedWithoutExtras - expectedAmount
+        if (total.matches) {
+          record(
+            'ok',
+            total.excluded > 0
+              ? `支払予定 ${yen(expectedAmount)} と一致（追加費用 ${yen(total.excluded)} を除く）`
+              : `支払予定 ${yen(expectedAmount)} と一致`
+          )
+        } else if (total.excluded > 0) {
+          record(
+            'ng',
+            `支払予定 ${yen(expectedAmount)} に対し、追加費用 ${yen(total.excluded)} を除いた請求 ${yen(total.billedWithoutExtras)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）`,
+            { kind: 'total_without_extras', billed: total.billedWithoutExtras, expected: expectedAmount }
+          )
+        } else {
+          // 本数換算は明細が無いときの代わりの手がかり。明細があれば下で内訳ごとに出るため付けない。
+          const hint = items.length === 0 ? unitCountHint(contractor, diff) : ''
+          record(
+            'ng',
+            `支払予定 ${yen(expectedAmount)} に対し請求 ${yen(row.extracted_amount)}（差 ${yen(Math.abs(diff))} ${diff > 0 ? '多い' : '少ない'}）${hint}`,
+            { kind: 'total', billed: row.extracted_amount, expected: expectedAmount }
+          )
+        }
+      }
+      // ─── 追加費用 ─────────────────────────────────────────────
+      // 正当な追加費用かどうかは請求書からは分からないため、人が決めるまでNGにはせず保留にして問いかける。
+      // 問いかけは record() を通さず専用の印（確認）で積む。保留の印にすると、マスタや納品シートを
+      // 直せば消える他の保留と見分けが付かなくなるため。
+      for (const extra of extraItems) {
+        const shown = `追加費用 ${extra.amount === null ? '金額不明' : yen(extra.amount)}（${extra.label}）`
+        if (extra.decision === 'approved') {
+          record('ok', `${shown}は認め済みです（支払予定に含めています）`)
+        } else if (extra.decision === 'rejected') {
+          record('ng', `${shown}は認めていません`, { kind: 'extra_rejected', label: extra.label, amount: extra.amount })
+        } else {
+          notes.push(formatInvoiceNote('confirm', `${shown}を認めますか？`))
+          hasHold = true
+        }
       }
       // ─── D. 明細（クライアント別内訳）の照合 ──────────────────
       // 合計が一致していても内訳が入れ替わっている（相殺）ことがあるため、合計とは独立して見る。
@@ -1041,6 +1104,7 @@ export async function checkInvoiceAndSave(
       resolved_month: resolvedMonth,
       expected_amount: expectedAmount,
       check_notes: notes.join('\n'),
+      extra_items: extraItems,
       checked_at: new Date().toISOString(),
       // 保存できなかった場合は元の値（null）のまま。次の再チェックで再試行させるため消さない。
       drive_file_id: driveFileId,
@@ -1056,6 +1120,7 @@ export async function checkInvoiceAndSave(
     extractedAmount: row.extracted_amount,
     expectedAmount,
     ngReasons,
+    extraItems,
   })
 
   // OKの文面には請求額を入れるため、金額が無ければ下書きにしない（OKは金額が一致した結果なので
@@ -1071,6 +1136,7 @@ export async function checkInvoiceAndSave(
           month: resolvedMonth,
           amount: row.extracted_amount,
           reasons: ngReasons,
+          approvedExtras: extraItems.filter((extra) => extra.decision === 'approved'),
         }
       : null,
     options.origin
