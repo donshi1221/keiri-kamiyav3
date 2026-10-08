@@ -3,6 +3,7 @@ import { and, eq, ne } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { appSettings, monthlyRecords } from '@/lib/schema'
 import { sendChatworkMessage } from '@/lib/chatwork'
+import { fill } from '@/lib/invoice-reply'
 import type { InvoiceReminderSendResult } from '@/lib/ui-types'
 
 // 請求書未提出リマインドの中身（対象者の抽出・文面の組み立て・送信）。
@@ -15,6 +16,8 @@ export interface ReminderCandidate {
   contractorId: string
   name: string
   roomId: string | null
+  // 宛先指定（[To:…]）に使うChatworkアカウントID。roomId と同じく画面には返さない。
+  accountId: string | null
 }
 
 // 対象月（＝支払月M）で請求書が未受領の委託者を集める。
@@ -29,7 +32,7 @@ export async function findInvoiceReminderCandidates(
     with: {
       assignments: {
         with: {
-          contractors: { columns: { id: true, name: true, chatwork_room_id: true } },
+          contractors: { columns: { id: true, name: true, chatwork_room_id: true, chatwork_account_id: true } },
         },
       },
     },
@@ -45,7 +48,12 @@ export async function findInvoiceReminderCandidates(
     if (!r.assignments?.active) continue
     const c = r.assignments.contractors
     if (!c || byContractor.has(c.id)) continue
-    byContractor.set(c.id, { contractorId: c.id, name: c.name, roomId: c.chatwork_room_id })
+    byContractor.set(c.id, {
+      contractorId: c.id,
+      name: c.name,
+      roomId: c.chatwork_room_id,
+      accountId: c.chatwork_account_id,
+    })
   }
 
   return Array.from(byContractor.values()).sort((a, b) => a.name.localeCompare(b.name, 'ja'))
@@ -53,12 +61,16 @@ export async function findInvoiceReminderCandidates(
 
 export function buildInvoiceReminderBody(
   template: string,
-  params: { name: string; month: number; url: string }
+  params: { accountId: string | null; name: string; month: number; url: string }
 ): string {
-  return template
-    .replaceAll('{name}', params.name)
-    .replaceAll('{month}', String(params.month))
-    .replaceAll('{url}', params.url)
+  // 1回の走査で置き換える（返信文面と同じ）。順に replaceAll すると、名前に「{url}」のような
+  // 文字列が含まれていたとき二重に置き換わってしまうため。
+  return fill(template, {
+    to: params.accountId ? `[To:${params.accountId}]` : '',
+    name: params.name,
+    month: String(params.month),
+    url: params.url,
+  })
 }
 
 // 候補へ順に送る。相手ごとに独立した送信なので、1人が失敗しても残りは送る。
@@ -79,6 +91,7 @@ export async function sendInvoiceReminders(
       continue
     }
     const body = buildInvoiceReminderBody(opts.template, {
+      accountId: t.accountId,
       name: t.name,
       month: opts.invoiceMonth,
       url: opts.url,

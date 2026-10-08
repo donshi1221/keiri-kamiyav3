@@ -22,7 +22,7 @@ function yen(amount: number): string {
 // 1回の走査でまとめて置き換える。順番に replaceAll を重ねると、先に入れた値（クライアント名など）に
 // たまたま含まれる「{url}」のような文字列まで次の置き換えで書き換わってしまうため。
 // 知らない名前のプレースホルダはそのまま残す（ひな形の書き間違いに人が気づけるように）。
-function fill(template: string, values: Record<string, string>): string {
+export function fill(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (whole, key: string) => (key in values ? values[key] : whole))
 }
 

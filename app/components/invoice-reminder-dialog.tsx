@@ -9,7 +9,7 @@ import type { InvoiceReminderPlan, InvoiceReminderSendResult } from '@/lib/ui-ty
 // 請求書が未受領の委託者へ、Chatworkで催促を送るダイアログ。
 // 送信は「送信」を押したときの1回だけで、自動送信・定期送信は行わない
 // （催促は相手のある行為なので、送る/送らないの判断を人の手に残す）。
-// 文面のプレースホルダ（{name} {month} {url}）はサーバーが送信時に置き換えるため、
+// 文面のプレースホルダ（{to} {name} {month} {url}）はサーバーが送信時に置き換えるため、
 // ここでは置換せず、そのまま見せて編集させる（URLを人が触らずに済む）。
 export default function InvoiceReminderDialog({ open, year, month, onClose }: {
   open: boolean
@@ -168,7 +168,7 @@ export default function InvoiceReminderDialog({ open, year, month, onClose }: {
                   className="w-full rounded border px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {'{name}'} は名前、{'{month}'} は対象月、{'{url}'} は受付URLに置き換わります。
+                  {'{to}'} は宛先指定（ChatworkアカウントIDを登録した人だけ）、{'{name}'} は名前、{'{month}'} は対象月、{'{url}'} は受付URLに置き換わります。
                 </p>
               </div>
             )}

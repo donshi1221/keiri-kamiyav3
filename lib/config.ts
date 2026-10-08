@@ -110,16 +110,21 @@ export const MF_EXPENSE_ACCOUNTS = (process.env.MF_EXPENSE_ACCOUNTS ?? '')
 
 // ─── 請求書未提出リマインド（Chatwork）─────────────────────────────
 // 送信前に画面で編集できる「たたき台」。プレースホルダは送信時にサーバーで置き換える:
+//   {to}    ChatworkアカウントIDが登録済みの人にだけ入る [To:…]（未登録なら空）
 //   {name}  委託者名 / {month} 請求書の対象月（＝支払月の前月） / {url} 請求書受付URL
 // 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
 export const INVOICE_REMINDER_TEMPLATE =
   process.env.INVOICE_REMINDER_TEMPLATE?.replace(/\\n/g, '\n') ??
   [
-    'お世話になっております！',
-    '{month}月分の請求書が確認できておりません。',
+    '{to}{name}さん',
+    '',
+    'お疲れさまです！！',
+    '{month}月分の請求書がまだ確認できておりません。',
     '',
     'お手数ですが、以下のURLよりご提出をお願いいたします。',
     '{url}',
+    '',
+    '引き続きどうぞよろしくお願いいたします(please)',
   ].join('\n')
 
 // ─── 請求書チェック結果の返信（Chatwork）─────────────────────────────
