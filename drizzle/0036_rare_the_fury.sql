@@ -1,0 +1,1 @@
+ALTER TABLE "contractors" ADD COLUMN "chatwork_account_id" text;

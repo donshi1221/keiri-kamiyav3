@@ -72,6 +72,8 @@ export function buildInvoiceReplyReasons(
 export interface InvoiceReplyParams {
   kind: InvoiceReplyKind
   name: string
+  // 委託者のChatworkアカウントID。登録済みなら文面の先頭に [To:…] を付ける。未登録なら null。
+  chatworkAccountId: string | null
   // 請求書の対象月。読み取れていなければ null。
   month: number | null
   amount: number | null
@@ -88,6 +90,7 @@ export function buildInvoiceReplyBody(params: InvoiceReplyParams, templates: Inv
   const withMonth =
     params.month === null ? template.replaceAll('{month}月分', () => templates.unknownMonth) : template
   return fill(withMonth, {
+    to: params.chatworkAccountId ? `[To:${params.chatworkAccountId}]` : '',
     name: params.name,
     month: params.month === null ? '' : String(params.month),
     amount: params.amount === null ? '' : params.amount.toLocaleString('ja-JP'),

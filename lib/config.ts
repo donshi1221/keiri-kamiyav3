@@ -157,6 +157,7 @@ function templateFromEnv(name: string, fallback: string[]): string {
 }
 
 // 返信の下書きのひな形。AIは使わず、プレースホルダの置き換えだけで作る（lib/invoice-reply）:
+//   {to} ChatworkアカウントIDが登録済みのときだけ入る [To:…]（相手に通知が飛ぶ宛先指定）。未登録なら空。
 //   {name} 委託者名 / {month} 請求書の対象月 / {amount} 請求額（数字のみ・桁区切りあり）
 //   {reasons} 合わなかった点の箇条書き / {url} 請求書受付URL
 //   {extras} 認めた追加費用があるときだけ入る一文（下の INVOICE_REPLY_OK_EXTRAS_TEMPLATE）。無ければ空。
@@ -164,21 +165,36 @@ function templateFromEnv(name: string, fallback: string[]): string {
 // 支払日を入れていないのは、アプリに支払日の設定が無く、書くと根拠の無い約束になるため。
 // 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
 export const INVOICE_REPLY_OK_TEMPLATE = templateFromEnv('INVOICE_REPLY_OK_TEMPLATE', [
-  '{name}さん',
-  'お疲れさまです。{month}月分の請求書（¥{amount}）を受領しました。{extras}内容に問題ありませんでした。ありがとうございます。',
+  '{to}{name}さん',
+  '',
+  'お疲れさまです！！',
+  '{month}月分の請求書（¥{amount}）を受領しました。',
+  '{extras}内容に問題ありませんでした。',
+  '',
+  'ありがとうございます！',
+  '引き続きどうぞよろしくお願いいたします(please)',
 ])
 
 // 認めた追加費用をOKの文面で伝える一文。{items} は「サムネ修正 ¥5,000」を「、」でつないだもの。
 // 黙って受領だけ伝えると、追加分が通ったのかどうかが相手に分からないため。
-export const INVOICE_REPLY_OK_EXTRAS_TEMPLATE =
-  process.env.INVOICE_REPLY_OK_EXTRAS_TEMPLATE ?? '追加費用（{items}）を含めて確認しました。'
+// 既定値の末尾が改行なのは、追加費用の一文を独立した1行にするため（無いときは {extras} ごと空になる）。
+export const INVOICE_REPLY_OK_EXTRAS_TEMPLATE = templateFromEnv('INVOICE_REPLY_OK_EXTRAS_TEMPLATE', [
+  '追加費用（{items}）を含めて確認しました。',
+  '',
+])
 
 export const INVOICE_REPLY_NG_TEMPLATE = templateFromEnv('INVOICE_REPLY_NG_TEMPLATE', [
-  '{name}さん',
-  'お疲れさまです。{month}月分の請求書を確認したところ、下記の点がこちらの控えと合いませんでした。',
+  '{to}{name}さん',
+  '',
+  'お疲れさまです！！',
+  '{month}月分の請求書を確認したところ、下記の点がこちらの控えと合いませんでした。',
+  '',
   '{reasons}',
+  '',
   'お手数ですが、ご確認のうえ修正版を再度お送りください。',
   '{url}',
+  '',
+  '引き続きどうぞよろしくお願いいたします(please)',
 ])
 
 // 対象月が読み取れていない請求書で「{month}月分」の代わりに入れる言葉。

@@ -1729,6 +1729,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [chatworkRoomId, setChatworkRoomId] = useState('')
+  const [chatworkAccountId, setChatworkAccountId] = useState('')
   const [contractorType, setContractorType] = useState<'daiko' | 'video_editor'>('daiko')
   const [unitPrice, setUnitPrice] = useState('')
   const [aliases, setAliases] = useState('')
@@ -1739,6 +1740,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
       setName(initial?.name ?? '')
       setEmail(initial?.email ?? '')
       setChatworkRoomId(initial?.chatwork_room_id ?? '')
+      setChatworkAccountId(initial?.chatwork_account_id ?? '')
       setContractorType(initial?.contractor_type ?? 'daiko')
       setUnitPrice(initial?.unit_price ? initial.unit_price.toString() : '')
       setAliases(initial?.aliases ?? '')
@@ -1754,6 +1756,7 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
       name,
       email: email || null,
       chatwork_room_id: chatworkRoomId || null,
+      chatwork_account_id: chatworkAccountId || null,
       contractor_type: contractorType,
       aliases: aliases.trim() || null,
       ...(contractorType === 'video_editor' ? { unit_price: unitPrice ? Number(unitPrice) : 0 } : {}),
@@ -1819,6 +1822,19 @@ function ContractorFormDialog({ open, onClose, onSaved, onError, initial }: {
           />
           <p className="mt-1 text-xs text-muted-foreground">
             その人とのチャットを開いたURLの #!rid の後ろの数字。請求書の未提出リマインドの送信先になります（未登録の人には送れません）。
+          </p>
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">ChatworkアカウントID</label>
+          <input
+            inputMode="numeric"
+            value={chatworkAccountId}
+            onChange={(e) => setChatworkAccountId(e.target.value)}
+            placeholder="例: 6322168"
+            className="w-full border rounded px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Chatworkでその人宛てに「To」を付けたときに出る [To:1234567] の数字。請求書の返信の先頭に宛先として付き、相手に通知が届きます（未登録なら宛先なしで送ります）。
           </p>
         </div>
         <div>

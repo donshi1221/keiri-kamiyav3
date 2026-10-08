@@ -253,6 +253,13 @@
       "when": 1791419607817,
       "tag": "0035_outgoing_the_hunter",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791446341564,
+      "tag": "0036_rare_the_fury",
+      "breakpoints": true
     }
   ]
 }

@@ -85,12 +85,26 @@ const optionalChatworkRoomId = z.preprocess(
   z.string().regex(/^\d+$/, { message: 'ChatworkルームIDは数字で入力してください' }).nullable()
 )
 
+// ChatworkアカウントID。Chatworkの宛先指定 [To:6322168] の数字を写してもらう欄なので、
+// 「[To:…]」や「To:…」のまま貼られても数字だけに寄せる。空欄は「未登録」＝null。
+const optionalChatworkAccountId = z.preprocess(
+  (v) => {
+    if (typeof v !== 'string') return v === undefined ? null : v
+    const trimmed = v.trim()
+    if (trimmed === '') return null
+    const m = trimmed.match(/^\[?\s*To\s*:\s*(\d+)\s*\]?$/i)
+    return m ? m[1] : trimmed
+  },
+  z.string().regex(/^\d+$/, { message: 'ChatworkアカウントIDは数字で入力してください' }).nullable()
+)
+
 export const contractorCreateSchema = z.object({
   name: z.string().trim().min(1, { message: '委託者名は必須です' }),
   contractor_type: z.enum(['daiko', 'video_editor']).optional(),
   unit_price: moneyInt.optional(),
   email: optionalEmail.optional(),
   chatwork_room_id: optionalChatworkRoomId.optional(),
+  chatwork_account_id: optionalChatworkAccountId.optional(),
   // 請求書の差出人名に書かれる呼び名（通称・字違い）。カンマ区切りの1行として保存し、
   // 分解は照合側（lib/invoice-check）で行う＝入力の見た目とDBの値を一致させる。
   aliases: z.string().nullish(),

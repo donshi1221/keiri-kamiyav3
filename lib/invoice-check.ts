@@ -100,7 +100,13 @@ function deliveryHoldDetail(row: DeliveryCheckRow, unitPrice: number): string {
   return '納品チェックの結果を取得できませんでした'
 }
 
-type ContractorRow = { id: string; name: string; contractor_type: 'daiko' | 'video_editor'; unit_price: number }
+type ContractorRow = {
+  id: string
+  name: string
+  contractor_type: 'daiko' | 'video_editor'
+  unit_price: number
+  chatwork_account_id: string | null
+}
 
 // 照合OKになったときだけ月次レコードへ書き戻す納品実績。請求書チェックの中で納品シートを
 // 読んで金額を出せた編集者の行だけが入る（既に実支払額が入っている行・代行者は対象外）。
@@ -609,6 +615,7 @@ async function resolveContractor(issuer: string): Promise<{ contractor: Contract
       name: contractors.name,
       contractor_type: contractors.contractor_type,
       unit_price: contractors.unit_price,
+      chatwork_account_id: contractors.chatwork_account_id,
       aliases: contractors.aliases,
     })
     .from(contractors)
@@ -775,6 +782,7 @@ async function syncReplyDraft(
   draft: {
     kind: InvoiceReplyKind
     contractorName: string
+    chatworkAccountId: string | null
     month: number | null
     amount: number | null
     reasons: InvoiceNgReason[]
@@ -796,6 +804,7 @@ async function syncReplyDraft(
       {
         kind: draft.kind,
         name: draft.contractorName,
+        chatworkAccountId: draft.chatworkAccountId,
         month: draft.month,
         amount: draft.amount,
         reasons: draft.reasons,
@@ -1133,6 +1142,7 @@ export async function checkInvoiceAndSave(
       ? {
           kind: replyKind,
           contractorName: contractor.name,
+          chatworkAccountId: contractor.chatwork_account_id,
           month: resolvedMonth,
           amount: row.extracted_amount,
           reasons: ngReasons,

@@ -36,6 +36,9 @@ export const contractors = pgTable('contractors', {
   // 数値ではなく text にしているのは、IDがAPIのURLにそのまま載る識別子で計算に使わないため
   // （桁あふれや先頭0の欠落といった数値化に伴う事故を避ける）。未登録の人には送らない。
   chatwork_room_id: text('chatwork_room_id'),
+  // ChatworkのアカウントID（数字の文字列）。請求書の返信の文面の先頭に付ける [To:…] の宛先で、
+  // 相手に通知を飛ばすために使う。room_id と同じく計算に使わない識別子なので text にしている。
+  chatwork_account_id: text('chatwork_account_id'),
   notes: text('notes'),
   // 請求書の差出人名に書かれる呼び名（通称・字違い）。カンマ区切りで複数持つ。
   // クライアントの aliases と同じ理由（例:「サトウタイチ」と「佐藤太一」）で、
