@@ -29,6 +29,7 @@ import { buildInvoiceReplyBody } from '@/lib/invoice-reply'
 import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
 import {
   CAUTION_LABEL_SEPARATOR,
+  attributeWorkItems,
   cautionKeyOf,
   clientMatchNames,
   extractItemDate,
@@ -45,6 +46,7 @@ import type {
   InvoiceCheckTrigger,
   InvoiceExtraItem,
   InvoiceExtractedItem,
+  InvoiceManualApprovePreview,
   InvoiceNgReason,
   InvoicePayoutBreakdownRow,
   InvoiceReplyKind,
@@ -133,6 +135,9 @@ type ExpectedOutcome =
       // ここでは「請求書のどの明細が認め済みか」を引くためだけに持つ。
       approvedExtraKeys: Set<string>
       payouts: DeliveryPayoutApply[]
+      // 納品シートから金額を出せなかった行（tolerateDeliveryHold のときだけ入る）。内訳には ¥0 で
+      // 載せてあるので、「予定0円」と取り違えないよう呼び出し側がここで見分ける。
+      unresolvedRecordIds: string[]
     }
   | { hold: string }
 
@@ -150,7 +155,10 @@ async function computeExpectedPayout(
   month: number,
   // 支払月が請求書の記載月とずれるときだけ、保留文言に「（支払月）」と添える
   // （現状は編集者・代行者とも常にずれるため常に true になるが、将来の例外に備えて残す）。
-  payoutMonthShifted: boolean
+  payoutMonthShifted: boolean,
+  // 手動OKの割り当て案は、納品シートを読めない行があっても他の行の内訳と明細の帰属先を知りたい。
+  // true のときは納品チェック未反映で全体を保留にせず、その行を金額不明として先へ進む。
+  options: { tolerateDeliveryHold?: boolean } = {}
 ): Promise<ExpectedOutcome> {
   const assignmentRows = await db.query.assignments.findMany({
     where: (a, { and: andOp, eq: eqOp }) => andOp(eqOp(a.contractor_id, contractor.id), eqOp(a.active, true)),
@@ -186,6 +194,7 @@ async function computeExpectedPayout(
   const breakdown: InvoicePayoutBreakdownRow[] = []
   const skipped: SkippedClient[] = []
   const payouts: DeliveryPayoutApply[] = []
+  const unresolvedRecordIds: string[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -217,7 +226,7 @@ async function computeExpectedPayout(
       // 代行者は契約額での支払い＝本数の概念が無いため count は null。
       const amount = record.payout_amount_snapshot ?? assignment.contractor_payout_amount
       total += amount
-      breakdown.push({ clientName, count: null, amount, matchNames, ...payment })
+      breakdown.push({ recordId: record.id, clientName, count: null, amount, matchNames, ...payment })
       continue
     }
     if (record.actual_payout_amount !== null) {
@@ -225,6 +234,7 @@ async function computeExpectedPayout(
       // 納品チェックの反映時に控えた本数。古い行では未記録（null）のことがあり、
       // その場合は金額だけで照合する（本数を単価から逆算すると単価改定の月にズレる）。
       breakdown.push({
+        recordId: record.id,
         clientName,
         count: record.delivered_video_count,
         amount: record.actual_payout_amount,
@@ -251,10 +261,15 @@ async function computeExpectedPayout(
       // 未達（short）や設定・権限不備（attention）は人が直す余地があるため従来どおり保留。
       if (deliveryTone(delivery) === 'none') {
         notes.push(`${clientName}: 対象月の納品予定なし（¥0）`)
-        breakdown.push({ clientName, count: 0, amount: 0, matchNames, ...payment })
+        breakdown.push({ recordId: record.id, clientName, count: 0, amount: 0, matchNames, ...payment })
         // 0円も書き戻す。請求書全体の金額が一致してOKになった時点でこの0円は検証を通った数字であり、
         // 支払額欄を空欄のまま残すと「まだ確認していない行」と見分けが付かなくなるため。
         payouts.push({ recordId: record.id, amount: 0, videoCount: 0 })
+        continue
+      }
+      if (options.tolerateDeliveryHold) {
+        unresolvedRecordIds.push(record.id)
+        breakdown.push({ recordId: record.id, clientName, count: null, amount: 0, matchNames, ...payment })
         continue
       }
       return {
@@ -262,7 +277,7 @@ async function computeExpectedPayout(
       }
     }
     total += suggested
-    breakdown.push({ clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
+    breakdown.push({ recordId: record.id, clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
     payouts.push({ recordId: record.id, amount: suggested, videoCount: delivery.delivered ?? 0 })
   }
 
@@ -282,7 +297,7 @@ async function computeExpectedPayout(
     expenseRows.filter((e) => e.category === 'extra' && e.itemKey !== null).map((e) => e.itemKey as string)
   )
 
-  return { amount: total, notes, breakdown, skipped, expenseTotal, approvedExtraKeys, payouts }
+  return { amount: total, notes, breakdown, skipped, expenseTotal, approvedExtraKeys, payouts, unresolvedRecordIds }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -486,18 +501,16 @@ function compareInvoiceItems(
     const note = checkPaymentCount(label, target, payout, confirmedCautions)
     if (note) countNotes.push(note)
   }
-  // kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
+  // 業務明細（work）の見分けと帰属は attributeWorkItems に任せる（手動OKの割り当て案と同じ結果を使うため）。
   // 追加費用（extra）はクライアント別の支払予定に相手がいないので、ここでは扱わず呼び出し側で別に見る。
-  const workItems = items.filter((item) => item.kind !== 'expense' && item.kind !== 'extra')
   const expenseItems = items.filter((item) => item.kind === 'expense')
   // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
-  const matchedItems = new Map<number, InvoiceExtractedItem[]>()
-  const candidateNames = breakdown.map((target) => target.matchNames)
+  const attribution = attributeWorkItems(items, breakdown.map((target) => target.matchNames))
+  const matchedItems = attribution.matched
   const skippedNames = skipped.map((client) => client.matchNames)
 
-  for (const item of workItems) {
-    const { indexes } = resolveItemClient(item, candidateNames)
+  for (const { item, indexes } of attribution.resolved) {
     if (indexes.length === 0) {
       // 内訳に当たらなかった明細がスキップ中のクライアント分なら、「特定できません」ではなく
       // 「スキップ中のクライアントの分が載っている」と伝える（マスタの別名を疑わせないため）。
@@ -526,9 +539,7 @@ function compareInvoiceItems(
       addCountNote(item.label, null)
       continue
     }
-    const index = indexes[0]
-    matchedItems.set(index, [...(matchedItems.get(index) ?? []), item])
-    addCountNote(item.label, breakdown[index])
+    addCountNote(item.label, breakdown[indexes[0]])
   }
 
   breakdown.forEach((target, index) => {
@@ -668,6 +679,88 @@ export async function findPayoutMonthlyRecords(
         isNull(monthlyRecords.skipped_at)
       )
     )
+}
+
+// 手動OKのダイアログに出す割り当て案。未入力の月次レコード（pending）ごとに、支払予定額と
+// 「請求書でそのクライアント分として書かれた金額」を並べ、人が行ごとの実支払額を決める材料にする。
+// 帰属は照合本体と同じ attributeWorkItems の結果を使う（判定理由の表示と食い違わせないため）。
+// 追加費用・経費の明細は別の仕組み（認める／経費登録）で扱うので、ここには出さない。
+// payout は支払月。pending は呼び出し側が findPayoutMonthlyRecords で引いた未入力行。
+// 請求書か委託者が引けなければ null（呼び出し側が404を返す）。
+export async function buildManualApprovePreview(
+  invoiceId: string,
+  contractorId: string,
+  payout: YearMonth,
+  pending: { id: string; clientName: string }[]
+): Promise<InvoiceManualApprovePreview | null> {
+  const [invoice] = await db
+    .select({
+      extracted_amount: invoiceUploads.extracted_amount,
+      extracted_items: invoiceUploads.extracted_items,
+      rejected_extras: invoiceUploads.rejected_extras,
+    })
+    .from(invoiceUploads)
+    .where(eq(invoiceUploads.id, invoiceId))
+  const [contractor] = await db
+    .select({
+      id: contractors.id,
+      name: contractors.name,
+      contractor_type: contractors.contractor_type,
+      unit_price: contractors.unit_price,
+      chatwork_account_id: contractors.chatwork_account_id,
+    })
+    .from(contractors)
+    .where(eq(contractors.id, contractorId))
+  if (!invoice || !contractor) return null
+
+  // 保留の文言は使わない（下で行だけ返す）ので、「（支払月）」を添えるかどうかはどちらでもよい。
+  const expected = await computeExpectedPayout(contractor, payout.year, payout.month, true, {
+    tolerateDeliveryHold: true,
+  })
+  if ('hold' in expected) {
+    // 内訳が組めないと明細の帰属先も決められない。行だけ返し、金額は人に入れてもらう。
+    return {
+      rows: pending.map((r) => ({ recordId: r.id, clientName: r.clientName, expectedAmount: null, billedAmount: null })),
+      unassigned: [],
+      invoiceAmount: invoice.extracted_amount,
+      targetTotal: null,
+    }
+  }
+
+  const items = invoice.extracted_items ?? []
+  const attribution = attributeWorkItems(items, expected.breakdown.map((target) => target.matchNames))
+  const unresolved = new Set(expected.unresolvedRecordIds)
+  // 未入力行の支払予定のうち、支払予定額（expected.amount）に含まれている分。
+  let pendingExpected = 0
+  const rows = pending.map((r) => {
+    const index = expected.breakdown.findIndex((target) => target.recordId === r.id)
+    const expectedAmount = index >= 0 && !unresolved.has(r.id) ? expected.breakdown[index].amount : null
+    pendingExpected += expectedAmount ?? 0
+    return {
+      recordId: r.id,
+      clientName: r.clientName,
+      expectedAmount,
+      billedAmount: index >= 0 ? attribution.billedAmounts[index] : null,
+    }
+  })
+
+  // 再照合は「未承認の追加費用を除いた請求額」と支払予定額を比べる（compareTotalWithExtras）。
+  // 支払予定額のうち未入力行の分だけが今回の入力で置き換わるので、残り（入力済みの行・経費・
+  // 認め済みの追加費用）を請求額から引いた額が、入力の合計の目標になる。
+  // 代行者は契約額で照合され、ここで入れた金額は判定に使われないため目標を出さない。
+  let targetTotal: number | null = null
+  if (contractor.contractor_type === 'video_editor' && invoice.extracted_amount !== null) {
+    const extras = decideExtraItems(items, expected.approvedExtraKeys, new Set(invoice.rejected_extras ?? []))
+    const total = compareTotalWithExtras(invoice.extracted_amount, expected.amount, extras)
+    targetTotal = total.billedWithoutExtras - (expected.amount - pendingExpected)
+  }
+
+  return {
+    rows,
+    unassigned: attribution.unassigned.map((item) => ({ label: item.label, amount: item.amount })),
+    invoiceAmount: invoice.extracted_amount,
+    targetTotal,
+  }
 }
 
 // 照合OK＝「その委託者からその月の請求書が正しく届いた」ということなので、

@@ -189,9 +189,17 @@ export const invoiceExtractedPatchSchema = z.object({
 })
 
 // 保留の手動OK。納品シートの照合を飛ばし、人が確認した金額を月次レコードの実支払額として確定する。
-// 金額以外は請求書側の値をそのまま使うため、受け取る入力はこの1項目だけ。
+// 金額以外は請求書側の値をそのまま使うため、受け取る入力は「どの月次レコードにいくら入れるか」だけ。
+// 行の過不足（未入力の行すべてに1つずつ）はDBを見ないと分からないため、API側で確かめる。
 export const invoiceManualApproveSchema = z.object({
-  amount: moneyInt,
+  allocations: z
+    .array(
+      z.object({
+        recordId: z.uuid({ message: '月次レコードの指定が不正です' }),
+        amount: moneyInt,
+      })
+    )
+    .min(1, { message: '支払額を入力してください' }),
 })
 
 // 注意行の「確認済みにする / 取り消す」。key は画面が注意行の本文から復元したキー

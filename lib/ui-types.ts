@@ -201,6 +201,9 @@ export type InvoiceExtraAction =
 // nmAsDate はそのクライアントの「N/M」の読み方（clients.nm_as_date）。回数として読むか
 // 日付として読むかは明細を当てたクライアントが決まらないと判断できないため、内訳の行に持たせる。
 export interface InvoicePayoutBreakdownRow {
+  // この内訳のもとになった月次レコード。手動OKの割り当て案で、内訳の行と
+  // 「金額を入れる先の月次レコード」を対応づけるために持たせる。
+  recordId: string
   clientName: string
   count: number | null
   amount: number
@@ -208,6 +211,33 @@ export interface InvoicePayoutBreakdownRow {
   paymentStartMonth: string | null
   paymentCount: number | null
   nmAsDate: boolean
+}
+
+// 手動OKの割り当て案（GET /api/invoice-check/[id]/approve）の1行。金額を入れる先＝実支払額が
+// 未入力の月次レコード1件に対応する。
+// expectedAmount は支払予定額（納品シートを読めないなど、算出できなければ null）。
+// billedAmount は請求書でそのクライアント分と特定できた業務明細の金額合計
+// （特定できた明細が無い・金額が読めていない場合は null）。
+export interface InvoiceManualApproveRow {
+  recordId: string
+  clientName: string
+  expectedAmount: number | null
+  billedAmount: number | null
+}
+
+// 手動OKの割り当て案。unassigned はどのクライアント分か1つに絞れなかった業務明細で、人が手で振り分ける。
+// targetTotal は「行の合計がこの額なら、再照合で請求額と支払予定額の合計が一致する」目標額
+// （算出できないときは null）。
+export interface InvoiceManualApprovePreview {
+  rows: InvoiceManualApproveRow[]
+  unassigned: { label: string; amount: number | null }[]
+  invoiceAmount: number | null
+  targetTotal: number | null
+}
+
+// POST /api/invoice-check/[id]/approve に送る内容。未入力の月次レコードすべてに金額を1つずつ付ける。
+export interface InvoiceManualApproveInput {
+  allocations: { recordId: string; amount: number }[]
 }
 
 // 読み取りは失敗しても例外にせず、理由を持ち回って extract_error に保存する。

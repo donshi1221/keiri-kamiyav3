@@ -33,6 +33,8 @@ import type {
   InvoiceExtraItem,
   InvoiceExtractedItem,
   InvoiceExtractedPatch,
+  InvoiceManualApproveInput,
+  InvoiceManualApprovePreview,
   InvoiceNoteLine,
   InvoiceNoteMark,
   InvoiceReplyAction,
@@ -1214,25 +1216,76 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
   onApproved: (skipped: string | null) => void
   onError: (msg: string) => void
 }) {
-  const [amount, setAmount] = useState('')
+  const [preview, setPreview] = useState<InvoiceManualApprovePreview | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // 入力中の金額（月次レコードのID → 入力欄の文字列）。空欄を 0 と区別するため文字列のまま持つ。
+  const [amounts, setAmounts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!target) return
+    // 取得中にダイアログを閉じて別の請求書を開いたとき、遅れて届いた前の案で上書きしないための印。
+    let cancelled = false
     setSaving(false)
-    // 多くの場合「請求書のとおりに支払う」ため、請求額をそのまま初期値にする。
-    setAmount(target.extracted_amount === null ? '' : String(target.extracted_amount))
+    setPreview(null)
+    setLoadError(null)
+    setAmounts({})
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/invoice-check/${target.id}/approve`, { cache: 'no-store' })
+        if (cancelled) return
+        if (!res.ok) {
+          const message = await readErrorMessage(res, '割り当て案の取得に失敗しました。')
+          if (!cancelled) setLoadError(message)
+          return
+        }
+        const data = (await res.json()) as InvoiceManualApprovePreview
+        if (cancelled) return
+        // 請求書でそのクライアント分と特定できた金額を初期値にする（多くの場合「請求書のとおりに支払う」ため）。
+        // 特定できなかった行は、行が1つなら残り全部がその行の分なので目標額（無ければ請求額）を入れる。
+        // 複数行あるときは按分の根拠が無いので空欄のままにし、人に入れてもらう。
+        const single = data.rows.length === 1
+        setAmounts(
+          Object.fromEntries(
+            data.rows.map((r) => {
+              const initial = r.billedAmount ?? (single ? (data.targetTotal ?? data.invoiceAmount) : null)
+              return [r.recordId, initial === null ? '' : String(initial)]
+            })
+          )
+        )
+        setPreview(data)
+      } catch {
+        if (!cancelled) setLoadError('通信に失敗しました。接続を確認して再度お試しください。')
+      }
+    })()
+    return () => { cancelled = true }
   }, [target])
+
+  const rows = preview?.rows ?? []
+  const multiple = rows.length > 1
+  const parsedAmounts = rows.map((r) => {
+    const text = (amounts[r.recordId] ?? '').trim()
+    const value = text === '' ? null : Number(text)
+    return value !== null && Number.isFinite(value) && value >= 0 ? value : null
+  })
+  // 1行でも空欄・不正な値があると、その行だけ納品シート照合に回ってしまうため確定させない。
+  const allValid = rows.length > 0 && parsedAmounts.every((v) => v !== null)
+  const total = parsedAmounts.reduce<number>((sum, v) => sum + (v ?? 0), 0)
+  const targetTotal = preview?.targetTotal ?? null
+  const totalGap = allValid && targetTotal !== null ? total - targetTotal : 0
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!target) return
+    if (!target || !allValid) return
     setSaving(true)
     try {
+      const body: InvoiceManualApproveInput = {
+        allocations: rows.map((r, index) => ({ recordId: r.recordId, amount: parsedAmounts[index] ?? 0 })),
+      }
       const res = await fetch(`/api/invoice-check/${target.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: Number(amount) }),
+        body: JSON.stringify(body),
       })
       setSaving(false)
       if (!res.ok) {
@@ -1248,45 +1301,82 @@ function ManualApproveDialog({ target, onClose, onApproved, onError }: {
     }
   }
 
-  // 期待額（支払予定額）が分かっていて、入力中の金額も数値として有効なら、差額をその場で見せる。
-  // ダッシュボードに移動しなくても「これで確定して大丈夫か」がこの画面だけで判断できるようにするため。
-  const expectedAmount = target?.expected_amount ?? null
-  const parsedAmount = amount.trim() === '' ? null : Number(amount)
-  const hasValidDiff = expectedAmount !== null && parsedAmount !== null && Number.isFinite(parsedAmount)
-  const diff = hasValidDiff ? parsedAmount - expectedAmount : null
-
   return (
     <FormDialog open={!!target} onClose={onClose} title="手動でOKにする">
       <form onSubmit={submit} className="space-y-4">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          「{target?.file_name}」について、納品シートの照合をスキップし、入力した金額を実支払額として確定します。
+          「{target?.file_name}」について、納品シートの照合をスキップし、入力した金額を
+          {multiple ? 'クライアントごとの' : ''}実支払額として確定します。
           確定後は入力した金額で自動照合をやり直すため、請求額と合っていなければNGになります。
         </p>
-        {hasValidDiff && diff !== null && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            支払予定 {formatAmount(expectedAmount)} に対し {formatAmount(parsedAmount)} で確定します
-            {diff === 0
-              ? '（支払予定と一致します）'
-              : `（差額 ${diff > 0 ? '+' : '-'}¥${Math.abs(diff).toLocaleString('ja-JP')}）`}
+        {!preview && !loadError && <p className="text-sm text-muted-foreground">読み込み中…</p>}
+        {loadError && (
+          <p className="rounded bg-danger-subtle px-2 py-1 text-xs leading-relaxed text-danger">{loadError}</p>
+        )}
+        {preview && preview.unassigned.length > 0 && (
+          <div className="space-y-1 rounded bg-warning-subtle px-3 py-2 text-xs leading-relaxed text-warning">
+            <p className="font-medium">どのクライアント分か特定できなかった明細</p>
+            <ul className="space-y-0.5">
+              {preview.unassigned.map((item, index) => (
+                <li key={index} className="flex flex-wrap justify-between gap-x-3">
+                  <span className="min-w-0 break-words">{item.label}</span>
+                  <span className="shrink-0 tabular-nums">{item.amount === null ? '金額不明' : formatAmount(item.amount)}</span>
+                </li>
+              ))}
+            </ul>
+            <p>下の金額には含めていません。該当するクライアントの欄に手で足してください。</p>
+          </div>
+        )}
+        {rows.map((r, index) => {
+          // 支払予定額が分かっていて、入力中の金額も有効なら、差額をその場で見せる。
+          // ダッシュボードに移動しなくても「これで確定して大丈夫か」がこの画面だけで判断できるようにするため。
+          const value = parsedAmounts[index]
+          const diff = r.expectedAmount !== null && value !== null ? value - r.expectedAmount : null
+          const inputId = `manual-approve-${r.recordId}`
+          return (
+            <div key={r.recordId}>
+              <label htmlFor={inputId} className="text-sm font-medium block mb-1 break-words">
+                {multiple ? `${r.clientName} の実支払額` : '実支払額'}
+              </label>
+              <input
+                id={inputId}
+                type="number"
+                inputMode="numeric"
+                min="0"
+                value={amounts[r.recordId] ?? ''}
+                onChange={(e) => setAmounts((prev) => ({ ...prev, [r.recordId]: e.target.value }))}
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="0"
+              />
+              {r.expectedAmount !== null && diff !== null && (
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  支払予定 {formatAmount(r.expectedAmount)}
+                  {diff === 0
+                    ? ' と一致します'
+                    : ` に対し差額 ${diff > 0 ? '+' : '-'}¥${Math.abs(diff).toLocaleString('ja-JP')}`}
+                </p>
+              )}
+            </div>
+          )
+        })}
+        {multiple && (
+          <p className="flex flex-wrap justify-between gap-x-3 border-t pt-3 text-sm font-medium">
+            <span>合計</span>
+            <span className="tabular-nums">{allValid ? formatAmount(total) : '—'}</span>
           </p>
         )}
-        <div>
-          <label className="text-sm font-medium block mb-1">実支払額</label>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full border rounded px-3 py-2 text-sm"
-            placeholder="0"
-          />
-        </div>
+        {/* 確定は止めない。請求書どおりに払わない（差額が正しい）場合もあるため、NGになることだけ先に伝える。 */}
+        {totalGap !== 0 && (
+          <p className="rounded bg-warning-subtle px-2 py-1 text-xs leading-relaxed text-warning">
+            このまま確定すると請求額と合わずNGになります（差 ¥{Math.abs(totalGap).toLocaleString('ja-JP')}{' '}
+            {totalGap > 0 ? '多い' : '少ない'}）
+          </p>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" className="h-11 md:h-7" type="button" onClick={onClose}>
             キャンセル
           </Button>
-          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || amount.trim() === ''}>
+          <Button size="sm" className="h-11 md:h-7" type="submit" disabled={saving || !allValid}>
             {saving ? '確定中…' : 'OKにする'}
           </Button>
         </div>

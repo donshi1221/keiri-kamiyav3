@@ -83,6 +83,46 @@ export function resolveItemClient(
   return { indexes: bestMatchIndexes(item.label, candidateNames), source: 'label' }
 }
 
+// 業務明細（work）を、候補（クライアント別の支払予定）へ帰属させる。
+// 照合本体（lib/invoice-check の compareInvoiceItems）と、手動OKの割り当て案が同じ結果を使う。
+// 別々に帰属を決めると、判定理由の表示と割り当て案の金額が食い違うため1か所にまとめている。
+// kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
+// 経費（expense）と追加費用（extra）はクライアント別の支払予定に相手がいないので対象にしない。
+//   resolved      … 業務明細ごとの帰属先（候補の位置）。明細の並び順のまま。1つに絞れた行だけが帰属済み
+//   matched       … 候補の位置 → 帰属した明細（1クライアントを複数行に分けて書く請求書があるため配列）
+//   billedAmounts … 候補ごとの請求額の合計。帰属した明細が無い・金額が1行も読めていない候補は null
+//                   （0 にすると「0円と請求されている」と区別が付かなくなる）
+//   unassigned    … 1つに絞れなかった明細（該当なし・候補複数の両方）
+export function attributeWorkItems<
+  T extends { label: string; amount: number | null; client?: string | null; kind?: string },
+>(
+  items: T[],
+  candidateNames: string[][]
+): {
+  resolved: { item: T; indexes: number[] }[]
+  matched: Map<number, T[]>
+  billedAmounts: (number | null)[]
+  unassigned: T[]
+} {
+  const resolved = items
+    .filter((item) => item.kind !== 'expense' && item.kind !== 'extra')
+    .map((item) => ({ item, indexes: resolveItemClient(item, candidateNames).indexes }))
+  const matched = new Map<number, T[]>()
+  const unassigned: T[] = []
+  for (const { item, indexes } of resolved) {
+    if (indexes.length !== 1) {
+      unassigned.push(item)
+      continue
+    }
+    matched.set(indexes[0], [...(matched.get(indexes[0]) ?? []), item])
+  }
+  const billedAmounts = candidateNames.map((_, index) => {
+    const amounts = (matched.get(index) ?? []).flatMap((item) => (item.amount === null ? [] : [item.amount]))
+    return amounts.length === 0 ? null : amounts.reduce((sum, amount) => sum + amount, 0)
+  })
+  return { resolved, matched, billedAmounts, unassigned }
+}
+
 // 明細ラベルの「N/M」を日付（月/日）として読む。
 // クライアントによっては「7/28」が支払回数ではなく台本作成日を指す運用があり（clients.nm_as_date）、
 // 経費明細の日付欄を埋めるときも同じ書き方から日付を拾いたいため、抽出をここに1本化する。
