@@ -139,7 +139,8 @@ type ExpectedOutcome =
       // 載せてあるので、「予定0円」と取り違えないよう呼び出し側がここで見分ける。
       unresolvedRecordIds: string[]
     }
-  | { hold: string }
+  // holdDetails は保留の理由が複数あるときの内訳（1件1行）。hold はその見出しになる。
+  | { hold: string; holdDetails?: string[] }
 
 // 判定理由に出す立替経費の呼び名。実在のクライアント名と混ざらないよう固定の1語にまとめる。
 const EXPENSE_LABEL = '立替経費'
@@ -195,6 +196,7 @@ async function computeExpectedPayout(
   const skipped: SkippedClient[] = []
   const payouts: DeliveryPayoutApply[] = []
   const unresolvedRecordIds: string[] = []
+  const deliveryHolds: string[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -272,13 +274,24 @@ async function computeExpectedPayout(
         breakdown.push({ recordId: record.id, clientName, count: null, amount: 0, matchNames, ...payment })
         continue
       }
-      return {
-        hold: `納品チェックが未反映のため金額を確定できません（${clientName}: ${deliveryHoldDetail(delivery, contractor.unit_price)}）`,
-      }
+      // ここで打ち切ると、1社直して再チェックするたびに次の1社が出てくる。最後まで調べてまとめて返す。
+      deliveryHolds.push(`${clientName}: ${deliveryHoldDetail(delivery, contractor.unit_price)}`)
+      continue
     }
     total += suggested
     breakdown.push({ recordId: record.id, clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
     payouts.push({ recordId: record.id, amount: suggested, videoCount: delivery.delivered ?? 0 })
+  }
+
+  // 1社だけなら従来どおり1行で伝える。複数あるときは件数を先頭に出し、どの会社が何で止まっているかを1社1行で並べる。
+  if (deliveryHolds.length === 1) {
+    return { hold: `納品チェックが未反映のため金額を確定できません（${deliveryHolds[0]}）` }
+  }
+  if (deliveryHolds.length > 1) {
+    return {
+      hold: `納品チェックが未反映のクライアントが${deliveryHolds.length}件あり、金額を確定できません`,
+      holdDetails: deliveryHolds,
+    }
   }
 
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
@@ -1047,6 +1060,7 @@ export async function checkInvoiceAndSave(
     const expected = await computeExpectedPayout(contractor, payout.year, payout.month, payout.month !== resolvedMonth)
     if ('hold' in expected) {
       record('hold', expected.hold)
+      for (const detail of expected.holdDetails ?? []) record('hold', detail)
     } else {
       expectedAmount = expected.amount
       deliveryPayouts = expected.payouts
