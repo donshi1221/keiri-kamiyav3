@@ -56,7 +56,7 @@ async function loadApproveTarget(id: string): Promise<{ target: ApproveTarget } 
     if (contractor && contractor.contractor_type !== 'video_editor') {
       return {
         response: Response.json(
-          { error: '代行者への支払額の変更はダッシュボードの支払予定額から行ってください（NGの手動OKは編集者のみ対象です）' },
+          { error: '代行者への支払額の変更はダッシュボードの支払予定額から行ってください（金額を入れ直す手動OKは編集者のみ対象です。金額を変えずにOKにするには「そのままOKにする」を使ってください）' },
           { status: 400 }
         ),
       }

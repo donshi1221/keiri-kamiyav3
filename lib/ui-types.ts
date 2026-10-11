@@ -319,7 +319,9 @@ export interface InvoiceCheckResult {
 // 合わないときのように、判定を変えずに「人が確認して」と伝えるためだけに使う。
 // confirm は「人が決めないと判定できない」問いかけ（追加費用を認めるかどうか）。決まるまで保留になる点は
 // hold と同じだが、直す場所がマスタや納品シートではなくこの画面の「認める／認めない」なので印を分ける。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'confirm' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed'
+// manualOk は「自動照合ではNG・保留だが、人が見てOKにした」印。判定理由は再チェックのたびに作り直されるため、
+// この印が残っているかどうかで、OKにした事実を次の再チェックへ引き継ぐ（fixed と同じ持ち方）。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'confirm' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed' | 'manualOk'
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {

@@ -139,6 +139,8 @@ export const INVOICE_CHECK_TRIGGERS = [
   'confirm_caution',
   'approve_extra',
   'reject_extra',
+  'manual_ok',
+  'manual_ok_cancel',
 ] as const
 
 // 委託者へ払う経費の種類（expenses.category）。expense＝実費の立て替え、extra＝請求書チェックで認めた追加費用。

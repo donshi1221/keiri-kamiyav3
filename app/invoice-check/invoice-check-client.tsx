@@ -17,7 +17,7 @@ import {
 import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import { formatInvoiceNote, parseInvoiceNotes } from '@/lib/invoice-notes'
+import { formatInvoiceNote, hasInvoiceNoteMark, parseInvoiceNotes } from '@/lib/invoice-notes'
 import {
   CAUTION_LABEL_SEPARATOR,
   cautionKeyFromNoteText,
@@ -81,6 +81,8 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   applied: 'text-muted-foreground',
   saved: 'text-muted-foreground',
   ok: 'text-muted-foreground',
+  // 人が上書きした結果であることは、自動でOKになった行と見分けられるよう色付きで残す。
+  manualOk: 'rounded bg-success-subtle px-2 py-1 text-success',
 }
 
 // NG行の右端に出す「今月はスキップ」の口。押せるときはボタン、できないときは理由の1行を出す。
@@ -1408,6 +1410,7 @@ export default function InvoiceCheckClient() {
   const [editTarget, setEditTarget] = useState<InvoiceCheckRow | null>(null)
   const [expenseTarget, setExpenseTarget] = useState<InvoiceCheckRow | null>(null)
   const [approveTarget, setApproveTarget] = useState<InvoiceCheckRow | null>(null)
+  const [manualOkTarget, setManualOkTarget] = useState<InvoiceCheckRow | null>(null)
   const [skipTarget, setSkipTarget] = useState<{ row: InvoiceCheckRow; record: InvoiceSkippableRecord } | null>(null)
   const [cautionBusyId, setCautionBusyId] = useState<string | null>(null)
   // 返信の文面の編集中の値（請求書ごと）。base は編集を始めたときの下書きで、再チェックなどで
@@ -1469,6 +1472,32 @@ export default function InvoiceCheckClient() {
     } finally {
       setRecheckingId(null)
     }
+  }
+
+  // 人が見てOKにする／その取り消し。どちらもサーバー側で照合をやり直して返るため、再チェックと同じ待ち表示を使う。
+  async function setManualOk(id: string, enabled: boolean) {
+    setRecheckingId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/invoice-check/${id}/manual-ok`, { method: enabled ? 'POST' : 'DELETE' })
+      if (!res.ok) {
+        setError(await readErrorMessage(res, enabled ? 'OKにできませんでした。' : '取り消しに失敗しました。'))
+        return
+      }
+      const data = (await res.json().catch(() => null)) as { skipped?: string } | null
+      if (typeof data?.skipped === 'string') setError(data.skipped)
+      await load()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    } finally {
+      setRecheckingId(null)
+    }
+  }
+
+  async function confirmManualOk() {
+    const target = manualOkTarget
+    setManualOkTarget(null)
+    if (target) await setManualOk(target.id, true)
   }
 
   // 注意の消し込み（confirmed=false で取り消し）。サーバー側は確認済みキーを保存したあと
@@ -1847,6 +1876,27 @@ export default function InvoiceCheckClient() {
                             手動でOKにする
                           </button>
                         )}
+                        {/* 金額を入れ直しても直らないNG・保留（支払い済みの過去分など）を、支払額を変えずに片付ける口。 */}
+                        {(r.status === 'hold' || r.status === 'ng') && (
+                          <button
+                            type="button"
+                            onClick={() => setManualOkTarget(r)}
+                            disabled={busy(r.id)}
+                            className="whitespace-nowrap text-info hover:underline disabled:text-muted-foreground"
+                          >
+                            そのままOKにする
+                          </button>
+                        )}
+                        {hasInvoiceNoteMark(r.check_notes, 'manualOk') && (
+                          <button
+                            type="button"
+                            onClick={() => setManualOk(r.id, false)}
+                            disabled={busy(r.id)}
+                            className="whitespace-nowrap text-info hover:underline disabled:text-muted-foreground"
+                          >
+                            {recheckingId === r.id ? '取り消し中…' : '手動OKを取り消す'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(r)}
@@ -1991,6 +2041,28 @@ export default function InvoiceCheckClient() {
                       手動でOKにする
                     </Button>
                   )}
+                  {(r.status === 'hold' || r.status === 'ng') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11"
+                      onClick={() => setManualOkTarget(r)}
+                      disabled={busy(r.id)}
+                    >
+                      そのままOKにする
+                    </Button>
+                  )}
+                  {hasInvoiceNoteMark(r.check_notes, 'manualOk') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-11"
+                      onClick={() => setManualOk(r.id, false)}
+                      disabled={busy(r.id)}
+                    >
+                      {recheckingId === r.id ? '取り消し中…' : '手動OKを取り消す'}
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" className="h-11 text-danger" onClick={() => setDeleteTarget(r)}>
                     削除
                   </Button>
@@ -2028,6 +2100,24 @@ export default function InvoiceCheckClient() {
         onApproved={handleApproved}
         onError={setError}
       />
+
+      {/* 自動照合の結果を人が上書きする操作なので、何が変わって何が変わらないかを見せてから実行する。 */}
+      <AlertDialog open={!!manualOkTarget} onOpenChange={(open) => { if (!open) setManualOkTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>この請求書をそのままOKにしますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{manualOkTarget?.file_name}」の判定をOKにします。支払額は変わりません（支払予定{' '}
+              {formatAmount(manualOkTarget?.expected_amount ?? null)} のまま）。NG・保留の理由は「詳細を見る」に記録として残り、
+              請求書受領のチェックとドライブへの保存を行います。委託者への返信の下書きは作りません。あとから取り消せます。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmManualOk}>OKにする</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 支払予定から外す操作なので、どのクライアントの何月分かをもう一度見せてから実行する。 */}
       <AlertDialog open={!!skipTarget} onOpenChange={(open) => { if (!open) setSkipTarget(null) }}>

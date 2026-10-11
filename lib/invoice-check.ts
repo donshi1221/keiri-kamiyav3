@@ -23,7 +23,13 @@ import {
 } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
-import { INVOICE_MANUAL_EDIT_NOTE, formatInvoiceNote, hasInvoiceNoteMark } from '@/lib/invoice-notes'
+import {
+  INVOICE_MANUAL_EDIT_NOTE,
+  INVOICE_NOTE_MARKS,
+  formatInvoiceNote,
+  hasInvoiceNoteMark,
+  parseInvoiceNotes,
+} from '@/lib/invoice-notes'
 import { compareTotalWithExtras, decideExtraItems } from '@/lib/invoice-extra'
 import { buildInvoiceReplyBody } from '@/lib/invoice-reply'
 import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
@@ -959,7 +965,8 @@ async function syncReplyDraft(
 // 行が無ければ null（呼び出し側が404を返す）。
 export async function checkInvoiceAndSave(
   id: string,
-  options: { trigger: InvoiceCheckTrigger; origin: string; manuallyEdited?: boolean }
+  // manualOk は「人が見てOKにする」の指定。true=OKにする / false=取り消す / 未指定=前回の判定理由から引き継ぐ。
+  options: { trigger: InvoiceCheckTrigger; origin: string; manuallyEdited?: boolean; manualOk?: boolean }
 ): Promise<InvoiceCheckOutcome | null> {
   const [row] = await db
     .select({
@@ -1158,7 +1165,36 @@ export async function checkInvoiceAndSave(
     }
   }
 
-  const status: InvoiceCheckStatus = hasNg ? 'ng' : hasHold ? 'hold' : 'ok'
+  const autoStatus: InvoiceCheckStatus = hasNg ? 'ng' : hasHold ? 'hold' : 'ok'
+
+  // ─── 人が確認してOKにした請求書 ─────────────────────────────
+  // 支払い済みの過去分や、金額を別で調整済みの請求書は、自動照合では直しようのないNG・保留が残り続ける。
+  // 人が見て問題ないと決めたものは、理由を記録に残したまま判定だけOKにする。
+  // 読み取り結果が変わったとき（手動修正・再読み取り）は、OKにした前提が変わるので引き継がない。
+  const manualOkRequested =
+    options.manualOk ?? (options.manuallyEdited === undefined && hasInvoiceNoteMark(row.check_notes, 'manualOk'))
+  // 自動照合でOKになったなら印は要らない（人が上書きした結果ではなくなるため）。
+  const manualOk = manualOkRequested && autoStatus !== 'ok'
+  if (manualOk) {
+    // NG・保留の行を色付きのまま残すと「まだ対応が要る」ように見える。OKの行（詳細を開いたときだけ出る）へ
+    // 落とし、自動照合では何だったのかを文頭に添えて記録として読めるようにする。
+    const demoted = parseInvoiceNotes(notes.join('\n')).map((line) =>
+      line.mark === 'ng' || line.mark === 'hold' || line.mark === 'caution' || line.mark === 'confirm'
+        ? formatInvoiceNote('ok', `自動照合では${INVOICE_NOTE_MARKS[line.mark]}: ${line.text}`)
+        : line.mark
+          ? formatInvoiceNote(line.mark, line.text)
+          : line.text
+    )
+    notes.splice(
+      0,
+      notes.length,
+      formatInvoiceNote('manualOk', `人が見てOKにしました（自動照合では${INVOICE_NOTE_MARKS[autoStatus === 'ng' ? 'ng' : 'hold']}・支払額は変えていません）`),
+      ...demoted
+    )
+    // 相手へ直しを求める理由ではなくなるため、履歴にも返信にも持ち込まない。
+    ngReasons.length = 0
+  }
+  const status: InvoiceCheckStatus = manualOk ? 'ok' : autoStatus
 
   // 受領チェックの自動付与はOKのときだけ。ng/hold は中身が確定していないため月次レコードには一切触らない。
   // 付与の結果も判定理由に残す（画面に出るのは check_notes だけなので、ここに書かないと何が起きたか分からない）。
@@ -1177,7 +1213,8 @@ export async function checkInvoiceAndSave(
     // ダッシュボード側にも残す。ここで書かないと編集者の支払額欄は空のままになる。
     // 受領チェック・ドライブ保存と同じくOKのときだけ行う（NG・保留は中身が確定していないため
     // 月次レコードには一切触らない）。
-    if (deliveryPayouts.length > 0) {
+    // 手動OKは金額が合った結果ではないので書き戻さない（支払額を変えずにOKにする操作のため）。
+    if (deliveryPayouts.length > 0 && !manualOk) {
       const applied = await applyDeliveryPayouts(deliveryPayouts)
       if (applied.applied > 0) {
         notes.push(
@@ -1251,8 +1288,15 @@ export async function checkInvoiceAndSave(
 
   // OKの文面には請求額を入れるため、金額が無ければ下書きにしない（OKは金額が一致した結果なので
   // 実際には必ず入っているが、型の上では null がありうる）。
-  const replyKind: InvoiceReplyKind | null =
-    status === 'ng' ? 'ng' : status === 'ok' && row.extracted_amount !== null ? 'ok' : null
+  // 手動OKでは下書きを作らない。OKの文面は「請求額で受領した」と伝えるもので、金額が合っていない
+  // 請求書にそのまま出すと、支払う額と違う金額を相手に約束してしまう。
+  const replyKind: InvoiceReplyKind | null = manualOk
+    ? null
+    : status === 'ng'
+      ? 'ng'
+      : status === 'ok' && row.extracted_amount !== null
+        ? 'ok'
+        : null
   await syncReplyDraft(
     id,
     contractor && replyKind
