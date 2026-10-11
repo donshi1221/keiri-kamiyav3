@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { db } from '@/lib/db'
 import { monthlyPayrollRecords, payrollReimbursementItems } from '@/lib/schema'
 import { and, asc, eq } from 'drizzle-orm'
-import { getLastDayOfMonth } from '@/lib/dates'
+import { addMonthsOf, getLastDayOfMonth } from '@/lib/dates'
 import { COMPANY_NAME, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import {
   PAYROLL_KIND_LABEL,
@@ -72,7 +72,10 @@ export default async function PayrollSlipPage({
   const kind = record.payroll_recipients?.kind ?? 'employee'
   const isExecutive = kind === 'executive'
   // 役員報酬は「給与明細書」と呼ばないため、表題も支給項目名も区分で言い換える。
-  const title = `${record.year}年${record.month}月分 ${isExecutive ? '役員報酬明細書' : '給与明細書'}`
+  // 月次レコードの年月は「支払う月」。支払うのは前月に働いた分なので、表題の「◯月分」は1か月前にずらす
+  // （支払日はずらさない）。
+  const workMonth = addMonthsOf(record.year, record.month, -1)
+  const title = `${workMonth.year}年${workMonth.month}月分 ${isExecutive ? '役員報酬明細書' : '給与明細書'}`
   // 支払日は月末を超える指定を末日に丸める（ダッシュボード・リマインドと同じ扱い）。
   const payDay = Math.min(
     record.payroll_recipients?.pay_day ?? PAYROLL_DEFAULT_PAY_DAY,

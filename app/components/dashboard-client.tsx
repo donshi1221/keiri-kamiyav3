@@ -1225,7 +1225,7 @@ function PayrollReimbursementDialog({ target, year, month, items, nextItems, onC
       <div className="space-y-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           本人が立て替えた実費を返すための明細です。非課税なので控除の計算には入らず、手取りに足して振り込みます。
-          使った月の翌月の給与で返すのが基本です（追加時は利用日から精算する給与を選びます）。
+          使った月の翌月に支払う給与で返すのが基本です（追加時は利用日から精算する給与を選びます）。
           「毎月の立替」の行も、この月だけ金額や項目を直せます（マスタの設定は変わりません）。
         </p>
 
@@ -1296,8 +1296,10 @@ function PayrollReimbursementDialog({ target, year, month, items, nextItems, onC
                   onChange={(e) => setForm((prev) => ({ ...prev, pay_month: e.target.value as ReimbursementPayMonth }))}
                   className="w-full rounded border border-border px-2 py-2 text-sm"
                 >
-                  <option value="current">{monthLabel}分</option>
-                  <option value="next">{nextMonthLabel}分</option>
+                  {/* 明細書の「◯月分」は働いた月（支払う月の前月）を指すため、ここで「分」と書くと同じ給与が
+                      別の月で呼ばれる。支払う月であることを言葉で示す。 */}
+                  <option value="current">{monthLabel}支払い</option>
+                  <option value="next">{nextMonthLabel}支払い</option>
                 </select>
               </div>
             )}
@@ -1319,7 +1321,7 @@ function PayrollReimbursementDialog({ target, year, month, items, nextItems, onC
         {nextItems.length > 0 && (
           <div className="space-y-2 pt-2">
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="text-sm font-medium text-foreground">{nextMonthLabel}分の給与で返す明細</h3>
+              <h3 className="text-sm font-medium text-foreground">{nextMonthLabel}支払いの給与で返す明細</h3>
               <span className="whitespace-nowrap text-xs text-muted-foreground">
                 合計 <span className="font-semibold text-foreground">¥{nextTotal.toLocaleString()}</span>
               </span>
