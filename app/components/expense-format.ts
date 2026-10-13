@@ -1,4 +1,4 @@
-import type { ExpenseItemKind } from '@/lib/ui-types'
+import type { ExpenseItemKind, ExpensePayMethod } from '@/lib/ui-types'
 
 // 経費の明細を「代表が割り当てる受付ページ」と「経理が確認する画面」の両方で同じ見た目にするための表示処理。
 // 片方だけ言い回しや書式を変えると、同じ1行が画面ごとに別物に見えて確認の突き合わせができなくなるため、
@@ -10,6 +10,12 @@ export const EXPENSE_KIND_LABEL: Record<ExpenseItemKind, string> = {
   company: '自社経費',
   other: 'その他',
   excluded: '対象外',
+}
+
+// 支払方法の表示名。番号を付けているのは、経理が「①か②か」で口頭確認しているため。
+export const EXPENSE_PAY_METHOD_LABEL: Record<ExpensePayMethod, string> = {
+  company: '①会社クレカ・ICOCA',
+  cash: '②現金',
 }
 
 // 利用日は date 列（'2026-07-30' の文字列）。Date に変換すると閲覧端末のタイムゾーン分だけ

@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { TZ, addMonthsOf, nextMonthOf } from '@/lib/dates'
-import { EXPENSE_ITEM_KINDS } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
 import type { Client } from '@/lib/schema'
 import type {
   ExpenseUploadRow,
@@ -25,10 +25,12 @@ import type {
   ExpenseRejectResult,
   ExpenseItemAssignment,
   ExpenseItemKind,
+  ExpensePayMethod,
   GoogleDriveStatus,
 } from '@/lib/ui-types'
 import {
   EXPENSE_KIND_LABEL,
+  EXPENSE_PAY_METHOD_LABEL,
   formatExpenseAmount,
   formatExpenseDate,
   formatExpenseRoute,
@@ -171,9 +173,10 @@ export default function ExpenseCheckClient() {
   // 明細ID => 経理が選んだ請求月。選んでいない行はここに入らず、既定（翌月）で登録される。
   // 受付をまたいで持てるよう受付単位ではなく明細IDで持つ（IDは受付をまたいで一意）。
   const [billingMonths, setBillingMonths] = useState<Record<string, BillingMonth>>({})
-  // 明細ID => 立替精算に含めるか。既定はON（代表が自分の財布から払っているのが通常のため）で、
-  // 会社カード決済など返金の要らない明細だけを経理が外す。ここに入っていない行はONとして扱う。
-  const [reimburse, setReimburse] = useState<Record<string, boolean>>({})
+  // 明細ID => 支払方法。現金（代表の立て替え）を選んだ行だけが立替精算に乗る。
+  // 既定値を持たせないのは、どちらを既定にしても選び忘れた行が黙って片方に倒れるため
+  // （既定で乗せていた頃は、会社カードの分まで代表へ返してしまうことがあった）。全行選ぶまで登録させない。
+  const [payMethods, setPayMethods] = useState<Record<string, ExpensePayMethod>>({})
   // 割当中（draft）の受付を経理がこの画面で割り当てるための選択。明細IDは受付をまたいで一意なので明細単位で持つ。
   const [assignDrafts, setAssignDrafts] = useState<Record<string, ItemAssignDraft>>({})
   // 区分の選択肢に出すクライアント。受付ページはサーバー側で渡せるが、この画面は認証済みなので社内APIから取る。
@@ -242,23 +245,54 @@ export default function ExpenseCheckClient() {
   }
 
   function isReimburseChecked(item: ExpenseUploadItemRow): boolean {
-    return reimburse[item.id] ?? true
+    return payMethods[item.id] === 'cash'
   }
 
-  // 表とカードで同じチェックボックスを出すため、見た目と挙動をここに1つだけ持つ。
-  function renderReimburseCheckbox(item: ExpenseUploadItemRow, disabled: boolean) {
+  // 支払方法をまだ選んでいない明細（立替精算の対象になりうる行だけを数える）。
+  function unselectedPayMethodItems(row: ExpenseUploadRow): ExpenseUploadItemRow[] {
+    return row.items.filter((item) => isReimbursableItem(item) && payMethods[item.id] === undefined)
+  }
+
+  // ICOCAの利用履歴のように1件の原本が全行同じ支払方法のことが多いので、まとめて入れられるようにする。
+  function setAllPayMethods(row: ExpenseUploadRow, method: ExpensePayMethod) {
+    setPayMethods((prev) => ({
+      ...prev,
+      ...Object.fromEntries(row.items.filter(isReimbursableItem).map((item) => [item.id, method])),
+    }))
+  }
+
+  // 表とカードで同じプルダウンを出すため、見た目と挙動をここに1つだけ持つ。
+  function renderPayMethodSelect(item: ExpenseUploadItemRow, disabled: boolean) {
+    // Record の添字は「必ず在る」型になるため、未選択（undefined）を型に戻してから扱う。
+    const selected = payMethods[item.id] as ExpensePayMethod | undefined
+    const value = selected ?? ''
     return (
-      <label className="flex min-h-11 items-center gap-2 md:min-h-0">
-        <input
-          type="checkbox"
-          aria-label="立替精算に含める"
-          checked={isReimburseChecked(item)}
-          disabled={disabled}
-          onChange={(e) => setReimburse((prev) => ({ ...prev, [item.id]: e.target.checked }))}
-          className="size-4"
-        />
-        <span className="text-xs text-muted-foreground md:hidden">立替精算に含める</span>
-      </label>
+      <select
+        aria-label="支払方法"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          const next = e.target.value as ExpensePayMethod | ''
+          setPayMethods((prev) => {
+            if (next !== '') return { ...prev, [item.id]: next }
+            const rest = { ...prev }
+            delete rest[item.id]
+            return rest
+          })
+        }}
+        // 未選択の行は登録を止めている原因なので、枠の色で見つけられるようにする。
+        className={cn(
+          'min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0',
+          value === '' && 'border-warning'
+        )}
+      >
+        <option value="">選択してください</option>
+        {EXPENSE_PAY_METHODS.map((method) => (
+          <option key={method} value={method}>
+            {EXPENSE_PAY_METHOD_LABEL[method]}
+          </option>
+        ))}
+      </select>
     )
   }
 
@@ -307,7 +341,7 @@ export default function ExpenseCheckClient() {
   // 立替精算は代表へ返す実際の振込額になるため、請求額と同じく押す前に必ず見せる。
   function reimbursementSummary(row: ExpenseUploadRow): string {
     const targets = row.items.filter((item) => isReimbursableItem(item) && isReimburseChecked(item))
-    if (targets.length === 0) return '立替精算に含める明細はありません。'
+    if (targets.length === 0) return '立替精算に含める明細（②現金）はありません。'
     const total = targets.reduce((sum, item) => sum + item.amount, 0)
     return `うち ${formatExpenseAmount(total)}（${targets.length}件）を代表への立替精算として、利用月の翌月の役員報酬に上乗せします。`
   }
@@ -506,8 +540,8 @@ export default function ExpenseCheckClient() {
           そのクライアントへの請求経費になります。自社経費・その他・対象外の行は記録だけが残ります。
         </p>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          「立替精算」にチェックが入った行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。
-          会社カードで払った分など、返金の要らない行はチェックを外してください。
+          「支払方法」で②現金を選んだ行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。
+          ①会社クレカ・ICOCA の行は返金が要らないので上乗せされません。全部の行で選ぶと登録できます。
         </p>
       </div>
 
@@ -563,6 +597,7 @@ export default function ExpenseCheckClient() {
         const showBillingMonth = row.status === 'submitted' && row.items.some(isBillableItem)
         // 立替精算の選択も、これから登録する受付（送信済み）のときだけ意味を持つ。
         const showReimburse = row.status === 'submitted' && row.items.some(isReimbursableItem)
+        const payMethodUnselected = showReimburse ? unselectedPayMethodItems(row).length : 0
         // 割当中（draft）の受付は、代表が受付URLを開き直せないと誰も触れなくなる。経理がこの画面で
         // 代わりに区分を割り当てられるようにする。明細が1件も無い受付は送信しようがないので除く。
         const assignable = row.status === 'draft' && !failed && row.items.length > 0
@@ -607,6 +642,24 @@ export default function ExpenseCheckClient() {
               </div>
             )}
 
+            {showReimburse && (
+              <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
+                <span>支払方法をまとめて選ぶ</span>
+                {EXPENSE_PAY_METHODS.map((method) => (
+                  <Button
+                    key={method}
+                    variant="outline"
+                    size="sm"
+                    className="h-11 md:h-7"
+                    onClick={() => setAllPayMethods(row, method)}
+                    disabled={busy}
+                  >
+                    全部 {EXPENSE_PAY_METHOD_LABEL[method]}
+                  </Button>
+                ))}
+              </div>
+            )}
+
             {/* 明細テーブル（PC・タブレット） */}
             <div className={cn('hidden overflow-x-auto', row.items.length > 0 && 'md:block')}>
               {/* 請求月の列が増えるぶんだけ最小幅も広げる。狭いままだと他の列が潰れて読めなくなる。 */}
@@ -631,7 +684,7 @@ export default function ExpenseCheckClient() {
                       <th className="w-[9rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">請求月</th>
                     )}
                     {showReimburse && (
-                      <th className="w-[7rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">立替精算</th>
+                      <th className="w-[12rem] px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">支払方法</th>
                     )}
                   </tr>
                 </thead>
@@ -683,7 +736,7 @@ export default function ExpenseCheckClient() {
                       {showReimburse && (
                         <td className="px-3 py-2">
                           {isReimbursableItem(item) ? (
-                            renderReimburseCheckbox(item, busy)
+                            renderPayMethodSelect(item, busy)
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
@@ -752,7 +805,10 @@ export default function ExpenseCheckClient() {
                       </div>
                     )}
                     {showReimburse && isReimbursableItem(item) && (
-                      <div className="pt-1">{renderReimburseCheckbox(item, busy)}</div>
+                      <div className="space-y-1 pt-1">
+                        <span className="block text-muted-foreground">支払方法</span>
+                        {renderPayMethodSelect(item, busy)}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -794,12 +850,16 @@ export default function ExpenseCheckClient() {
                     却下
                   </Button>
                 )}
+                {/* 支払方法を全行選ぶまで押せない。選び忘れた行が立替精算から黙って外れるのを防ぐ。 */}
+                {row.status === 'submitted' && payMethodUnselected > 0 && (
+                  <span className="text-xs text-warning">支払方法の未選択があと{payMethodUnselected}件</span>
+                )}
                 {row.status === 'submitted' && (
                   <Button
                     size="sm"
                     className="h-11 md:h-7"
                     onClick={() => setConfirmTarget({ row, action: 'approve' })}
-                    disabled={busy}
+                    disabled={busy || payMethodUnselected > 0}
                   >
                     {busy ? '処理中…' : '登録する'}
                   </Button>

@@ -19,6 +19,7 @@ import type {
 import type {
   EXPENSE_CATEGORIES,
   EXPENSE_ITEM_KINDS,
+  EXPENSE_PAY_METHODS,
   INVOICE_CHECK_TRIGGERS,
   INVOICE_EXTRA_DECISIONS,
   INVOICE_REPLY_KINDS,
@@ -438,6 +439,7 @@ export interface InvoiceReminderSendResult {
 // 選択肢そのものは lib/config に置き、型はそこから導く。値と型を別々に書くと、
 // 選択肢を足したときに型だけ古いままになって「選べるのに型エラー」が起きるため。
 export type ExpenseItemKind = (typeof EXPENSE_ITEM_KINDS)[number]
+export type ExpensePayMethod = (typeof EXPENSE_PAY_METHODS)[number]
 
 // AI読み取り（lib/expense-extract）が返す明細1行。列名（expense_upload_items）と1対1に対応させ、
 // AIに返させるJSONのキー・DBに入る形・画面で扱う形を揃える。
