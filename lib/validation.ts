@@ -281,12 +281,26 @@ export const expenseSubmitSchema = z.object({
 // 経理が明細の「内容」を直すときの入力。AIの読み取りは店名だけ・品目だけになりがちで、
 // そのまま請求経費の摘要や立替明細の項目名になると、後から何の経費か分からなくなるため。
 // 空にしたら「内容なし」（null）へ戻す。
-export const expenseItemPatchSchema = z.object({
-  description: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
-    z.string().max(200, { message: '内容は200文字以内で入力してください' }).nullable()
-  ),
-})
+// 金額・区分・クライアントも同じ口で直す。代表の選び間違いや読み取り違いのたびに却下して送り直して
+// もらうと、原本の再提出まで戻ることになるため。送られてきた項目だけを変える（どれも任意）。
+// 区分とクライアントの組み合わせ（請求する行にはクライアントが要る等）は今の行の値も要るため、API側で見る。
+export const expenseItemPatchSchema = z
+  .object({
+    description: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
+      z.string().max(200, { message: '内容は200文字以内で入力してください' }).nullable().optional()
+    ),
+    amount: z
+      .number({ message: '金額は数字で入力してください' })
+      .int({ message: '金額は整数で入力してください' })
+      .min(0, { message: '金額は0円以上で入力してください' })
+      .max(100_000_000, { message: '金額が大きすぎます' })
+      .optional(),
+    kind: z.enum(EXPENSE_ITEM_KINDS, { message: '区分の指定が不正です' }).optional(),
+    // 「未選択に戻す」も送れるよう null を許す（請求する行で null のままなら登録の手前で止まる）。
+    client_id: z.uuid({ message: 'クライアントの指定が不正です' }).nullable().optional(),
+  })
+  .refine((v) => Object.values(v).some((value) => value !== undefined), { message: '更新する項目がありません。' })
 
 // 経理の登録時に、明細ごとの「請求月」を経理が選べるようにするための指定。
 // 利用月と請求月がずれる運用（月末の利用を翌々月に回す等）があり、翌月固定では直せなかったため。

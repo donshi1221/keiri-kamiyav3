@@ -473,6 +473,15 @@ export interface ExpenseItemAssignment {
   pay_method?: ExpensePayMethod
 }
 
+// 経理が登録前の明細を直すときに送る値。検証の正本は lib/validation の expenseItemPatchSchema で、
+// これは画面側が同じ形を組み立てるための型。送った項目だけが変わる。
+export interface ExpenseItemPatch {
+  description?: string | null
+  amount?: number
+  kind?: ExpenseItemKind
+  client_id?: string | null
+}
+
 // 経理が登録時に選んだ「その明細をどの月の請求に乗せるか」。検証の正本は
 // lib/validation の expenseApproveSchema で、これは画面側が同じ形を組み立てるための型。
 // 選べるのは利用月〜翌々月の3択（既定は翌月）で、範囲の判定はAPI側が行う。

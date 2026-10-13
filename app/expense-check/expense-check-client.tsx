@@ -16,8 +16,9 @@ import {
 import { cn } from '@/lib/utils'
 import { TZ, addMonthsOf, nextMonthOf } from '@/lib/dates'
 import { EXPENSE_DEFAULT_PAY_METHOD, EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
-import type { Client } from '@/lib/schema'
+import type { Client, ExpenseUploadItem } from '@/lib/schema'
 import type {
+  ExpenseItemPatch,
   ExpenseUploadRow,
   ExpenseUploadItemRow,
   ExpenseExtractOutcome,
@@ -140,6 +141,23 @@ function isReimbursableItem(item: ExpenseUploadItemRow): boolean {
   return item.kind !== null && item.kind !== 'excluded' && item.kind !== 'other'
 }
 
+// 金額を直せる明細か。登録の前（割当中・送信済み）に限る。登録が途中で失敗した受付には、請求経費を
+// 作り終えた行が「送信済み」のまま残るので、その行は直させない（作った請求経費と食い違うため）。
+function isMoneyEditable(row: ExpenseUploadRow, item: ExpenseUploadItemRow): boolean {
+  return (row.status === 'draft' || row.status === 'submitted') && !item.registered_client_expense_id
+}
+
+// 区分・クライアントをその場で保存して直せる明細か。割当中の受付は「割り当てて送信」でまとめて送るので、
+// ここで扱うのは送信済みだけ。
+function isAssignEditable(row: ExpenseUploadRow, item: ExpenseUploadItemRow): boolean {
+  return row.status === 'submitted' && !item.registered_client_expense_id
+}
+
+// 請求する行なのにクライアントが決まっていない明細。登録すると必ず弾かれるので、押す前に止める。
+function isClientMissing(item: ExpenseUploadItemRow): boolean {
+  return item.kind === 'client_billed' && !item.client_id
+}
+
 // 経理がこの画面で割り当てるときの下書き。送信用の型（ExpenseItemAssignment）は選択済みが前提なので、
 // 「まだ選んでいない」を表せる空文字を許す形で別に持つ（受付側 upload-form.tsx と同じ流儀）。
 type ItemAssignDraft = { kind: ExpenseItemKind | ''; clientId: string }
@@ -149,6 +167,13 @@ type ItemAssignDraft = { kind: ExpenseItemKind | ''; clientId: string }
 function isAssignComplete(draft: ItemAssignDraft): boolean {
   if (draft.kind === '') return false
   return draft.kind !== 'client_billed' || draft.clientId !== ''
+}
+
+// 入力中の値の控えから1件を外す（保存が済んだ行を、一覧の値の表示へ戻すため）。
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const rest = { ...record }
+  delete rest[key]
+  return rest
 }
 
 async function readErrorMessage(res: Response, fallback: string) {
@@ -178,6 +203,8 @@ export default function ExpenseCheckClient() {
   const [payMethods, setPayMethods] = useState<Record<string, ExpensePayMethod>>({})
   // 明細ID => 入力中の「内容」。保存が済んだら消し、一覧の値（保存後の内容）へ戻す。
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({})
+  // 明細ID => 入力中の金額。空欄を 0 と区別するため文字列のまま持つ。
+  const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({})
   // 割当中（draft）の受付を経理がこの画面で割り当てるための選択。明細IDは受付をまたいで一意なので明細単位で持つ。
   const [assignDrafts, setAssignDrafts] = useState<Record<string, ItemAssignDraft>>({})
   // 区分の選択肢に出すクライアント。受付ページはサーバー側で渡せるが、この画面は認証済みなので社内APIから取る。
@@ -270,43 +297,132 @@ export default function ExpenseCheckClient() {
   async function saveDescription(row: ExpenseUploadRow, item: ExpenseUploadItemRow) {
     const draft = descDrafts[item.id] as string | undefined
     if (draft === undefined) return
-    const clearDraft = () =>
-      setDescDrafts((prev) => {
-        const rest = { ...prev }
-        delete rest[item.id]
-        return rest
-      })
+    const clearDraft = () => setDescDrafts((prev) => withoutKey(prev, item.id))
     // 変えていなければ通信しない。
     if (draft.trim() === (item.description ?? '')) {
       clearDraft()
       return
     }
+    // 失敗したときは入力中の文字を残す。消すと、なぜ保存できなかったのかを見ながら直せなくなる。
+    if (await patchItem(row, item, { description: draft }, '内容の保存に失敗しました。')) clearDraft()
+  }
+
+  // 金額を保存する。内容と同じく、入力欄から離れたときに呼ぶ。
+  async function saveAmount(row: ExpenseUploadRow, item: ExpenseUploadItemRow) {
+    const draft = amountDrafts[item.id] as string | undefined
+    if (draft === undefined) return
+    const clearDraft = () => setAmountDrafts((prev) => withoutKey(prev, item.id))
+    const text = draft.trim()
+    const value = Number(text)
+    // 空欄を0円として保存しない（消しかけの欄から離れただけで金額が0になるのを防ぐ）。
+    if (text === '' || !Number.isInteger(value) || value < 0) {
+      setError('金額は0円以上の整数で入力してください。')
+      return
+    }
+    if (value === item.amount) {
+      clearDraft()
+      return
+    }
+    if (await patchItem(row, item, { amount: value }, '金額の保存に失敗しました。')) clearDraft()
+  }
+
+  // 明細1行の保存。成功したら、返ってきた行で一覧を書き換える（合計や確認画面の金額もこの値から出るため）。
+  async function patchItem(
+    row: ExpenseUploadRow,
+    item: ExpenseUploadItemRow,
+    body: ExpenseItemPatch,
+    fallback: string
+  ): Promise<boolean> {
     setError(null)
     try {
       const res = await fetch(`/api/expense-uploads/${row.id}/items/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: draft }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
-        // 入力中の文字は残す。消すと、なぜ保存できなかったのかを見ながら直せなくなる。
-        setError(await readErrorMessage(res, '内容の保存に失敗しました。'))
-        return
+        setError(await readErrorMessage(res, fallback))
+        return false
       }
-      const saved = (await res.json()) as { description: string | null }
+      const saved = (await res.json()) as ExpenseUploadItem
+      // クライアント名はAPIが返さない（明細の表だけを更新しているため）ので、手元の選択肢から引く。
+      const clientName = clientOptions.find((client) => client.id === saved.client_id)?.name ?? null
       setRows((prev) =>
         prev
           ? prev.map((r) =>
               r.id === row.id
-                ? { ...r, items: r.items.map((i) => (i.id === item.id ? { ...i, description: saved.description } : i)) }
+                ? { ...r, items: r.items.map((i) => (i.id === item.id ? { ...saved, client_name: clientName } : i)) }
                 : r
             )
           : prev
       )
-      clearDraft()
+      return true
     } catch {
       setError('通信に失敗しました。接続を確認して再度お試しください。')
+      return false
     }
+  }
+
+  // 表とカードで同じ入力欄を出すため、見た目と挙動をここに1つだけ持つ。
+  function renderAmountInput(row: ExpenseUploadRow, item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <input
+        type="number"
+        inputMode="numeric"
+        min="0"
+        aria-label="金額"
+        value={(amountDrafts[item.id] as string | undefined) ?? String(item.amount)}
+        disabled={disabled}
+        onChange={(e) => setAmountDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+        onBlur={() => saveAmount(row, item)}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        className="min-h-11 w-full min-w-[6rem] rounded border bg-card px-2 py-1 text-right text-sm disabled:bg-muted md:min-h-0"
+      />
+    )
+  }
+
+  // 送信済みの受付の区分。選んだ時点で保存する（割当中の受付は「割り当てて送信」でまとめて送るので別の部品）。
+  function renderSavedKindSelect(row: ExpenseUploadRow, item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <select
+        aria-label="区分"
+        value={item.kind ?? ''}
+        disabled={disabled}
+        onChange={(e) => patchItem(row, item, { kind: e.target.value as ExpenseItemKind }, '区分の保存に失敗しました。')}
+        className="min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
+      >
+        {EXPENSE_ITEM_KINDS.map((kind) => (
+          <option key={kind} value={kind}>
+            {EXPENSE_KIND_LABEL[kind]}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  function renderSavedClientSelect(row: ExpenseUploadRow, item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <select
+        aria-label="クライアント"
+        value={item.client_id ?? ''}
+        disabled={disabled}
+        onChange={(e) =>
+          patchItem(row, item, { client_id: e.target.value === '' ? null : e.target.value }, 'クライアントの保存に失敗しました。')
+        }
+        // 未選択の行は登録を止めている原因なので、枠の色で見つけられるようにする。
+        className={cn(
+          'min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0',
+          !item.client_id && 'border-warning'
+        )}
+      >
+        <option value="">選択してください</option>
+        {clientOptions.map((client) => (
+          <option key={client.id} value={client.id}>
+            {client.name}
+          </option>
+        ))}
+      </select>
+    )
   }
 
   // 表とカードで同じ入力欄を出すため、見た目と挙動をここに1つだけ持つ。
@@ -593,7 +709,7 @@ export default function ExpenseCheckClient() {
         <p className="text-xs leading-relaxed text-muted-foreground">
           「支払方法」で②現金を選んだ行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。
           ①会社クレカ・ICOCA の行は返金が要らないので上乗せされません。最初は代表が受付で選んだ値（無ければ①）が
-          入っているので、違っていれば直してください。「内容」も登録の前ならこの画面で直せます。
+          入っているので、違っていれば直してください。内容・金額・区分・クライアントも、登録の前ならこの画面で直せます。
         </p>
       </div>
 
@@ -651,6 +767,7 @@ export default function ExpenseCheckClient() {
         const showReimburse = row.status === 'submitted' && row.items.some(isReimbursableItem)
         // 内容を直せるのは登録の前だけ（登録後は請求経費・立替明細へ写した後なので、ここだけ変えると食い違う）。
         const descEditable = row.status === 'draft' || row.status === 'submitted'
+        const clientMissing = row.status === 'submitted' ? row.items.filter(isClientMissing).length : 0
         // 割当中（draft）の受付は、代表が受付URLを開き直せないと誰も触れなくなる。経理がこの画面で
         // 代わりに区分を割り当てられるようにする。明細が1件も無い受付は送信しようがないので除く。
         const assignable = row.status === 'draft' && !failed && row.items.length > 0
@@ -750,11 +867,13 @@ export default function ExpenseCheckClient() {
                         {descEditable ? renderDescriptionInput(row, item, busy) : (item.description ?? '—')}
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap text-foreground">
-                        {formatExpenseAmount(item.amount)}
+                        {isMoneyEditable(row, item) ? renderAmountInput(row, item, busy) : formatExpenseAmount(item.amount)}
                       </td>
                       <td className="px-3 py-2">
                         {assignable ? (
                           renderKindSelect(item, busy)
+                        ) : isAssignEditable(row, item) ? (
+                          renderSavedKindSelect(row, item, busy)
                         ) : (
                           <>
                             <KindLabel kind={item.kind} />
@@ -769,6 +888,12 @@ export default function ExpenseCheckClient() {
                         {assignable ? (
                           resolveAssign(item).kind === 'client_billed' ? (
                             renderClientSelect(item, busy)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )
+                        ) : isAssignEditable(row, item) ? (
+                          item.kind === 'client_billed' ? (
+                            renderSavedClientSelect(row, item, busy)
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )
@@ -817,11 +942,22 @@ export default function ExpenseCheckClient() {
                     <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(item.amount)}</p>
                   </div>
                   <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
+                    {isMoneyEditable(row, item) && (
+                      <div className="space-y-1 pb-1">
+                        <span className="block text-muted-foreground">金額</span>
+                        {renderAmountInput(row, item, busy)}
+                      </div>
+                    )}
                     {/* 割当中はプルダウンになる。幅が狭いので値と同じ行には並べず、ラベルの下に全幅で置く。 */}
                     {assignable ? (
                       <div className="space-y-1">
                         <span className="block text-muted-foreground">区分</span>
                         {renderKindSelect(item, busy)}
+                      </div>
+                    ) : isAssignEditable(row, item) ? (
+                      <div className="space-y-1">
+                        <span className="block text-muted-foreground">区分</span>
+                        {renderSavedKindSelect(row, item, busy)}
                       </div>
                     ) : (
                       <div className="flex justify-between gap-3">
@@ -837,6 +973,13 @@ export default function ExpenseCheckClient() {
                         <div className="space-y-1 pt-1">
                           <span className="block text-muted-foreground">クライアント</span>
                           {renderClientSelect(item, busy)}
+                        </div>
+                      )
+                    ) : isAssignEditable(row, item) ? (
+                      item.kind === 'client_billed' && (
+                        <div className="space-y-1 pt-1">
+                          <span className="block text-muted-foreground">クライアント</span>
+                          {renderSavedClientSelect(row, item, busy)}
                         </div>
                       )
                     ) : (
@@ -912,12 +1055,16 @@ export default function ExpenseCheckClient() {
                     却下
                   </Button>
                 )}
+                {/* 区分を「クライアントに請求」へ変えた直後は、クライアントが未選択の行ができる。 */}
+                {row.status === 'submitted' && clientMissing > 0 && (
+                  <span className="text-xs text-warning">クライアントの未選択があと{clientMissing}件</span>
+                )}
                 {row.status === 'submitted' && (
                   <Button
                     size="sm"
                     className="h-11 md:h-7"
                     onClick={() => setConfirmTarget({ row, action: 'approve' })}
-                    disabled={busy}
+                    disabled={busy || clientMissing > 0}
                   >
                     {busy ? '処理中…' : '登録する'}
                   </Button>
