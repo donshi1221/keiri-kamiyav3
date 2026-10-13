@@ -251,8 +251,11 @@ export const INVOICE_NOTIFY_TIMEOUT_MS = intFromEnv('INVOICE_NOTIFY_TIMEOUT_MS',
 export const EXPENSE_ITEM_KINDS = ['client_billed', 'company', 'other', 'excluded'] as const
 
 // 経費の支払方法。代表へ返すかどうかがこれで決まる（company＝会社のカード・ICOCAで払ったので返さない /
-// cash＝代表が現金で立て替えたので返す）。経理が登録のときに選ぶだけで、DBには持たない。
+// cash＝代表が現金で立て替えたので返す）。代表が受付で選び、経理が登録のときに確かめて必要なら変える。
 export const EXPENSE_PAY_METHODS = ['company', 'cash'] as const
+// 選ばれていないときの支払方法。経費の大半は会社のカード・ICOCAで払っているため、そちらを規定にする
+// （現金の分は代表が受付で選ぶ。規定を現金にすると、選び忘れた会社カードの分まで代表へ返してしまう）。
+export const EXPENSE_DEFAULT_PAY_METHOD: (typeof EXPENSE_PAY_METHODS)[number] = 'company'
 
 // 経費アップロードで受け付けるファイル種別。ICOCAの利用履歴はPDF、特急券の領収書は
 // スマホで撮った画像で届くため両方を許す（Geminiはどちらもそのまま読める）。

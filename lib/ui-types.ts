@@ -469,6 +469,8 @@ export interface ExpenseItemAssignment {
   id: string
   kind: ExpenseItemKind
   client_id: string | null
+  // 経理が代わりに割り当てる画面からは送らない（登録のときに選ぶため）。
+  pay_method?: ExpensePayMethod
 }
 
 // 経理が登録時に選んだ「その明細をどの月の請求に乗せるか」。検証の正本は

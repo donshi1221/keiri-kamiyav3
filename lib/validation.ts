@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EXPENSE_ITEM_KINDS, PAYROLL_KINDS, PAYMENT_REQUEST_STATUSES } from '@/lib/config'
+import { EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS, PAYROLL_KINDS, PAYMENT_REQUEST_STATUSES } from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -263,6 +263,9 @@ const expenseItemAssignSchema = z
     id: z.uuid({ message: '明細の指定が不正です' }),
     kind: z.enum(EXPENSE_ITEM_KINDS, { message: '用途を選んでください' }),
     client_id: expenseItemClientId,
+    // 支払方法。経理が代わりに割り当てる画面や、開きっぱなしの古い受付フォームからは届かないので任意にし、
+    // 無いときは保存側で規定（会社クレカ・ICOCA）に倒す。
+    pay_method: z.enum(EXPENSE_PAY_METHODS, { message: '支払方法の指定が不正です' }).optional(),
   })
   .superRefine((item, ctx) => {
     if (item.kind === 'client_billed' && !item.client_id) {
@@ -273,6 +276,16 @@ const expenseItemAssignSchema = z
 // 明細が1件も無い送信は、読み取り前・読み取り失敗のまま送られた事故なので弾く。
 export const expenseSubmitSchema = z.object({
   items: z.array(expenseItemAssignSchema).min(1, { message: '明細が1件もありません' }),
+})
+
+// 経理が明細の「内容」を直すときの入力。AIの読み取りは店名だけ・品目だけになりがちで、
+// そのまま請求経費の摘要や立替明細の項目名になると、後から何の経費か分からなくなるため。
+// 空にしたら「内容なし」（null）へ戻す。
+export const expenseItemPatchSchema = z.object({
+  description: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
+    z.string().max(200, { message: '内容は200文字以内で入力してください' }).nullable()
+  ),
 })
 
 // 経理の登録時に、明細ごとの「請求月」を経理が選べるようにするための指定。

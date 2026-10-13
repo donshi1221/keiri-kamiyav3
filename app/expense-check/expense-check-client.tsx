@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { TZ, addMonthsOf, nextMonthOf } from '@/lib/dates'
-import { EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
+import { EXPENSE_DEFAULT_PAY_METHOD, EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
 import type { Client } from '@/lib/schema'
 import type {
   ExpenseUploadRow,
@@ -173,10 +173,11 @@ export default function ExpenseCheckClient() {
   // 明細ID => 経理が選んだ請求月。選んでいない行はここに入らず、既定（翌月）で登録される。
   // 受付をまたいで持てるよう受付単位ではなく明細IDで持つ（IDは受付をまたいで一意）。
   const [billingMonths, setBillingMonths] = useState<Record<string, BillingMonth>>({})
-  // 明細ID => 支払方法。現金（代表の立て替え）を選んだ行だけが立替精算に乗る。
-  // 既定値を持たせないのは、どちらを既定にしても選び忘れた行が黙って片方に倒れるため
-  // （既定で乗せていた頃は、会社カードの分まで代表へ返してしまうことがあった）。全行選ぶまで登録させない。
+  // 明細ID => 経理がこの画面で選び直した支払方法。現金（代表の立て替え）の行だけが立替精算に乗る。
+  // ここに無い行は代表が受付で選んだ値、それも無ければ規定（会社クレカ・ICOCA）で扱う。
   const [payMethods, setPayMethods] = useState<Record<string, ExpensePayMethod>>({})
+  // 明細ID => 入力中の「内容」。保存が済んだら消し、一覧の値（保存後の内容）へ戻す。
+  const [descDrafts, setDescDrafts] = useState<Record<string, string>>({})
   // 割当中（draft）の受付を経理がこの画面で割り当てるための選択。明細IDは受付をまたいで一意なので明細単位で持つ。
   const [assignDrafts, setAssignDrafts] = useState<Record<string, ItemAssignDraft>>({})
   // 区分の選択肢に出すクライアント。受付ページはサーバー側で渡せるが、この画面は認証済みなので社内APIから取る。
@@ -244,13 +245,17 @@ export default function ExpenseCheckClient() {
     return billingMonths[item.id] ?? defaultBillingMonth(item.item_date!)
   }
 
-  function isReimburseChecked(item: ExpenseUploadItemRow): boolean {
-    return payMethods[item.id] === 'cash'
+  // 経理の選び直し → 代表が受付で選んだ値 → 規定、の順で決める。
+  // 保存値は text 列なので、知らない値が入っていたら規定に倒す。
+  function resolvePayMethod(item: ExpenseUploadItemRow): ExpensePayMethod {
+    const chosen = payMethods[item.id] as ExpensePayMethod | undefined
+    if (chosen) return chosen
+    const saved = EXPENSE_PAY_METHODS.find((method) => method === item.pay_method)
+    return saved ?? EXPENSE_DEFAULT_PAY_METHOD
   }
 
-  // 支払方法をまだ選んでいない明細（立替精算の対象になりうる行だけを数える）。
-  function unselectedPayMethodItems(row: ExpenseUploadRow): ExpenseUploadItemRow[] {
-    return row.items.filter((item) => isReimbursableItem(item) && payMethods[item.id] === undefined)
+  function isReimburseChecked(item: ExpenseUploadItemRow): boolean {
+    return resolvePayMethod(item) === 'cash'
   }
 
   // ICOCAの利用履歴のように1件の原本が全行同じ支払方法のことが多いので、まとめて入れられるようにする。
@@ -261,32 +266,78 @@ export default function ExpenseCheckClient() {
     }))
   }
 
+  // 内容を保存する。入力欄から離れたときに呼ぶ（1文字ごとに保存すると、書きかけが請求経費の摘要になりうる）。
+  async function saveDescription(row: ExpenseUploadRow, item: ExpenseUploadItemRow) {
+    const draft = descDrafts[item.id] as string | undefined
+    if (draft === undefined) return
+    const clearDraft = () =>
+      setDescDrafts((prev) => {
+        const rest = { ...prev }
+        delete rest[item.id]
+        return rest
+      })
+    // 変えていなければ通信しない。
+    if (draft.trim() === (item.description ?? '')) {
+      clearDraft()
+      return
+    }
+    setError(null)
+    try {
+      const res = await fetch(`/api/expense-uploads/${row.id}/items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: draft }),
+      })
+      if (!res.ok) {
+        // 入力中の文字は残す。消すと、なぜ保存できなかったのかを見ながら直せなくなる。
+        setError(await readErrorMessage(res, '内容の保存に失敗しました。'))
+        return
+      }
+      const saved = (await res.json()) as { description: string | null }
+      setRows((prev) =>
+        prev
+          ? prev.map((r) =>
+              r.id === row.id
+                ? { ...r, items: r.items.map((i) => (i.id === item.id ? { ...i, description: saved.description } : i)) }
+                : r
+            )
+          : prev
+      )
+      clearDraft()
+    } catch {
+      setError('通信に失敗しました。接続を確認して再度お試しください。')
+    }
+  }
+
+  // 表とカードで同じ入力欄を出すため、見た目と挙動をここに1つだけ持つ。
+  function renderDescriptionInput(row: ExpenseUploadRow, item: ExpenseUploadItemRow, disabled: boolean) {
+    return (
+      <input
+        type="text"
+        aria-label="内容"
+        value={(descDrafts[item.id] as string | undefined) ?? item.description ?? ''}
+        disabled={disabled}
+        maxLength={200}
+        placeholder="内容なし"
+        onChange={(e) => setDescDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+        onBlur={() => saveDescription(row, item)}
+        // Enter で確定できるようにする（欄から離れる＝保存）。
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        className="min-h-11 w-full min-w-[10rem] rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
+      />
+    )
+  }
+
   // 表とカードで同じプルダウンを出すため、見た目と挙動をここに1つだけ持つ。
   function renderPayMethodSelect(item: ExpenseUploadItemRow, disabled: boolean) {
-    // Record の添字は「必ず在る」型になるため、未選択（undefined）を型に戻してから扱う。
-    const selected = payMethods[item.id] as ExpensePayMethod | undefined
-    const value = selected ?? ''
     return (
       <select
         aria-label="支払方法"
-        value={value}
+        value={resolvePayMethod(item)}
         disabled={disabled}
-        onChange={(e) => {
-          const next = e.target.value as ExpensePayMethod | ''
-          setPayMethods((prev) => {
-            if (next !== '') return { ...prev, [item.id]: next }
-            const rest = { ...prev }
-            delete rest[item.id]
-            return rest
-          })
-        }}
-        // 未選択の行は登録を止めている原因なので、枠の色で見つけられるようにする。
-        className={cn(
-          'min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0',
-          value === '' && 'border-warning'
-        )}
+        onChange={(e) => setPayMethods((prev) => ({ ...prev, [item.id]: e.target.value as ExpensePayMethod }))}
+        className="min-h-11 w-full rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0"
       >
-        <option value="">選択してください</option>
         {EXPENSE_PAY_METHODS.map((method) => (
           <option key={method} value={method}>
             {EXPENSE_PAY_METHOD_LABEL[method]}
@@ -541,7 +592,8 @@ export default function ExpenseCheckClient() {
         </p>
         <p className="text-xs leading-relaxed text-muted-foreground">
           「支払方法」で②現金を選んだ行は、代表へ返す実費として利用月の翌月の役員報酬に上乗せされます。
-          ①会社クレカ・ICOCA の行は返金が要らないので上乗せされません。全部の行で選ぶと登録できます。
+          ①会社クレカ・ICOCA の行は返金が要らないので上乗せされません。最初は代表が受付で選んだ値（無ければ①）が
+          入っているので、違っていれば直してください。「内容」も登録の前ならこの画面で直せます。
         </p>
       </div>
 
@@ -597,7 +649,8 @@ export default function ExpenseCheckClient() {
         const showBillingMonth = row.status === 'submitted' && row.items.some(isBillableItem)
         // 立替精算の選択も、これから登録する受付（送信済み）のときだけ意味を持つ。
         const showReimburse = row.status === 'submitted' && row.items.some(isReimbursableItem)
-        const payMethodUnselected = showReimburse ? unselectedPayMethodItems(row).length : 0
+        // 内容を直せるのは登録の前だけ（登録後は請求経費・立替明細へ写した後なので、ここだけ変えると食い違う）。
+        const descEditable = row.status === 'draft' || row.status === 'submitted'
         // 割当中（draft）の受付は、代表が受付URLを開き直せないと誰も触れなくなる。経理がこの画面で
         // 代わりに区分を割り当てられるようにする。明細が1件も無い受付は送信しようがないので除く。
         const assignable = row.status === 'draft' && !failed && row.items.length > 0
@@ -693,7 +746,9 @@ export default function ExpenseCheckClient() {
                     <tr key={item.id} className="border-b align-top last:border-0">
                       <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatExpenseDate(item.item_date)}</td>
                       <td className="px-3 py-2 text-foreground">{formatExpenseRoute(item.from_place, item.to_place) || '—'}</td>
-                      <td className="px-3 py-2 text-foreground">{item.description ?? '—'}</td>
+                      <td className="px-3 py-2 text-foreground">
+                        {descEditable ? renderDescriptionInput(row, item, busy) : (item.description ?? '—')}
+                      </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap text-foreground">
                         {formatExpenseAmount(item.amount)}
                       </td>
@@ -790,11 +845,18 @@ export default function ExpenseCheckClient() {
                         <span className="text-right text-foreground">{item.client_name ?? '—'}</span>
                       </div>
                     )}
-                    {item.description && formatExpenseRoute(item.from_place, item.to_place) && (
-                      <div className="flex justify-between gap-3">
-                        <span className="shrink-0 text-muted-foreground">内容</span>
-                        <span className="text-right text-foreground">{item.description}</span>
+                    {descEditable ? (
+                      <div className="space-y-1 pt-1">
+                        <span className="block text-muted-foreground">内容</span>
+                        {renderDescriptionInput(row, item, busy)}
                       </div>
+                    ) : (
+                      item.description && formatExpenseRoute(item.from_place, item.to_place) && (
+                        <div className="flex justify-between gap-3">
+                          <span className="shrink-0 text-muted-foreground">内容</span>
+                          <span className="text-right text-foreground">{item.description}</span>
+                        </div>
+                      )
                     )}
                     {/* スマホでも同じ判断ができるよう、請求に乗る行にはプルダウンを出す。
                         幅が狭いので値と同じ列には並べず、ラベルの下に全幅で置く。 */}
@@ -850,16 +912,12 @@ export default function ExpenseCheckClient() {
                     却下
                   </Button>
                 )}
-                {/* 支払方法を全行選ぶまで押せない。選び忘れた行が立替精算から黙って外れるのを防ぐ。 */}
-                {row.status === 'submitted' && payMethodUnselected > 0 && (
-                  <span className="text-xs text-warning">支払方法の未選択があと{payMethodUnselected}件</span>
-                )}
                 {row.status === 'submitted' && (
                   <Button
                     size="sm"
                     className="h-11 md:h-7"
                     onClick={() => setConfirmTarget({ row, action: 'approve' })}
-                    disabled={busy || payMethodUnselected > 0}
+                    disabled={busy}
                   >
                     {busy ? '処理中…' : '登録する'}
                   </Button>

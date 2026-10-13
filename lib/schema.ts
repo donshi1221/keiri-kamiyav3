@@ -457,6 +457,9 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   category: text('category'),
   // 明細の用途（lib/config の EXPENSE_ITEM_KINDS）。金額の行き先が区分ごとに違う。
   kind: text('kind'),
+  // 支払方法（lib/config の EXPENSE_PAY_METHODS）。代表が受付で選び、経理が登録のときの初期値に使う。
+  // 立替精算に乗らない区分（その他・対象外）と、この列ができる前の行は null。
+  pay_method: text('pay_method'),
   // 登録時に作った client_expenses の行のID。入っていること自体が「登録済み」の印になり、
   // 二重登録の検出と、後から「この経費はどのファイルの何行目から来たか」を辿る手がかりになる。
   // 外部キーにしていないのは、経費側の行を消したいときに控えが削除を邪魔しないようにするため。

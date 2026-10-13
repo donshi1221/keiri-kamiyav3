@@ -3,15 +3,17 @@
 import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { EXPENSE_ITEM_KINDS } from '@/lib/config'
+import { EXPENSE_DEFAULT_PAY_METHOD, EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
 import type { Client, ExpenseUploadItem } from '@/lib/schema'
 import type {
   ExpenseInboxResponse,
   ExpenseItemAssignment,
   ExpenseItemKind,
+  ExpensePayMethod,
 } from '@/lib/ui-types'
 import {
   EXPENSE_KIND_LABEL,
+  EXPENSE_PAY_METHOD_LABEL,
   formatExpenseAmount,
   formatExpenseDate,
   formatExpenseRoute,
@@ -22,9 +24,17 @@ import {
 type ItemDraft = {
   kind: ExpenseItemKind | ''
   clientId: string
+  payMethod: ExpensePayMethod
 }
 
-const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '' }
+// 支払方法だけは最初から規定（会社クレカ・ICOCA）を入れておく。大半がそちらなので、
+// 現金で払った行だけ変えれば済むようにする。
+const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '', payMethod: EXPENSE_DEFAULT_PAY_METHOD }
+
+// 代表へ返すかどうかに関わるのは、立替精算に乗りうる区分だけ（経理の画面の isReimbursableItem と同じ条件）。
+function needsPayMethod(kind: ItemDraft['kind']): boolean {
+  return kind === 'client_billed' || kind === 'company'
+}
 
 // 1ファイル分の処理結果。最後の一覧で「どれが経理に届いて、どれが届いていないか」を
 // 代表がその場で把握できないと、失敗分だけを担当者に伝えることができない。
@@ -112,6 +122,28 @@ function AssignFields({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {needsPayMethod(draft.kind) && (
+        <div>
+          <label htmlFor={`${idPrefix}-pay-method`} className="mb-1 block text-xs font-medium text-muted-foreground">
+            支払方法
+          </label>
+          <select
+            id={`${idPrefix}-pay-method`}
+            value={draft.payMethod}
+            onChange={(e) => onChange({ ...draft, payMethod: e.target.value as ExpensePayMethod })}
+            className={selectClass}
+          >
+            {EXPENSE_PAY_METHODS.map((method) => (
+              <option key={method} value={method}>
+                {EXPENSE_PAY_METHOD_LABEL[method]}
+              </option>
+            ))}
+          </select>
+          {/* 現金を選んだ分だけが返金されることを、選ぶ本人に伝える。 */}
+          <p className="mt-1 text-xs text-muted-foreground">現金で立て替えた分は②を選んでください（翌月の報酬で精算します）。</p>
         </div>
       )}
     </div>
@@ -272,6 +304,7 @@ export default function ExpenseUploadForm({
         id: item.id,
         kind: draft.kind as ExpenseItemKind,
         client_id: draft.kind === 'client_billed' ? draft.clientId : null,
+        ...(needsPayMethod(draft.kind) ? { pay_method: draft.payMethod } : {}),
       }
     })
 

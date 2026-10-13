@@ -260,6 +260,13 @@
       "when": 1791446341564,
       "tag": "0036_rare_the_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791870211516,
+      "tag": "0037_gorgeous_madrox",
+      "breakpoints": true
     }
   ]
 }

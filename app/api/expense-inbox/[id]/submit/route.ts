@@ -7,6 +7,7 @@ import { verifyExpenseUploadToken } from '@/lib/expense-token'
 import { verifySessionToken } from '@/lib/auth'
 import { expenseSubmitSchema, parseBody } from '@/lib/validation'
 import { getResend } from '@/lib/resend'
+import { EXPENSE_DEFAULT_PAY_METHOD } from '@/lib/config'
 
 // このパスは proxy.ts の認証除外に入っているため、ログイン済みかどうかはここで自分で見るしかない。
 // AUTH_SECRET 未設定時は誰でも通るトークンになってしまうので認証不成立として扱う（proxy.ts と同じ）。
@@ -71,6 +72,9 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
           // 対象外の行にクライアントが残っていると、後から見て「請求するのか」が読めなくなる。
           // 検証では任意にしているため、意味の無い値はここで消してから保存する。
           client_id: item.kind === 'excluded' ? null : item.client_id,
+          // 立替精算に乗らない区分（その他・対象外）は支払方法を持たせない。経理の画面でも欄を出さない行のため。
+          pay_method:
+            item.kind === 'excluded' || item.kind === 'other' ? null : (item.pay_method ?? EXPENSE_DEFAULT_PAY_METHOD),
         })
         .where(eq(expenseUploadItems.id, item.id))
     }
