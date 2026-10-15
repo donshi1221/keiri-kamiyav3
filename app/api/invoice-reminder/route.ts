@@ -9,7 +9,7 @@ import type { InvoiceReminderPlan, InvoiceReminderTarget } from '@/lib/ui-types'
 
 // 請求書の未提出リマインドの手動送信（画面のボタン）。
 // 対象者の抽出・文面の組み立て・送信そのものは lib/invoice-reminder に置き、
-// 毎月10日の自動送信（app/api/cron/invoice-reminder）と同じ処理を共有する。
+// 毎月10日〜月末の自動送信（app/api/cron/invoice-reminder）と同じ処理を共有する。
 // proxy.ts の既定の保護対象（/api/... は認証必須）に入るパスに置いている。
 
 function parseYearMonth(searchParams: URLSearchParams): { year: number; month: number } | null {

@@ -2,7 +2,11 @@ import { serverError } from '@/lib/api-error'
 import { NextRequest } from 'next/server'
 import { nowJST } from '@/lib/dates'
 import { deliveryTargetMonth } from '@/lib/delivery-status'
-import { INVOICE_REMINDER_TEMPLATE } from '@/lib/config'
+import {
+  INVOICE_REMINDER_TEMPLATE,
+  INVOICE_REMINDER_FOLLOWUP_TEMPLATE,
+  INVOICE_REMINDER_START_DAY,
+} from '@/lib/config'
 import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
 import {
   claimAutoReminderSlot,
@@ -12,9 +16,10 @@ import {
 } from '@/lib/invoice-reminder'
 import { recordCronSuccess } from '@/lib/cron-monitor'
 
-// 請求書未提出リマインドの自動送信（毎月10日）。
+// 請求書未提出リマインドの自動送信（毎月10日〜月末の毎日）。
 // 送る中身は手動送信（app/api/invoice-reminder）とまったく同じで、lib/invoice-reminder を共有する。
 // 違うのは「誰が起動するか」と「文面を人が編集できないので既定テンプレートを使う」ことだけ。
+// 10日は通常の文面、11日以降は再送の文面にする（同じ文面が毎日届くと、催促が重複して見えるため）。
 
 // 関数のタイムアウト上限（秒）。委託者の人数ぶん Chatwork API を順に叩くため、
 // 既定の短いタイムアウトだと途中で切れうる。Vercel の仕様上リテラルで指定する必要がある。
@@ -36,7 +41,19 @@ export async function GET(req: NextRequest) {
     const today = nowJST()
     const year = today.getFullYear()
     const month = today.getMonth() + 1
-    const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const day = today.getDate()
+    const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+
+    // 提出期限（10日）より前には催促しない。cron の日付指定を書き間違えたり手動で叩いたりしても、
+    // 月初に「まだ出ていません」と送ってしまわないよう、ルート側でも止める。
+    if (day < INVOICE_REMINDER_START_DAY) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        reason: `before day ${INVOICE_REMINDER_START_DAY}`,
+        date: dateKey,
+      })
+    }
 
     // 同じ日に二度叩かれても催促を重ねない。送信前に「今日の枠」を取り、取れなければ何もしない。
     if (!(await claimAutoReminderSlot(dateKey))) {
@@ -77,7 +94,7 @@ export async function GET(req: NextRequest) {
 
     const url = `${appUrl}/invoice/${await getOrCreateInvoiceUploadToken()}`
     const results = await sendInvoiceReminders(candidates, {
-      template: INVOICE_REMINDER_TEMPLATE,
+      template: day === INVOICE_REMINDER_START_DAY ? INVOICE_REMINDER_TEMPLATE : INVOICE_REMINDER_FOLLOWUP_TEMPLATE,
       invoiceMonth: invoice.month,
       url,
     })

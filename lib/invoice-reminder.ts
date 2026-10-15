@@ -1,8 +1,9 @@
 import 'server-only'
-import { and, eq, ne } from 'drizzle-orm'
+import { and, eq, isNotNull, ne } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { appSettings, monthlyRecords } from '@/lib/schema'
+import { appSettings, invoiceUploads, monthlyRecords } from '@/lib/schema'
 import { sendChatworkMessage } from '@/lib/chatwork'
+import { deliveryTargetMonth } from '@/lib/delivery-status'
 import { fill } from '@/lib/invoice-reply'
 import type { InvoiceReminderSendResult } from '@/lib/ui-types'
 
@@ -20,23 +21,49 @@ export interface ReminderCandidate {
   accountId: string | null
 }
 
+// 支払月Mに対応する請求書（記載月＝M-1月分）を、状態を問わず1件でも出している委託者のID。
+// 受領チェックが付くのは照合OKになってからなので、判定中・保留・NGの人は monthly_records だけ見ると
+// 未提出に見える。判定中・保留の人に「出してください」と送ると混乱させ、NGの人には「修正のお願い」の
+// 返信の流れが既にあって催促と重なると何を求められているか分からなくなるため、出していれば催促から外す。
+// 差出人や対象月をまだ読み取れていない請求書は誰の何月分か分からないため、ここには数えられない。
+// ダッシュボードの「未提出リマインド（N名）」も同じ基準で数えるため export する（画面へは配列で渡す）。
+export async function findSubmittedInvoiceContractorIds(year: number, month: number): Promise<string[]> {
+  const invoice = deliveryTargetMonth(year, month)
+  const rows = await db
+    .select({ contractorId: invoiceUploads.contractor_id })
+    .from(invoiceUploads)
+    .where(
+      and(
+        isNotNull(invoiceUploads.contractor_id),
+        eq(invoiceUploads.resolved_year, invoice.year),
+        eq(invoiceUploads.resolved_month, invoice.month)
+      )
+    )
+  return Array.from(new Set(rows.flatMap((r) => (r.contractorId ? [r.contractorId] : []))))
+}
+
 // 対象月（＝支払月M）で請求書が未受領の委託者を集める。
 // 判定材料は monthly_records.invoice_received_at で、1件でも未受領の行があれば対象にする
 // （複数クライアントを担当する委託者でも請求書は1通にまとめて届くため、人単位で1回だけ催促する）。
+// ただし対象月の請求書をすでに出している人は、受領前でも外す（findSubmittedInvoiceContractorIds 参照）。
 export async function findInvoiceReminderCandidates(
   year: number,
   month: number
 ): Promise<ReminderCandidate[]> {
-  const rows = await db.query.monthlyRecords.findMany({
-    where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
-    with: {
-      assignments: {
-        with: {
-          contractors: { columns: { id: true, name: true, chatwork_room_id: true, chatwork_account_id: true } },
+  const [rows, submittedIds] = await Promise.all([
+    db.query.monthlyRecords.findMany({
+      where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
+      with: {
+        assignments: {
+          with: {
+            contractors: { columns: { id: true, name: true, chatwork_room_id: true, chatwork_account_id: true } },
+          },
         },
       },
-    },
-  })
+    }),
+    findSubmittedInvoiceContractorIds(year, month),
+  ])
+  const submitted = new Set(submittedIds)
 
   const byContractor = new Map<string, ReminderCandidate>()
   for (const r of rows) {
@@ -47,7 +74,7 @@ export async function findInvoiceReminderCandidates(
     // 終了したアサインの行が残っていても催促の理由にはならないため、稼働中のものだけ見る。
     if (!r.assignments?.active) continue
     const c = r.assignments.contractors
-    if (!c || byContractor.has(c.id)) continue
+    if (!c || byContractor.has(c.id) || submitted.has(c.id)) continue
     byContractor.set(c.id, {
       contractorId: c.id,
       name: c.name,

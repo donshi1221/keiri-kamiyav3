@@ -127,6 +127,29 @@ export const INVOICE_REMINDER_TEMPLATE =
     '引き続きどうぞよろしくお願いいたします(please)',
   ].join('\n')
 
+// 自動送信（cron）の2日目以降に使う再送の文面。置き換え記号は INVOICE_REMINDER_TEMPLATE と同じ。
+// 前日までの催促と入れ違いで出してくれた人もいるため、「行き違いならご容赦ください」を添える。
+// 手動送信の画面には出さない（人が文面を編集できるため、たたき台は1つで足りる）。
+export const INVOICE_REMINDER_FOLLOWUP_TEMPLATE =
+  process.env.INVOICE_REMINDER_FOLLOWUP_TEMPLATE?.replace(/\\n/g, '\n') ??
+  [
+    '{to}{name}さん',
+    '',
+    'お疲れさまです！！',
+    '{month}月分の請求書がまだ届いていないようです。',
+    '',
+    'お手数ですが、以下のURLよりご提出をお願いいたします。',
+    '{url}',
+    '',
+    'すでにお送りいただいている場合は、行き違いですのでご容赦ください。',
+    '引き続きどうぞよろしくお願いいたします(please)',
+  ].join('\n')
+
+// 自動送信を始める日（日本時間の日付）。この日は INVOICE_REMINDER_TEMPLATE、翌日から月末までは
+// 毎日 INVOICE_REMINDER_FOLLOWUP_TEMPLATE で送る。vercel.json の cron の日付指定（10-31）と揃えること
+// （cron の日付はリテラルでしか書けないため、ずれて月初に起動されてもルート側がこの値で止める）。
+export const INVOICE_REMINDER_START_DAY = 10
+
 // ─── 請求書チェック結果の返信（Chatwork）─────────────────────────────
 // 自動チェックがどの操作で走ったか（invoice_check_history.trigger）。DB列は text のため、
 // 取りうる値の正本をここに置く（PAYMENT_REQUEST_STATUSES と同じ流儀）。

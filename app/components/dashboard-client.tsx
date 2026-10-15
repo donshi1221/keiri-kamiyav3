@@ -1374,10 +1374,12 @@ interface Props {
   // 翌月の給与で返す立替明細（全対象者分）。翌月の給与行ができる前に積んだ分を確認・修正するためだけに持ち、
   // 表示中の月の振込額には混ぜない。
   nextMonthReimbursements: PayrollReimbursement[]
+  // 表示中の月の請求書を（判定中・保留・NGも含めて）すでに出している委託者のID。催促の対象から外れる。
+  submittedInvoiceContractorIds: string[]
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, coveredClientLumps, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements,
+  year, month, records, clientRecords, coveredClientLumps, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements, submittedInvoiceContractorIds,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -2675,11 +2677,15 @@ export default function DashboardClient({
 
   // 請求書が未受領の委託者の人数（Chatworkリマインドの対象になりうる人数）。
   // ローカル状態から数えることで、受領チェックを付けた瞬間にボタンが消える。
+  // 請求書をすでに出している人（受領前）は送信対象の抽出と同じく外す。数えてしまうと、
+  // ボタンの人数とダイアログの送信先の人数が食い違う。
   // 対象はAPI側でも数え直すため、ここでの用途はボタンを出すかどうかの判断だけ。
+  const submittedInvoiceContractors = new Set(submittedInvoiceContractorIds)
   const unreceivedContractorCount = new Set(
     activeRecords
       .filter((r) => !r.invoice_received_at && r.assignments?.active)
       .map((r) => r.assignments!.contractor_id)
+      .filter((id) => !submittedInvoiceContractors.has(id))
   ).size
 
   // ─── セクション見出しの要約と開閉 ─────────────────────────

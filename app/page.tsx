@@ -8,6 +8,7 @@ import { getValidAccessToken } from '@/lib/moneyforward'
 import { ONE_TIME_TASK_WINDOW_DAYS } from '@/lib/config'
 import { clientLumpRowCondition } from '@/lib/monthly-records'
 import { coverRange, isCoveredByLump, monthIndex, remainingMonths } from '@/lib/lump-sum'
+import { findSubmittedInvoiceContractorIds } from '@/lib/invoice-reminder'
 import DashboardClient from './components/dashboard-client'
 
 export default async function DashboardPage({
@@ -42,6 +43,7 @@ export default async function DashboardPage({
     payrollReimbursements,
     nextMonthReimbursements,
     coveredClientLumpRows,
+    submittedInvoiceContractorIds,
   ] = await Promise.all([
     db.query.monthlyRecords.findMany({
       where: and(eq(monthlyRecords.year, year), eq(monthlyRecords.month, month)),
@@ -165,6 +167,9 @@ export default async function DashboardPage({
         billing_items: { columns: { label: true, active: true, one_time: true, contract_start: true, contract_months: true } },
       },
     }),
+    // 表示中の月（支払月）の請求書をすでに出している委託者。受領チェック前でも催促の対象から外れるため、
+    // 「未提出リマインド（N名）」の人数を送信対象の抽出と同じ基準で数えるのに使う。
+    findSubmittedInvoiceContractorIds(year, month),
   ])
 
   const coveredClientLumps: CoveredClientLump[] = coveredClientLumpRows
@@ -286,6 +291,7 @@ export default async function DashboardPage({
       payrollRecords={payrollRecords}
       payrollReimbursements={payrollReimbursements}
       nextMonthReimbursements={nextMonthReimbursements}
+      submittedInvoiceContractorIds={submittedInvoiceContractorIds}
     />
   )
 }
