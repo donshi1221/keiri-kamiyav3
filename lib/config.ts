@@ -117,7 +117,6 @@ export const INVOICE_REMINDER_TEMPLATE =
   process.env.INVOICE_REMINDER_TEMPLATE?.replace(/\\n/g, '\n') ??
   [
     '{to}{name}さん',
-    '',
     'お疲れさまです！！',
     '{month}月分の請求書がまだ確認できておりません。',
     '',
@@ -134,7 +133,6 @@ export const INVOICE_REMINDER_FOLLOWUP_TEMPLATE =
   process.env.INVOICE_REMINDER_FOLLOWUP_TEMPLATE?.replace(/\\n/g, '\n') ??
   [
     '{to}{name}さん',
-    '',
     'お疲れさまです！！',
     '{month}月分の請求書がまだ届いていないようです。',
     '',
@@ -196,7 +194,6 @@ function templateFromEnv(name: string, fallback: string[]): string {
 // 文面は運用で変わるため env で上書きできるようにする（改行は \n で書く）。
 export const INVOICE_REPLY_OK_TEMPLATE = templateFromEnv('INVOICE_REPLY_OK_TEMPLATE', [
   '{to}{name}さん',
-  '',
   'お疲れさまです！！',
   '{month}月分の請求書（¥{amount}）を受領しました。',
   '{extras}内容に問題ありませんでした。',
@@ -215,7 +212,6 @@ export const INVOICE_REPLY_OK_EXTRAS_TEMPLATE = templateFromEnv('INVOICE_REPLY_O
 
 export const INVOICE_REPLY_NG_TEMPLATE = templateFromEnv('INVOICE_REPLY_NG_TEMPLATE', [
   '{to}{name}さん',
-  '',
   'お疲れさまです！！',
   '{month}月分の請求書を確認したところ、下記の点がこちらの控えと合いませんでした。',
   '',
