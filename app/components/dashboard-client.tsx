@@ -14,7 +14,7 @@ import type { RecordWithRelations, ClientRecordWithClient, TaskItem, DeliveryChe
 import { DELIVERY_STATUS_LABEL, deliveryTone, deliveryTargetMonth, deliveryCacheKey, suggestedPayout } from '@/lib/delivery-status'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecord, payrollDeductions, payrollNet, payrollTransferAmount, payrollReimbursementTotal, payrollReimbursementTotalsByRecipient } from '@/lib/payroll'
 import { PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
-import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote, laterRowsInRange, coveredLumpNote, coverPeriodLabel, advanceSkipNote } from '@/lib/lump-sum'
+import { clientLumpBlockReason, payoutLumpBlockReason, remainingMonths, lumpPeriodText, lumpSkipNote, laterRowsInRange, coveredLumpNote, coverPeriodLabel, advanceSkipNote, isClientOverBilled } from '@/lib/lump-sum'
 import TodayTasks from './today-tasks'
 import ErrorToast from './error-toast'
 import InvoiceReminderDialog from './invoice-reminder-dialog'
@@ -1351,7 +1351,7 @@ interface Props {
   oneTimeTasks: OneTimeTask[]
   oneTimeWindowDays: number
   today: string
-  billedCounts: Record<string, number>
+  priorBilledCounts: Record<string, number>
   paidCounts: Record<string, number>
   assignmentPaymentCounts: Record<string, { scheduled: number; paid: number }>
   expenses: Expense[]
@@ -1379,7 +1379,7 @@ interface Props {
 }
 
 export default function DashboardClient({
-  year, month, records, clientRecords, coveredClientLumps, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, billedCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements, submittedInvoiceContractorIds,
+  year, month, records, clientRecords, coveredClientLumps, globalTask, customTasks: initialCustomTasks, oneTimeTasks: initialOneTimeTasks, oneTimeWindowDays, today, priorBilledCounts, paidCounts, assignmentPaymentCounts, expenses: initialExpenses, clientExpenses: initialClientExpenses, mfExpense: initialMfExpense, mfConnected, mfExpired, mfError, mfJustConnected, carryOver, invoiceAlert, paymentAlert, payrollRecords, payrollReimbursements, nextMonthReimbursements, submittedInvoiceContractorIds,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
@@ -3713,9 +3713,7 @@ export default function DashboardClient({
                     ))
                     const itemRows = g.items.map((cr) => {
                       const label = itemLabel(cr)
-                      const billedCount = billedCounts[cr.billing_item_id] ?? 0
-                      const contractMonths = cr.billing_items?.contract_months
-                      const overBilled = contractMonths != null && billedCount >= contractMonths
+                      const overBilled = isClientOverBilled(priorBilledCounts[cr.billing_item_id] ?? 0, cr.months_covered, cr.billing_items?.contract_months)
                       const sentState = clientDueState(cr, 'invoice_sent_at', 15)
                       const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
                       // 1内訳だけのクライアントは、この行が「相手の行」そのものなので見出しの見た目にする
@@ -3896,9 +3894,7 @@ export default function DashboardClient({
                       {g.items.map((cr) => {
                         const label = itemLabel(cr)
                         const labelPart = label ? `（${label}）` : ''
-                        const billedCount = billedCounts[cr.billing_item_id] ?? 0
-                        const contractMonths = cr.billing_items?.contract_months
-                        const overBilled = contractMonths != null && billedCount >= contractMonths
+                        const overBilled = isClientOverBilled(priorBilledCounts[cr.billing_item_id] ?? 0, cr.months_covered, cr.billing_items?.contract_months)
                         const sentState = clientDueState(cr, 'invoice_sent_at', 15)
                         const confirmedState = clientDueState(cr, 'payment_confirmed_at', 25)
                         // 1内訳だけのクライアントは上の名前の帯が期限を示すため、内訳側は塗らない。

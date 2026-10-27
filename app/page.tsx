@@ -74,11 +74,12 @@ export default async function DashboardPage({
       where: and(eq(moneyforwardExpenses.year, year), eq(moneyforwardExpenses.month, month)),
     }),
     db.select({ updated_at: moneyforwardTokens.updated_at }).from(moneyforwardTokens).limit(1),
-    // 内訳ごとの送付済み・入金確認済みの請求回数をSQL側で集計（請求回数超過の判定に使用）。
+    // 内訳ごとの請求回数をSQL側で集計。billed は請求回数超過の判定に使うため、表示中の月より前に送付済みの分だけ数える
+    // （その行自身や先の月まで数えると、契約回数ちょうどで終わった最後の月や過去の月の行にまで印が出る）。
     // 残りの月をまとめた行は1行で複数か月分になるため、行数ではなく months_covered の合計で数える。
     db.select({
       billing_item_id: monthlyClientRecords.billing_item_id,
-      billed: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.invoice_sent_at} is not null), 0)`,
+      billed: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.invoice_sent_at} is not null and ${monthlyClientRecords.year} * 12 + ${monthlyClientRecords.month} < ${year * 12 + month}), 0)`,
       paid: sql<number>`coalesce(sum(${monthlyClientRecords.months_covered}) filter (where ${monthlyClientRecords.payment_confirmed_at} is not null), 0)`,
     }).from(monthlyClientRecords).groupBy(monthlyClientRecords.billing_item_id),
     // スキップした月は払わずに終わる月なので、支払回数（予定・支払い済みとも）には数えない。
@@ -215,11 +216,11 @@ export default async function DashboardPage({
     return dy * 100 + dm <= viewedYearMonth
   })
 
-  // キーは内訳(billing_item_id)。回数超過は内訳ごとに判定する。
-  const billedCounts: Record<string, number> = {}
+  // キーは内訳(billing_item_id)。回数超過は内訳ごとに、表示中の月より前に送付済みの月数で判定する。
+  const priorBilledCounts: Record<string, number> = {}
   const paidCounts: Record<string, number> = {}
   for (const row of clientBillingCounts) {
-    billedCounts[row.billing_item_id] = Number(row.billed)
+    priorBilledCounts[row.billing_item_id] = Number(row.billed)
     paidCounts[row.billing_item_id] = Number(row.paid)
   }
   const assignmentPaymentCounts: Record<string, { scheduled: number; paid: number }> = {}
@@ -275,7 +276,7 @@ export default async function DashboardPage({
       oneTimeTasks={oneTimeTasksForMonth}
       oneTimeWindowDays={ONE_TIME_TASK_WINDOW_DAYS}
       today={today.toISOString()}
-      billedCounts={billedCounts}
+      priorBilledCounts={priorBilledCounts}
       paidCounts={paidCounts}
       assignmentPaymentCounts={assignmentPaymentCounts}
       expenses={monthExpenses}

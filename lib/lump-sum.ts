@@ -273,3 +273,14 @@ export function advanceSkipNote(baseYear: number, from: YearMonth, months: numbe
     : `${monthText(baseYear, from)}〜${monthText(baseYear, last)}`
   return `${skipped}の行は作られなくなります。`
 }
+
+// クライアント請求の行が請求回数超過かどうか。表示中の月より前に送付済みの月数に、この行がまかなう月数を足して契約回数を超えるときだけ true。
+// その行自身を前の分に数えないのは、契約回数ちょうどで終わった最後の月（初回のみの内訳を含む）を超過と見ないため。
+// 契約回数は内訳マスタの今の値で見るので、継続で回数を増やせばその場で印は消える。
+export function isClientOverBilled(
+  priorBilledMonths: number,
+  monthsCovered: number,
+  contractMonths: number | null | undefined,
+): boolean {
+  return contractMonths != null && priorBilledMonths + monthsCovered > contractMonths
+}
