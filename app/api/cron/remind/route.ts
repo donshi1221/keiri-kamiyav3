@@ -240,7 +240,7 @@ export async function GET(req: NextRequest) {
       .filter(({ dueDay }) => isInReminderWindow(day, dueDay))
     if (unpaidPayroll.length > 0) {
       const lines = unpaidPayroll.map(({ p, dueDay }) =>
-        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollTransferAmount(payrollAmountsOfRecord(p), reimbursementTotals[p.recipient_id] ?? 0).toLocaleString()}）${overdueMark(day, dueDay)}`
+        `  □ ${p.payroll_recipients?.name ?? '?'}（振込額 ¥${payrollTransferAmount(payrollAmountsOfRecord(p), reimbursementTotals[p.recipient_id] ?? 0, p.social_insurance_adjustment).toLocaleString()}）${overdueMark(day, dueDay)}`
       )
       sections.push(`■ 役員報酬・給与 — 振込\n${lines.join('\n')}`)
     }

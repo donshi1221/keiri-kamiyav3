@@ -51,12 +51,18 @@ export function payrollNet(a: PayrollAmounts): number {
   return a.gross - payrollDeductions(a)
 }
 
-// 実際に振り込む金額 ＝ 手取り + 立替経費の精算。
-// 立替の精算は非課税の実費返金なので payrollNet（控除の引き算）には通さず、
-// 手取りが確定したあとにここで足す（詳しい理由は lib/schema の expense_reimbursement のコメント）。
+// 実際に振り込む金額 ＝ 手取り + 立替経費の精算 + 社会保険料調整額。
+// 立替の精算は非課税の実費返金、社会保険料調整額は過去月の控除の過不足の訂正で、どちらも所得ではないため
+// payrollNet（控除の引き算）には通さず、手取りが確定したあとにここで足す
+// （詳しい理由は lib/schema の payrollReimbursementItems と social_insurance_adjustment のコメント）。
 // 画面・明細・リマインドが同じ足し算を各所に書くと片方だけ足し忘れるため、この1本に寄せる。
-export function payrollTransferAmount(a: PayrollAmounts, expenseReimbursement: number): number {
-  return payrollNet(a) + expenseReimbursement
+// 調整額を必須の引数にしているのは、呼び出し側の渡し忘れを型チェックで見つけるため。
+export function payrollTransferAmount(
+  a: PayrollAmounts,
+  expenseReimbursement: number,
+  socialInsuranceAdjustment: number
+): number {
+  return payrollNet(a) + expenseReimbursement + socialInsuranceAdjustment
 }
 
 // 立替経費の合計。合計値の列は持たず、毎回この明細の足し算で出す

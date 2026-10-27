@@ -546,6 +546,11 @@ export const monthlyPayrollRecords = pgTable('monthly_payroll_records', {
   employment_insurance_snapshot: integer('employment_insurance_snapshot').notNull().default(0),
   income_tax_snapshot: integer('income_tax_snapshot').notNull().default(0),
   resident_tax_snapshot: integer('resident_tax_snapshot').notNull().default(0),
+  // 社会保険料調整額（円）。過去月に控除しすぎた（または足りなかった）社会保険料を本人へ返す（徴収する）分。
+  // 控除の訂正であって所得ではないため、額面や控除には混ぜず（額面に足すと源泉所得税の計算が狂う）、
+  // 立替の精算と同じく手取りが確定したあとに振込額へ足すだけにする（lib/payroll の payrollTransferAmount）。
+  // 控除が足りなかった分を徴収する月はマイナスで入れるため、0以上には丸めない。
+  social_insurance_adjustment: integer('social_insurance_adjustment').notNull().default(0),
   paid_at: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
   created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => [unique().on(t.year, t.month, t.recipient_id)])

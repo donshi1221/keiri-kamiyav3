@@ -82,9 +82,10 @@ export default async function PayrollSlipPage({
     getLastDayOfMonth(record.year, record.month)
   )
 
-  const gross = amounts.gross + reimbursementTotal
+  const adjustment = record.social_insurance_adjustment
+  const gross = amounts.gross + adjustment + reimbursementTotal
   const deductions = payrollDeductions(amounts)
-  const transfer = payrollTransferAmount(amounts, reimbursementTotal)
+  const transfer = payrollTransferAmount(amounts, reimbursementTotal, adjustment)
 
   return (
     <div className="mx-auto w-full max-w-[210mm] space-y-4 print:max-w-none">
@@ -116,6 +117,9 @@ export default async function PayrollSlipPage({
           <section className="rounded border border-border">
             <h2 className="border-b border-border bg-secondary px-3 py-2 text-sm font-semibold text-foreground">支給</h2>
             <Row label={isExecutive ? '役員報酬' : '基本給'} value={amounts.gross} />
+            {adjustment !== 0 && (
+              <Row label="社会保険料調整額" note="（非課税）" value={adjustment} />
+            )}
             {reimbursementTotal > 0 && (
               <Row label="立替経費精算" note="（非課税）" value={reimbursementTotal} />
             )}

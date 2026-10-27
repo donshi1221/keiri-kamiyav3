@@ -44,6 +44,7 @@ export async function PATCH(
     if (v.employment_insurance_snapshot !== undefined) patch.employment_insurance_snapshot = v.employment_insurance_snapshot
     if (v.income_tax_snapshot !== undefined) patch.income_tax_snapshot = v.income_tax_snapshot
     if (v.resident_tax_snapshot !== undefined) patch.resident_tax_snapshot = v.resident_tax_snapshot
+    if (v.social_insurance_adjustment !== undefined) patch.social_insurance_adjustment = v.social_insurance_adjustment
 
     if (Object.keys(patch).length === 0) {
       return Response.json({ error: '更新する項目がありません。' }, { status: 400 })

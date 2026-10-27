@@ -358,6 +358,12 @@ export const payrollSnapshotPatchSchema = z.object({
   employment_insurance_snapshot: moneyInt.optional(),
   income_tax_snapshot: moneyInt.optional(),
   resident_tax_snapshot: moneyInt.optional(),
+  // 社会保険料調整額。控除の不足分を徴収する月はマイナスになるため、moneyInt（0以上）は使わない。
+  social_insurance_adjustment: z.coerce
+    .number()
+    .refine((n) => Number.isFinite(n), { message: '金額には数値を入力してください' })
+    .transform((n) => Math.round(n))
+    .optional(),
 })
 
 // 立替経費の精算明細。金額は0円を許さない（0円の立替は精算する意味が無く、

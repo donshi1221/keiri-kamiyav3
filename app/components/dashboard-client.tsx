@@ -648,6 +648,8 @@ const PAYROLL_FIELDS = [
   { key: 'resident_tax_snapshot', label: '住民税' },
 ] as const
 type PayrollField = (typeof PAYROLL_FIELDS)[number]['key']
+// 社会保険料調整額はマイナスも入る（0以上の制限を持つ PAYROLL_FIELDS と入力欄を共有できない）ため、別の項目として足す。
+type PayrollAmountsPatch = Record<PayrollField, number> & { social_insurance_adjustment: number }
 
 // 委託者への支払いチェックリストの列（受領・支払い予約・支払い確認）。一括操作の対象列を表す。
 type ContractorField = 'invoice_received_at' | 'payment_reserved_at' | 'contractor_paid_at'
@@ -659,12 +661,13 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
   // 「保存したら思っていた額と違った」になるため、確認用の合計だけ受け取って足す。
   reimbursementTotal: number
   onClose: () => void
-  onSave: (id: string, values: Record<PayrollField, number>) => Promise<void>
+  onSave: (id: string, values: PayrollAmountsPatch) => Promise<void>
 }) {
   const [values, setValues] = useState<Record<PayrollField, string>>(() => ({
     gross_snapshot: '', health_insurance_snapshot: '', pension_snapshot: '',
     employment_insurance_snapshot: '', income_tax_snapshot: '', resident_tax_snapshot: '',
   }))
+  const [adjustment, setAdjustment] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -677,6 +680,7 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
       income_tax_snapshot: String(record.income_tax_snapshot),
       resident_tax_snapshot: String(record.resident_tax_snapshot),
     })
+    setAdjustment(String(record.social_insurance_adjustment))
   }, [record])
 
   if (!record) return null
@@ -689,7 +693,7 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
     employment_insurance: toNum(values.employment_insurance_snapshot),
     income_tax: toNum(values.income_tax_snapshot),
     resident_tax: toNum(values.resident_tax_snapshot),
-  }, reimbursementTotal)
+  }, reimbursementTotal, toNum(adjustment))
 
   async function submit() {
     if (!record) return
@@ -701,6 +705,7 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
       employment_insurance_snapshot: toNum(values.employment_insurance_snapshot),
       income_tax_snapshot: toNum(values.income_tax_snapshot),
       resident_tax_snapshot: toNum(values.resident_tax_snapshot),
+      social_insurance_adjustment: toNum(adjustment),
     })
     setSaving(false)
   }
@@ -731,8 +736,26 @@ function PayrollAmountsDialog({ record, monthLabel, reimbursementTotal, onClose,
             </div>
           ))}
         </div>
+        <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium" htmlFor="payroll-social_insurance_adjustment">社会保険料調整額</label>
+            {/* inputMode="numeric" はスマホでマイナス記号が打てないキーボードになるため付けない。 */}
+            <input
+              id="payroll-social_insurance_adjustment"
+              type="number"
+              value={adjustment}
+              onChange={(e) => setAdjustment(e.target.value)}
+              className="w-full rounded border border-border px-3 py-2 text-right text-sm"
+            />
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground sm:col-span-2">
+            過去月の控除の過不足を返す（＋）・徴収する（−）金額。非課税で振込額にだけ足します。
+          </p>
+        </div>
         <div className="rounded border px-3 py-2 text-sm">
-          振込額（手取り＋立替 ¥{reimbursementTotal.toLocaleString()}） <span className="font-semibold">¥{preview.toLocaleString()}</span>
+          振込額（手取り＋立替 ¥{reimbursementTotal.toLocaleString()}
+          {toNum(adjustment) !== 0 && <>＋社会保険料調整 ¥{toNum(adjustment).toLocaleString()}</>}
+          ） <span className="font-semibold">¥{preview.toLocaleString()}</span>
           <span className="mt-1 block text-xs text-muted-foreground">立替経費は「立替明細」から追加・修正します。</span>
         </div>
         <div className="flex justify-end gap-2 pt-2">
@@ -1765,7 +1788,7 @@ export default function DashboardClient({
   }
 
   // その月の金額（控え）の書き換え。マスタと過去月には影響しない。
-  async function savePayrollAmounts(id: string, values: Record<PayrollField, number>) {
+  async function savePayrollAmounts(id: string, values: PayrollAmountsPatch) {
     try {
       const res = await fetch(`/api/checklist/payroll/${id}`, {
         method: 'PATCH',
@@ -4071,12 +4094,14 @@ export default function DashboardClient({
                   </div>
                   <div className="shrink-0 text-right">
                     <span className="text-base font-semibold text-foreground">
-                      ¥{payrollTransferAmount(amounts, reimbursement).toLocaleString()}
+                      ¥{payrollTransferAmount(amounts, reimbursement, p.social_insurance_adjustment).toLocaleString()}
                     </span>
-                    {/* 立替がある月だけ内訳を出す。無い月に「給与◯円＋立替0円」と書いても読む手間が増えるだけ。 */}
-                    {reimbursement > 0 && (
+                    {/* 立替か社会保険料調整がある月だけ内訳を出す。無い月に「給与◯円＋立替0円」と書いても読む手間が増えるだけ。 */}
+                    {(reimbursement > 0 || p.social_insurance_adjustment !== 0) && (
                       <span className="block text-xs text-muted-foreground">
-                        内訳: {kindLabel} ¥{payrollNet(amounts).toLocaleString()} ＋ 立替 ¥{reimbursement.toLocaleString()}
+                        内訳: {kindLabel} ¥{payrollNet(amounts).toLocaleString()}
+                        {reimbursement > 0 && ` ＋ 立替 ¥${reimbursement.toLocaleString()}`}
+                        {p.social_insurance_adjustment !== 0 && ` ＋ 社会保険料調整 ¥${p.social_insurance_adjustment.toLocaleString()}`}
                       </span>
                     )}
                   </div>

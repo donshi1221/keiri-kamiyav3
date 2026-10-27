@@ -1,0 +1,1 @@
+ALTER TABLE "monthly_payroll_records" ADD COLUMN "social_insurance_adjustment" integer DEFAULT 0 NOT NULL;
