@@ -83,10 +83,32 @@ export function resolveItemClient(
   return { indexes: bestMatchIndexes(item.label, candidateNames), source: 'label' }
 }
 
+// 「修正」の対価を請求している明細か。追加修正・再修正・修正費・修正対応など「修正」を含む行が当たる。
+// 「修正版」「修正済」は請求書そのものの出し直しや作業の状態を表すだけで、修正の対価ではないので外す。
+const REVISION_LABEL_PATTERN = /修正(?!版|済)/
+
+export function isRevisionLabel(label: string): boolean {
+  return REVISION_LABEL_PATTERN.test(label)
+}
+
+// 照合で使う明細の種別。AIの読み取った kind をそのまま使わずここを通すのは、修正の行を
+// 通常の本数から必ず外すため。AIは「追加修正 2本」のように本数が書かれた修正の行を work と
+// 読むことがあり、そのまま通常の本数に足すと納品実績より多いと出て請求書がNGになってしまう。
+// 修正は納品実績（通常の本数）とは別に払うかを人が決めるものなので、追加費用（extra）として
+// 「認める／認めない」の確認に回す。読み取り済みの請求書も再チェックだけで同じ扱いになるよう、
+// 保存された値は書き換えずに照合のたびにここで判断する。
+// 実費（expense）と読んだ行は、修正に伴う交通費などのこともあるのでそのまま実費として扱う。
+// kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
+export function effectiveItemKind(item: { label: string; kind?: string | null }): 'work' | 'expense' | 'extra' {
+  if (item.kind === 'expense') return 'expense'
+  if (item.kind === 'extra' || isRevisionLabel(item.label)) return 'extra'
+  return 'work'
+}
+
 // 業務明細（work）を、候補（クライアント別の支払予定）へ帰属させる。
 // 照合本体（lib/invoice-check の compareInvoiceItems）と、手動OKの割り当て案が同じ結果を使う。
 // 別々に帰属を決めると、判定理由の表示と割り当て案の金額が食い違うため1か所にまとめている。
-// kind を持たない過去の読み取り結果は work とみなす（経費として扱うと本数のズレを見逃すため）。
+// 種別は effectiveItemKind で決める（修正の行は追加費用として外れる）。
 // 経費（expense）と追加費用（extra）はクライアント別の支払予定に相手がいないので対象にしない。
 //   resolved      … 業務明細ごとの帰属先（候補の位置）。明細の並び順のまま。1つに絞れた行だけが帰属済み
 //   matched       … 候補の位置 → 帰属した明細（1クライアントを複数行に分けて書く請求書があるため配列）
@@ -105,7 +127,7 @@ export function attributeWorkItems<
   unassigned: T[]
 } {
   const resolved = items
-    .filter((item) => item.kind !== 'expense' && item.kind !== 'extra')
+    .filter((item) => effectiveItemKind(item) === 'work')
     .map((item) => ({ item, indexes: resolveItemClient(item, candidateNames).indexes }))
   const matched = new Map<number, T[]>()
   const unassigned: T[] = []

@@ -30,7 +30,7 @@ import {
   hasInvoiceNoteMark,
   parseInvoiceNotes,
 } from '@/lib/invoice-notes'
-import { compareTotalWithExtras, decideExtraItems } from '@/lib/invoice-extra'
+import { compareTotalWithExtras, decideExtraItems, extraItemTitle } from '@/lib/invoice-extra'
 import { buildInvoiceReplyBody } from '@/lib/invoice-reply'
 import { getOrCreateInvoiceUploadToken } from '@/lib/invoice-token'
 import {
@@ -38,6 +38,7 @@ import {
   attributeWorkItems,
   cautionKeyOf,
   clientMatchNames,
+  effectiveItemKind,
   extractItemDate,
   normalizeName,
   parseClientAliases,
@@ -522,7 +523,7 @@ function compareInvoiceItems(
   }
   // 業務明細（work）の見分けと帰属は attributeWorkItems に任せる（手動OKの割り当て案と同じ結果を使うため）。
   // 追加費用（extra）はクライアント別の支払予定に相手がいないので、ここでは扱わず呼び出し側で別に見る。
-  const expenseItems = items.filter((item) => item.kind === 'expense')
+  const expenseItems = items.filter((item) => effectiveItemKind(item) === 'expense')
   // 1クライアントを工程ごとに複数行へ分けて書く請求書があるため、突き合わせは
   // 「内訳1行 対 明細n行」で行い、合算してから比べる（1行ずつ比べると両方NGになる）。
   const attribution = attributeWorkItems(items, breakdown.map((target) => target.matchNames))
@@ -1109,7 +1110,7 @@ export async function checkInvoiceAndSave(
       // 問いかけは record() を通さず専用の印（確認）で積む。保留の印にすると、マスタや納品シートを
       // 直せば消える他の保留と見分けが付かなくなるため。
       for (const extra of extraItems) {
-        const shown = `追加費用 ${extra.amount === null ? '金額不明' : yen(extra.amount)}（${extra.label}）`
+        const shown = `${extraItemTitle(extra.label)} ${extra.amount === null ? '金額不明' : yen(extra.amount)}（${extra.label}）`
         if (extra.decision === 'approved') {
           record('ok', `${shown}は認め済みです（支払予定に含めています）`)
         } else if (extra.decision === 'rejected') {
