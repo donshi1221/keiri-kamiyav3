@@ -352,6 +352,8 @@ function DeliveryCheckNote({ row, unitPrice, currentAmount, onApply }: {
       <span className={tone === 'done' ? 'text-success' : 'text-warning'}>
         納品チェック: {row.delivered ?? 0}/{row.expected ?? 0}本
       </span>
+      {/* 修正の行は通常の本数に含めない（修正費として請求書チェックで別に確かめる）ので、外した件数を添える。 */}
+      {(row.revisions ?? 0) > 0 && <span className="text-muted-foreground">修正{row.revisions}件は除外</span>}
       {/* 揃っていない月だけ、未記入の行を確かめられるようシートへの導線を出す。 */}
       {tone === 'short' && sheetLink}
       {tone === 'done' && unitPrice <= 0 && <span className="text-muted-foreground">単価未設定</span>}

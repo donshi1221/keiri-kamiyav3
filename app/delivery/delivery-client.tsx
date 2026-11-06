@@ -187,6 +187,9 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
                       <div className="font-medium">{r.contractorName}</div>
                       <div className="text-xs text-muted-foreground">{r.clientName} · {r.roleName}</div>
                       {r.message && <div className="mt-1 text-xs text-muted-foreground">{r.message}</div>}
+                      {(r.revisions ?? 0) > 0 && (
+                        <div className="mt-1 text-xs text-muted-foreground">修正{r.revisions}件は本数に含めていません</div>
+                      )}
                     </td>
                     <td className="px-3 py-3 text-muted-foreground">{r.tabTitle ?? '—'}</td>
                     <td className="px-3 py-3 text-right text-muted-foreground">{r.expected ?? '—'}</td>
@@ -220,6 +223,9 @@ export default function DeliveryClient({ initialYear, initialMonth }: Props) {
                   {r.tabTitle && <span className="ml-auto text-xs text-muted-foreground">{r.tabTitle}</span>}
                 </div>
                 {r.message && <div className="mt-1 text-xs text-muted-foreground">{r.message}</div>}
+                {(r.revisions ?? 0) > 0 && (
+                  <div className="mt-1 text-xs text-muted-foreground">修正{r.revisions}件は本数に含めていません</div>
+                )}
                 {r.spreadsheetUrl && (
                   // カードの高さを変えずにタップ判定だけ 44px 高へ広げるため、after 疑似要素で拡張する。
                   <a
