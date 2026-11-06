@@ -3,6 +3,7 @@
 // ここには、明細を指すキーの作り方と、決定を踏まえた金額の比べ方だけを置く（DBには触らない）。
 // サーバー（照合・操作のAPI）と画面の両方から使えるよう server-only にしない。
 import type { InvoiceExtraItem, InvoiceExtractedItem } from './ui-types'
+import { effectiveItemKind, isRevisionLabel } from './invoice-match'
 
 // 追加費用の明細1件を指すキー。「認めた」記録（expenses.invoice_item_key）と「認めない」記録
 // （invoice_uploads.rejected_extras）の両方がこのキーで明細を指す。
@@ -13,12 +14,13 @@ function extraItemKey(label: string, amount: number | null, occurrence: number):
   return `${label.replace(/[\s　]/g, '')}|${amount ?? ''}|${occurrence}`
 }
 
-// 明細から追加費用の行だけを取り出し、キーを付ける。kind を持たない過去の読み取り結果には
-// 追加費用の行が無い（work とみなされる）ので、空配列になるだけで従来どおり動く。
+// 明細から追加費用の行だけを取り出し、キーを付ける。種別は effectiveItemKind で決めるので、
+// AIが work と読んだ「追加修正」などの修正の行もここに入る（通常の本数から外して確認に回す）。
+// kind を持たない過去の読み取り結果も、修正の行でなければ work とみなされて従来どおり動く。
 export function keyedExtraItems(items: InvoiceExtractedItem[]): Omit<InvoiceExtraItem, 'decision'>[] {
   const seen = new Map<string, number>()
   return items
-    .filter((item) => item.kind === 'extra')
+    .filter((item) => effectiveItemKind(item) === 'extra')
     .map((item) => {
       const base = extraItemKey(item.label, item.amount, 0)
       const occurrence = (seen.get(base) ?? 0) + 1
@@ -30,6 +32,12 @@ export function keyedExtraItems(items: InvoiceExtractedItem[]): Omit<InvoiceExtr
         client: item.client ?? null,
       }
     })
+}
+
+// 追加費用の行を画面・判定理由に出すときの呼び名。修正の行は「修正費」と出し、通常の本数とは別に
+// 修正として請求されていることがひと目で分かるようにする（扱いは他の追加費用と同じ）。
+export function extraItemTitle(label: string): string {
+  return isRevisionLabel(label) ? '修正費' : '追加費用'
 }
 
 // 追加費用の各行に今の扱いを付ける。両方に記録がある行は「認めた」を優先する

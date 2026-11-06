@@ -18,6 +18,7 @@ import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
 import { formatInvoiceNote, hasInvoiceNoteMark, parseInvoiceNotes } from '@/lib/invoice-notes'
+import { extraItemTitle } from '@/lib/invoice-extra'
 import {
   CAUTION_LABEL_SEPARATOR,
   cautionKeyFromNoteText,
@@ -441,6 +442,10 @@ function UsageNotes() {
             「認める／認めない」を尋ねます。認めると委託者への支払いに足して照合をやり直し、認めないとNGになって
             返信の下書きが「修正のお願い」になります。認めた追加費用を取り消すときは、ダッシュボードの
             委託者の行にある経費一覧から削除して再チェックしてください。
+          </li>
+          <li>
+            「追加修正」「修正費」など明細の名称に「修正」が入っている行は、本数が書かれていても通常の本数には数えず、
+            「修正費」として同じように「認める／認めない」を尋ねます（「修正版」「修正済」は対象外）。
           </li>
           <li>判定理由はNG・保留の行だけを表示し、一致した項目は「詳細を見る」で開けます。</li>
           <li>
@@ -880,7 +885,7 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
 // 認めたものはここには出さない（判定理由の詳細に「認め済み」と残り、取り消しはダッシュボードの経費一覧から）。
 
 function formatExtraItem(item: InvoiceExtraItem): string {
-  return `追加費用 ${item.amount === null ? '金額不明' : `¥${item.amount.toLocaleString()}`}（${item.label}）`
+  return `${extraItemTitle(item.label)} ${item.amount === null ? '金額不明' : `¥${item.amount.toLocaleString()}`}（${item.label}）`
 }
 
 function ExtraItemsBlock({ items, onApprove, onReject, onUnreject, busy }: {
