@@ -39,6 +39,7 @@ import {
   cautionKeyOf,
   clientMatchNames,
   effectiveItemKind,
+  isRevisionLabel,
   extractItemDate,
   normalizeName,
   parseClientAliases,
@@ -145,6 +146,9 @@ type ExpectedOutcome =
       // 納品シートから金額を出せなかった行（tolerateDeliveryHold のときだけ入る）。内訳には ¥0 で
       // 載せてあるので、「予定0円」と取り違えないよう呼び出し側がここで見分ける。
       unresolvedRecordIds: string[]
+      // 納品シートで修正の行として通常の本数から外した件数（クライアント別。0件のクライアントは入らない）。
+      // 請求書に修正費の記載があるかを確かめる手がかりにする。
+      sheetRevisions: { clientName: string; count: number }[]
     }
   // holdDetails は保留の理由が複数あるときの内訳（1件1行）。hold はその見出しになる。
   | { hold: string; holdDetails?: string[] }
@@ -204,6 +208,7 @@ async function computeExpectedPayout(
   const payouts: DeliveryPayoutApply[] = []
   const unresolvedRecordIds: string[] = []
   const deliveryHolds: string[] = []
+  const sheetRevisions: { clientName: string; count: number }[] = []
 
   for (const record of records) {
     const assignment = assignmentRows.find((a) => a.id === record.assignment_id)
@@ -288,6 +293,11 @@ async function computeExpectedPayout(
     total += suggested
     breakdown.push({ recordId: record.id, clientName, count: delivery.delivered, amount: suggested, matchNames, ...payment })
     payouts.push({ recordId: record.id, amount: suggested, videoCount: delivery.delivered ?? 0 })
+    const revisions = delivery.revisions ?? 0
+    if (revisions > 0) {
+      notes.push(`${clientName}: 納品シートの修正 ${revisions}件は通常の本数に含めていません`)
+      sheetRevisions.push({ clientName, count: revisions })
+    }
   }
 
   // 1社だけなら従来どおり1行で伝える。複数あるときは件数を先頭に出し、どの会社が何で止まっているかを1社1行で並べる。
@@ -317,7 +327,17 @@ async function computeExpectedPayout(
     expenseRows.filter((e) => e.category === 'extra' && e.itemKey !== null).map((e) => e.itemKey as string)
   )
 
-  return { amount: total, notes, breakdown, skipped, expenseTotal, approvedExtraKeys, payouts, unresolvedRecordIds }
+  return {
+    amount: total,
+    notes,
+    breakdown,
+    skipped,
+    expenseTotal,
+    approvedExtraKeys,
+    payouts,
+    unresolvedRecordIds,
+    sheetRevisions,
+  }
 }
 
 // OK行は「本数（無ければ金額） 一致」のコンパクト表記にする。本数と金額を両方書くと
@@ -1119,6 +1139,12 @@ export async function checkInvoiceAndSave(
           notes.push(formatInvoiceNote('confirm', `${shown}を認めますか？`))
           hasHold = true
         }
+      }
+      // 納品シートに修正の行があるのに、請求書に修正費の行が無い。修正費を取らない取り決めのこともあるので
+      // 判定は動かさず注意として見せるだけにする（請求漏れか、取らない分かを人が確かめられるように）。
+      if (expected.sheetRevisions.length > 0 && !extraItems.some((extra) => isRevisionLabel(extra.label))) {
+        const where = expected.sheetRevisions.map((r) => `${r.clientName} ${r.count}件`).join('、')
+        notes.push(formatInvoiceNote('caution', `納品シートに修正の行があります（${where}）が、請求書に修正費の記載がありません`))
       }
       // ─── D. 明細（クライアント別内訳）の照合 ──────────────────
       // 合計が一致していても内訳が入れ替わっている（相殺）ことがあるため、合計とは独立して見る。

@@ -4,6 +4,7 @@
 // - DB は一切変更しない（読むだけ・数えるだけ）。
 // - 失敗しても例外を投げず、状態(status)に載せて返す（1件の失敗で全体を止めないため）。
 import { DELIVERY_COL_DEADLINE, DELIVERY_COL_URL, DELIVERY_HEADER_ROWS } from './config'
+import { isRevisionLabel } from './invoice-match'
 import type { DeliveryCheckRow } from './ui-types'
 
 const SHEETS_API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
@@ -71,30 +72,43 @@ function parsesAsDate(raw: string): boolean {
   return false
 }
 
+// 修正の行か。タイトル欄に「追加修正」と書く月もあれば、通常のタイトルの行の横（E列など）に
+// 「追加修正料金1,000円」とメモを書く月もあるため、URL列以外のどの列に書かれていても拾う。
+// 判定の言葉は請求書の明細と同じ（lib/invoice-match の isRevisionLabel。「修正版」「修正済」は外す）。
+function isRevisionRow(row: string[]): boolean {
+  return row.some((cell, index) => index !== DELIVERY_COL_URL && isRevisionLabel(normalizeSheetText(cell ?? '')))
+}
+
 // A列(〆切)が対象月の行を「すべき」、そのうちD列(URL)が非空の行を「済み」として数える。
-export function countDeliveries(values: string[][], month: number): { expected: number; delivered: number } {
+// 修正の行は通常の本数（すべき・済み）に含めず、revisions として別に数える。修正は1本分の単価ではなく
+// 修正費として別に払う（払うかは請求書チェックで人が決める）ため、本数に入れると支払予定が1本分多くなり、
+// 修正を除いて書かれた請求書が「本数が少ない」とNGになってしまう。
+export function countDeliveries(
+  values: string[][],
+  month: number
+): { expected: number; delivered: number; revisions: number } {
   let expected = 0
   let delivered = 0
+  let revisions = 0
   for (const row of values.slice(DELIVERY_HEADER_ROWS)) {
     const deadline = row[DELIVERY_COL_DEADLINE] ?? ''
     const hasUrl = (row[DELIVERY_COL_URL] ?? '').trim().length > 0
-
-    if (isDeadlineInMonth(deadline, month)) {
-      expected++
-      if (hasUrl) delivered++
-      continue
-    }
 
     // A列が日付として解釈できない行（空欄や「1」等）は、タブ名自体が対象月を表しており、
     // 〆切を日付形式で書かない運用が実際のシートに存在するための救済措置。
     // URLが貼られている＝納品済みは確実なので、対象月タブのものとして拾う。
     // ただし別の月の日付として読める行（例: 7月度タブに8/1）は従来どおり数えない（月またぎ誤カウント防止）。
-    if (!parsesAsDate(deadline) && hasUrl) {
-      expected++
-      delivered++
+    const inMonth = isDeadlineInMonth(deadline, month)
+    if (!inMonth && !(!parsesAsDate(deadline) && hasUrl)) continue
+
+    if (isRevisionRow(row)) {
+      revisions++
+      continue
     }
+    expected++
+    if (hasUrl) delivered++
   }
-  return { expected, delivered }
+  return { expected, delivered, revisions }
 }
 
 async function fetchJson(url: string): Promise<unknown> {
@@ -144,6 +158,7 @@ export async function checkAssignmentDelivery(
     tabUrl: null,
     expected: null,
     delivered: null,
+    revisions: null,
     message: null,
   }
 
@@ -169,8 +184,8 @@ export async function checkAssignmentDelivery(
       }
     }
     const values = await fetchTabValues(spreadsheetId, tab.title, apiKey)
-    const { expected, delivered } = countDeliveries(values, month)
-    return { ...base, status: 'ok', tabTitle: tab.title, tabUrl, expected, delivered }
+    const { expected, delivered, revisions } = countDeliveries(values, month)
+    return { ...base, status: 'ok', tabTitle: tab.title, tabUrl, expected, delivered, revisions }
   } catch (err) {
     if (err instanceof SheetsError) {
       if (err.httpStatus === 403) {

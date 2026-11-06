@@ -152,6 +152,10 @@ export interface DeliveryCheckRow {
   tabUrl: string | null
   expected: number | null //  納品すべき本数（A列の〆切が対象月の行数）
   delivered: number | null // 納品済み本数（うちD列にURLがある行数）
+  // 修正の行数（「追加修正」などと書かれた行。lib/sheets の countDeliveries）。expected・delivered には含めない。
+  // 修正費として別に払うかを請求書チェックで確かめるために数えておく。この項目ができる前に画面へ控えた結果には無いので
+  // 読む側は ?? 0 で扱う。
+  revisions?: number | null
   message: string | null //   補足・エラー内容（人間向け）
 }
 
