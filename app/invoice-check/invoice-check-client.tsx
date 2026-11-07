@@ -707,6 +707,10 @@ function guessExpenseDate(label: string, r: InvoiceCheckRow): string {
   return date ? toExpenseDate(date.month, date.day, baseYear, baseMonth) : ''
 }
 
+// 「クライアントに請求しない（会社負担）」を選んだ印。経費は必ずどれかのアサインにぶら下げる決まりなので、
+// 送るときに委託者の1つ目のアサインへ置き換える（請求に乗らないので、どのアサインに置いてもお金の流れは変わらない）。
+const NO_BILL_ASSIGNMENT = '__no_bill__'
+
 interface ExpenseDraft {
   amount: string
   date: string
@@ -754,6 +758,14 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
       onError('登録先アサインを選んでください。')
       return
     }
+    // canRegisterExpense が通常は防ぐが、置き換え先のアサインが無いまま送ると落ちるため念のため止める。
+    if (
+      pending.some(({ d }) => d.assignmentId === NO_BILL_ASSIGNMENT) &&
+      target.expense_assignments.length === 0
+    ) {
+      onError('登録先にできるアサインがありません。')
+      return
+    }
     if (pending.some(({ d }) => d.amount.trim() === '' || !(Number(d.amount) > 0))) {
       onError('金額を入力してください。')
       return
@@ -768,7 +780,8 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            assignment_id: d.assignmentId,
+            assignment_id: d.assignmentId === NO_BILL_ASSIGNMENT ? target.expense_assignments[0].id : d.assignmentId,
+            bill_client: d.assignmentId !== NO_BILL_ASSIGNMENT,
             // 経費は支払月の行に紐づく（照合もその月の合計と突き合わせる）。
             year: target.payout_year,
             month: target.payout_month,
@@ -859,7 +872,13 @@ function ExpenseRegisterDialog({ target, onClose, onRegistered, onError }: {
                       {a.clientName}
                     </option>
                   ))}
+                  <option value={NO_BILL_ASSIGNMENT}>クライアントに請求しない（会社負担）</option>
                 </select>
+                {d.assignmentId === NO_BILL_ASSIGNMENT && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    委託者への支払いには足し、クライアントへの請求・売上には足しません。
+                  </p>
+                )}
               </div>
               {d.done && <p className="text-xs text-success">登録しました</p>}
             </div>
