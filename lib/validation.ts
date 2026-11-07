@@ -135,6 +135,8 @@ export const expenseCreateSchema = z.object({
   ),
   amount: moneyInt,
   note: z.string().trim().nullish(),
+  // 省略時は従来どおり請求する（true）扱い。古い呼び出し元を壊さないよう任意項目にしている。
+  bill_client: z.boolean({ message: 'bill_client は true / false で指定してください' }).optional(),
 })
 
 // 自社が直接払った経費（素材購入費・広告費など）。委託者を経由しないためクライアントへ直接ぶら下げる。

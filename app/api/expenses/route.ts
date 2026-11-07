@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       expense_date: body.expense_date,
       amount: body.amount,
       note: body.note ?? null,
+      bill_client: body.bill_client ?? true,
     }).returning()
 
     return Response.json(inserted, { status: 201 })

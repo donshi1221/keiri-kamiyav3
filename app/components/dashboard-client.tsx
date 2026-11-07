@@ -184,26 +184,30 @@ function SectionHeader({ title, open, onToggle, amountLabel, amount, pending, ov
 // （category が extra）には印を付け、クライアントへ請求しない分は合計の注記からも外す
 // （全部が「請求にも同額を加算」と読めると、請求しない追加費用まで請求漏れに見えてしまう）。
 // canAdd が false のときは一覧と削除だけにする（編集者の行。追加費用は請求書チェックから入るため）。
-function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelete, totalLabel = '経費 計', totalNote = '（請求にも同額を加算）', addLabel = '＋経費', canAdd = true }: {
+// allowNoBill が true のときだけ「クライアントに請求しない」チェックを出す。立替経費だけで出す
+// （自社経費はそもそも委託者に払わないので、請求しない選択肢に意味がない）。
+function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelete, totalLabel = '経費 計', totalNote = '（請求にも同額を加算）', addLabel = '＋経費', canAdd = true, allowNoBill = false }: {
   items: (Pick<Expense, 'id' | 'expense_date' | 'amount' | 'note'> & Partial<Pick<Expense, 'category' | 'bill_client'>>)[]
   formOpen: boolean
   onOpenForm: () => void
   onCloseForm: () => void
-  onAdd: (input: { expense_date: string; amount: string; note: string }) => void
+  onAdd: (input: { expense_date: string; amount: string; note: string; bill_client: boolean }) => void
   onDelete: (id: string) => void
   totalLabel?: string
   totalNote?: string
   addLabel?: string
   canAdd?: boolean
+  allowNoBill?: boolean
 }) {
   const [date, setDate] = useState('')
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
+  const [noBill, setNoBill] = useState(false)
 
   function submit() {
     if (!amount.trim()) return
-    onAdd({ expense_date: date, amount, note })
-    setDate(''); setAmount(''); setNote('')
+    onAdd({ expense_date: date, amount, note, bill_client: !noBill })
+    setDate(''); setAmount(''); setNote(''); setNoBill(false)
   }
 
   const total = items.reduce((s, e) => s + e.amount, 0)
@@ -227,6 +231,9 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
                 <span className="rounded bg-secondary px-1 text-muted-foreground">
                   追加費用{e.bill_client === false ? '・請求なし' : ''}
                 </span>
+              )}
+              {e.category !== 'extra' && e.bill_client === false && (
+                <span className="rounded bg-secondary px-1 text-muted-foreground">請求なし</span>
               )}
               {e.note && <span className="text-muted-foreground">{e.note}</span>}
               <button
@@ -270,6 +277,16 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
             aria-label="経費の内容"
             className="min-w-[8rem] flex-1 rounded border border-border px-1 py-1 text-xs"
           />
+          {allowNoBill && (
+            <label className="flex h-11 items-center gap-1 px-1 text-muted-foreground md:h-6">
+              <input
+                type="checkbox"
+                checked={noBill}
+                onChange={(e) => setNoBill(e.target.checked)}
+              />
+              クライアントに請求しない（会社負担）
+            </label>
+          )}
           <button
             type="button"
             onClick={submit}
@@ -280,7 +297,7 @@ function ExpenseBlock({ items, formOpen, onOpenForm, onCloseForm, onAdd, onDelet
           </button>
           <button
             type="button"
-            onClick={() => { setDate(''); setAmount(''); setNote(''); onCloseForm() }}
+            onClick={() => { setDate(''); setAmount(''); setNote(''); setNoBill(false); onCloseForm() }}
             className="flex h-11 items-center rounded px-2 text-muted-foreground hover:bg-accent md:h-6"
           >
             やめる
@@ -2539,7 +2556,7 @@ export default function DashboardClient({
   const showExpenseBlock = (r: RecordWithRelations): boolean =>
     canAddExpense(r) || (expensesByAssignment.get(r.assignments?.id ?? '')?.length ?? 0) > 0
 
-  async function addExpense(assignmentId: string, input: { expense_date: string; amount: string; note: string }) {
+  async function addExpense(assignmentId: string, input: { expense_date: string; amount: string; note: string; bill_client: boolean }) {
     try {
       const res = await fetch('/api/expenses', {
         method: 'POST',
@@ -2550,6 +2567,7 @@ export default function DashboardClient({
           expense_date: input.expense_date || null,
           amount: input.amount,
           note: input.note,
+          bill_client: input.bill_client,
         }),
       })
       const data = (await res.json().catch(() => null)) as (Expense & { error?: string }) | null
@@ -3311,6 +3329,7 @@ export default function DashboardClient({
                             {asgn && showExpenseBlock(r) && (
                               <ExpenseBlock
                                 canAdd={canAddExpense(r)}
+                                allowNoBill
                                 items={expensesByAssignment.get(asgn.id) ?? []}
                                 formOpen={expenseFormFor === asgn.id}
                                 onOpenForm={() => setExpenseFormFor(asgn.id)}
@@ -3531,6 +3550,7 @@ export default function DashboardClient({
                                 {asgn && showExpenseBlock(r) && (
                                   <ExpenseBlock
                                     canAdd={canAddExpense(r)}
+                                    allowNoBill
                                     items={expensesByAssignment.get(asgn.id) ?? []}
                                     formOpen={expenseFormFor === asgn.id}
                                     onOpenForm={() => setExpenseFormFor(asgn.id)}
