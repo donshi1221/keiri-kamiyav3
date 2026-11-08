@@ -22,6 +22,7 @@ import {
   INVOICE_REPLY_UNKNOWN_MONTH,
 } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
+import { isPaymentActiveForMonth } from '@/lib/monthly-records'
 import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import {
   INVOICE_MANUAL_EDIT_NOTE,
@@ -132,12 +133,18 @@ type DeliveryPayoutApply = { recordId: string; amount: number; videoCount: numbe
 // 請求書にそのクライアント分の明細が載ってきたときに専用の文言で保留にするためだけに持つ。
 type SkippedClient = { clientName: string; matchNames: string[] }
 
+// outOfPeriod は有効なアサインだが、支払期間（支払開始月・支払回数）が今月の支払いを含まないクライアント。
+// 期間外の月には月次レコードが作られず breakdown に出ないため、請求書に明細が載ってきても
+// 「マスタに見つかりません」と誤って案内しないよう、期間外であることを伝える文言（detail）を控えておく。
+type OutOfPeriodClient = { clientName: string; matchNames: string[]; detail: string }
+
 type ExpectedOutcome =
   | {
       amount: number
       notes: string[]
       breakdown: InvoicePayoutBreakdownRow[]
       skipped: SkippedClient[]
+      outOfPeriod: OutOfPeriodClient[]
       expenseTotal: number
       // 認め済みの追加費用が指す明細のキー（lib/invoice-extra）。金額は amount に足し込み済みで、
       // ここでは「請求書のどの明細が認め済みか」を引くためだけに持つ。
@@ -311,6 +318,36 @@ async function computeExpectedPayout(
     }
   }
 
+  // 月次レコードが無いのは、支払期間の外だから（終了済み・開始前）のことがある。
+  const recordedAssignmentIds = new Set(records.map((r) => r.assignment_id))
+  const outOfPeriod: OutOfPeriodClient[] = []
+  for (const assignment of assignmentRows) {
+    const client = assignment.clients
+    if (!client || recordedAssignmentIds.has(assignment.id)) continue
+    if (isPaymentActiveForMonth(assignment, year, month)) continue
+    const start = assignment.payment_start_month ? parseYearMonth(assignment.payment_start_month) : null
+    if (!start) continue
+    const matchNames = clientMatchNames(client.name, client.aliases)
+    if (assignment.payment_count !== null) {
+      const last = addMonths(start, assignment.payment_count - 1)
+      if (year * 12 + month > last.year * 12 + last.month) {
+        outOfPeriod.push({
+          clientName: client.name,
+          matchNames,
+          detail: `支払期間（${formatYearMonth(start)}〜${formatYearMonth(last)}支払い・${assignment.payment_count}回）は終了しています（続ける場合はマスタのアサインで支払回数を延ばしてください）`,
+        })
+        continue
+      }
+    }
+    if (year * 12 + month < start.year * 12 + start.month) {
+      outOfPeriod.push({
+        clientName: client.name,
+        matchNames,
+        detail: `支払開始は${formatYearMonth(start)}支払いからです`,
+      })
+    }
+  }
+
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
   // 認めた追加費用（category が extra）も同じ表にあり、委託者へ払う点は同じなので支払予定額には両方足す。
   // 一方、請求書の経費明細と突き合わせる相手（expenseTotal）は立替経費だけにする。追加費用まで混ぜると、
@@ -332,6 +369,7 @@ async function computeExpectedPayout(
     notes,
     breakdown,
     skipped,
+    outOfPeriod,
     expenseTotal,
     approvedExtraKeys,
     payouts,
@@ -530,6 +568,7 @@ function compareInvoiceItems(
   items: InvoiceExtractedItem[],
   breakdown: InvoicePayoutBreakdownRow[],
   skipped: SkippedClient[],
+  outOfPeriod: OutOfPeriodClient[],
   expenseTotal: number,
   invoiceAmount: number | null,
   payout: YearMonth,
@@ -549,6 +588,7 @@ function compareInvoiceItems(
   const attribution = attributeWorkItems(items, breakdown.map((target) => target.matchNames))
   const matchedItems = attribution.matched
   const skippedNames = skipped.map((client) => client.matchNames)
+  const outOfPeriodNames = outOfPeriod.map((client) => client.matchNames)
 
   for (const { item, indexes } of attribution.resolved) {
     if (indexes.length === 0) {
@@ -561,6 +601,14 @@ function compareInvoiceItems(
           verdict: 'hold',
           note: `明細「${item.label}」は ${name} 分ですが、${name} は今月の支払いをスキップ中です（スキップを取り消すか、請求内容をご確認ください）`,
         })
+        addCountNote(item.label, null)
+        continue
+      }
+      // 支払期間の外（終了済み・開始前）のクライアント分なら、マスタに無いのではなく期間外だと伝える。
+      const outOfPeriodHit = resolveItemClient(item, outOfPeriodNames).indexes
+      if (outOfPeriodHit.length === 1) {
+        const hit = outOfPeriod[outOfPeriodHit[0]]
+        results.push({ verdict: 'hold', note: `明細「${item.label}」は ${hit.clientName} 分ですが、${hit.detail}` })
         addCountNote(item.label, null)
         continue
       }
@@ -1155,6 +1203,7 @@ export async function checkInvoiceAndSave(
           items,
           expected.breakdown,
           expected.skipped,
+          expected.outOfPeriod,
           expected.expenseTotal,
           row.extracted_amount,
           payout,
