@@ -40,6 +40,7 @@ export async function GET(req: NextRequest) {
             roleName: a.role_name,
             spreadsheetUrl: a.spreadsheet_url,
           },
+          year,
           month
         )
       )

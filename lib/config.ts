@@ -304,6 +304,10 @@ export const PAYROLL_KINDS = ['executive', 'employee'] as const
 // サーバーで25以外にすると画面の案内文とリマインドの期日が食い違ってしまう。
 export const PAYROLL_DEFAULT_PAY_DAY = 25
 
+// ─── マスタ画面の「アサインを追加」を開くURLのクエリ名 ─────────────────────────
+// 請求書チェックの「担当を追加」ボタン（送る側）とマスタ画面（受ける側）で同じ名前を使うために1か所に置く。
+export const MASTER_ADD_ASSIGNMENT_PARAMS = { flag: 'add_assignment', contractor: 'contractor', client: 'client' } as const
+
 // ─── 納品チェック（編集者スプレッドシート）─────────────────────────────
 // 編集者の納品スプレッドシートは全員同じ列構成（A:納品〆切 / B:本数 / C:動画のNo / D:納品URL）。
 // 列は0始まりのインデックスで持ち、将来レイアウトが変わっても env で追従できるようにする。

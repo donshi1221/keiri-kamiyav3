@@ -27,6 +27,7 @@ import { uploadFileToDrive, sanitizeFileNamePart } from '@/lib/google-drive'
 import {
   INVOICE_MANUAL_EDIT_NOTE,
   INVOICE_NOTE_MARKS,
+  formatAssignLink,
   formatInvoiceNote,
   hasInvoiceNoteMark,
   parseInvoiceNotes,
@@ -48,6 +49,7 @@ import {
 } from '@/lib/invoice-match'
 import type {
   DeliveryCheckRow,
+  InvoiceAssignLink,
   DriveUploadOutcome,
   InvoiceCheckOutcome,
   InvoiceCheckResult,
@@ -138,6 +140,11 @@ type SkippedClient = { clientName: string; matchNames: string[] }
 // 「マスタに見つかりません」と誤って案内しないよう、期間外であることを伝える文言（detail）を控えておく。
 type OutOfPeriodClient = { clientName: string; matchNames: string[]; detail: string }
 
+// unassigned は取引先マスタにはあるが、この委託者の有効なアサインに入っていないクライアント。
+// 請求書に明細が載ってきたとき、「マスタに見つかりません」（＝別名の登録漏れ）と誤解させず、
+// 担当（アサイン）を足せば直ることを伝えるために、照合用の名前と一緒に控えておく。
+type UnassignedClient = { clientId: string; clientName: string; matchNames: string[] }
+
 type ExpectedOutcome =
   | {
       amount: number
@@ -145,6 +152,7 @@ type ExpectedOutcome =
       breakdown: InvoicePayoutBreakdownRow[]
       skipped: SkippedClient[]
       outOfPeriod: OutOfPeriodClient[]
+      unassigned: UnassignedClient[]
       expenseTotal: number
       // 認め済みの追加費用が指す明細のキー（lib/invoice-extra）。金額は amount に足し込み済みで、
       // ここでは「請求書のどの明細が認め済みか」を引くためだけに持つ。
@@ -207,7 +215,8 @@ async function computeExpectedPayout(
   const isVideoEditor = contractor.contractor_type === 'video_editor'
   // 編集者の支払いは前月の納品に対して行うため、支払月から見た納品シートの月は1つ手前になる
   // （編集者の「M月分」は支払月 M+1 で渡ってくるので、ここで読むのは記載どおりの M 月タブ）。
-  const deliveryMonth = deliveryTargetMonth(year, month).month
+  // 年も使うのは、納品シートに前年同月のタブ・行が残っていても取り違えないため（1月支払いの12月納品は前年になる）。
+  const deliveryTarget = deliveryTargetMonth(year, month)
   let total = 0
   const notes: string[] = []
   const breakdown: InvoicePayoutBreakdownRow[] = []
@@ -273,7 +282,8 @@ async function computeExpectedPayout(
         roleName: assignment.role_name,
         spreadsheetUrl: assignment.spreadsheet_url,
       },
-      deliveryMonth
+      deliveryTarget.year,
+      deliveryTarget.month
     )
     const suggested = suggestedPayout(delivery, contractor.unit_price)
     if (suggested === null) {
@@ -348,6 +358,18 @@ async function computeExpectedPayout(
     }
   }
 
+  // この委託者の担当に入っていない取引先。明細がどのアサインにも当たらなかったときの案内に使う。
+  const assignedClientIds = new Set(assignmentRows.map((a) => a.client_id))
+  const unassigned: UnassignedClient[] = (
+    await db.select({ id: clients.id, name: clients.name, aliases: clients.aliases }).from(clients)
+  )
+    .filter((client) => !assignedClientIds.has(client.id))
+    .map((client) => ({
+      clientId: client.id,
+      clientName: client.name,
+      matchNames: clientMatchNames(client.name, client.aliases),
+    }))
+
   // 立替経費も支払月の行に登録されるため、月次レコードと同じ year / month で引く。
   // 認めた追加費用（category が extra）も同じ表にあり、委託者へ払う点は同じなので支払予定額には両方足す。
   // 一方、請求書の経費明細と突き合わせる相手（expenseTotal）は立替経費だけにする。追加費用まで混ぜると、
@@ -370,6 +392,7 @@ async function computeExpectedPayout(
     breakdown,
     skipped,
     outOfPeriod,
+    unassigned,
     expenseTotal,
     approvedExtraKeys,
     payouts,
@@ -457,6 +480,9 @@ function extractPaymentCount(label: string): { index: number; total: number } | 
 // 支払回数の確認結果1行。ok/ng/hold（判定）とは別枠で、status には影響させない。
 // 一致していれば「確認できた」ことを OK として残し、合わないときだけ注意を促す。
 type PaymentCountNote = { mark: 'ok' | 'caution'; note: string }
+
+// 担当に入っていない取引先の明細への注意。画面の「担当を追加」ボタンの行き先（assignLink）を一緒に持つ。
+type UnassignedNote = { note: string; assignLink: InvoiceAssignLink }
 
 // 注意行の本文。先頭は必ず明細ラベルの原文にする。画面はここからラベルを取り出して
 // 確認済みキー（lib/invoice-match の cautionKeyOf）を復元するため、この形を崩さない。
@@ -564,18 +590,21 @@ function compareExpenses(
 // 経費明細はクライアントの支払いではないため、ここでは経費どうしで別に照合する。
 // 支払回数（「19/24」）の確認は判定（ok/ng/hold）とは別枠の countNotes として返す。明細と
 // アサインの対応がここでしか分からない一方、status には影響させたくないため混ぜずに分ける。
-function compareInvoiceItems(
+export function compareInvoiceItems(
   items: InvoiceExtractedItem[],
   breakdown: InvoicePayoutBreakdownRow[],
   skipped: SkippedClient[],
   outOfPeriod: OutOfPeriodClient[],
+  unassigned: UnassignedClient[],
   expenseTotal: number,
   invoiceAmount: number | null,
   payout: YearMonth,
-  confirmedCautions: Set<string>
-): { results: Compared[]; countNotes: PaymentCountNote[] } {
+  confirmedCautions: Set<string>,
+  contractor: { id: string; name: string }
+): { results: Compared[]; countNotes: PaymentCountNote[]; unassignedNotes: UnassignedNote[] } {
   const results: Compared[] = []
   const countNotes: PaymentCountNote[] = []
+  const unassignedNotes: UnassignedNote[] = []
   const addCountNote = (label: string, target: InvoicePayoutBreakdownRow | null) => {
     const note = checkPaymentCount(label, target, payout, confirmedCautions)
     if (note) countNotes.push(note)
@@ -589,6 +618,7 @@ function compareInvoiceItems(
   const matchedItems = attribution.matched
   const skippedNames = skipped.map((client) => client.matchNames)
   const outOfPeriodNames = outOfPeriod.map((client) => client.matchNames)
+  const unassignedNames = unassigned.map((client) => client.matchNames)
 
   for (const { item, indexes } of attribution.resolved) {
     if (indexes.length === 0) {
@@ -609,6 +639,20 @@ function compareInvoiceItems(
       if (outOfPeriodHit.length === 1) {
         const hit = outOfPeriod[outOfPeriodHit[0]]
         results.push({ verdict: 'hold', note: `明細「${item.label}」は ${hit.clientName} 分ですが、${hit.detail}` })
+        addCountNote(item.label, null)
+        continue
+      }
+      // 取引先マスタにはあるが、この委託者の担当（アサイン）に入っていないクライアント分なら、
+      // 別名の登録漏れではなく担当の追加漏れだと伝える。判定（保留）は動かさず注意として出す。
+      // この明細の金額は支払予定に入っていないため、合計の照合は今までどおり合わず、
+      // この明細だけで請求書がOKになることはない。
+      const unassignedHit = resolveItemClient(item, unassignedNames).indexes
+      if (unassignedHit.length === 1) {
+        const hit = unassigned[unassignedHit[0]]
+        unassignedNotes.push({
+          note: `明細「${item.label}」は ${hit.clientName} 分ですが、${contractor.name}さんの担当のアサインに入っていません。担当を追加してください`,
+          assignLink: { contractorId: contractor.id, clientId: hit.clientId },
+        })
         addCountNote(item.label, null)
         continue
       }
@@ -690,7 +734,7 @@ function compareInvoiceItems(
     }
   }
 
-  return { results, countNotes }
+  return { results, countNotes, unassignedNotes }
 }
 
 // 明細の無い請求書では「いくらズレたか」しか分からない。編集者への支払いは本数×単価なので、
@@ -1204,10 +1248,12 @@ export async function checkInvoiceAndSave(
           expected.breakdown,
           expected.skipped,
           expected.outOfPeriod,
+          expected.unassigned,
           expected.expenseTotal,
           row.extracted_amount,
           payout,
-          confirmedCautions
+          confirmedCautions,
+          contractor
         )
         for (const item of compared.results) {
           record(item.verdict, item.note, item.reason)
@@ -1216,6 +1262,11 @@ export async function checkInvoiceAndSave(
         // 誤っているとは限らないため、判定（status）は動かさず注意として見せるだけにする。
         for (const note of compared.countNotes) {
           notes.push(formatInvoiceNote(note.mark, note.note))
+        }
+        // 担当に入っていない取引先の注意。ボタンの行き先は、直後の assignLink 行に持たせる。
+        for (const note of compared.unassignedNotes) {
+          notes.push(formatInvoiceNote('caution', note.note))
+          notes.push(formatInvoiceNote('assignLink', formatAssignLink(note.assignLink)))
         }
       }
     }

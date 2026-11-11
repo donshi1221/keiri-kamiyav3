@@ -1,7 +1,8 @@
 // 判定理由（invoice_uploads.check_notes）の1行に付ける印の読み書き。
 // 書くのはサーバー（lib/invoice-check）、読むのは画面（app/invoice-check）で、
 // 照合本体は server-only のためクライアントから import できない。両者が同じ規則を使えるようここに置く。
-import type { InvoiceNoteLine, InvoiceNoteMark } from './ui-types'
+import { MASTER_ADD_ASSIGNMENT_PARAMS } from './config'
+import type { InvoiceAssignLink, InvoiceNoteLine, InvoiceNoteMark } from './ui-types'
 
 // 行頭に付ける表示ラベル。DBに保存される文字列そのものなので、
 // 変更すると保存済みの行が「印なし」に落ちる。既存データを壊さないよう安易に変えない。
@@ -17,6 +18,33 @@ export const INVOICE_NOTE_MARKS: Record<InvoiceNoteMark, string> = {
   saved: '保存',
   saveFailed: '保存失敗',
   manualOk: '手動OK',
+  // 画面では表示せず、直前の注意行の「担当を追加」ボタンを作るためだけに使う。
+  assignLink: '担当追加',
+}
+
+// assignLink 行の本文＝「委託者ID,クライアントID」。IDは UUID でカンマを含まないため区切りに使える。
+const ASSIGN_LINK_SEPARATOR = ','
+
+export function formatAssignLink(link: InvoiceAssignLink): string {
+  return `${link.contractorId}${ASSIGN_LINK_SEPARATOR}${link.clientId}`
+}
+
+// 読めない本文（壊れた行）は null。呼び出し側はボタンを出さないだけで、画面は壊れない。
+export function parseAssignLink(text: string): InvoiceAssignLink | null {
+  const [contractorId, clientId, ...rest] = text.trim().split(ASSIGN_LINK_SEPARATOR)
+  if (!contractorId || !clientId || rest.length > 0) return null
+  return { contractorId, clientId }
+}
+
+// マスタ画面の「アサインを追加」を、委託者とクライアントを選択済みにして開く入口のURL。
+// 受け取る側は app/master（クエリ名は lib/config の MASTER_ADD_ASSIGNMENT_PARAMS で揃える）。
+export function masterAddAssignmentHref(link: InvoiceAssignLink): string {
+  const params = new URLSearchParams({
+    [MASTER_ADD_ASSIGNMENT_PARAMS.flag]: '1',
+    [MASTER_ADD_ASSIGNMENT_PARAMS.contractor]: link.contractorId,
+    [MASTER_ADD_ASSIGNMENT_PARAMS.client]: link.clientId,
+  })
+  return `/master?${params.toString()}`
 }
 
 // 手動修正の記録文。PATCH後の再チェックで毎回同じ文言を出し、

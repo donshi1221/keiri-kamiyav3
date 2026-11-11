@@ -326,7 +326,15 @@ export interface InvoiceCheckResult {
 // hold と同じだが、直す場所がマスタや納品シートではなくこの画面の「認める／認めない」なので印を分ける。
 // manualOk は「自動照合ではNG・保留だが、人が見てOKにした」印。判定理由は再チェックのたびに作り直されるため、
 // この印が残っているかどうかで、OKにした事実を次の再チェックへ引き継ぐ（fixed と同じ持ち方）。
-export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'confirm' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed' | 'manualOk'
+// assignLink は直前の注意行（担当に入っていない取引先）に付ける「担当を追加」ボタンの行き先。
+// 画面には本文を出さず、ボタンを作るためだけに使う（lib/invoice-notes の formatAssignLink / parseAssignLink）。
+export type InvoiceNoteMark = 'ok' | 'ng' | 'hold' | 'caution' | 'confirm' | 'received' | 'fixed' | 'applied' | 'saved' | 'saveFailed' | 'manualOk' | 'assignLink'
+
+// 「担当を追加」の行き先。マスタ画面のアサイン追加で、この委託者とクライアントを選択済みにして開く。
+export interface InvoiceAssignLink {
+  contractorId: string
+  clientId: string
+}
 
 // 印を外したあとの1行。印を付ける前に保存された行もあるため mark は null を取りうる。
 export interface InvoiceNoteLine {

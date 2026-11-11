@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { formatInTimeZone } from 'date-fns-tz'
+import Link from 'next/link'
 import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,7 +18,13 @@ import {
 import { FormDialog } from '@/app/components/form-dialog'
 import { cn } from '@/lib/utils'
 import { TZ } from '@/lib/dates'
-import { formatInvoiceNote, hasInvoiceNoteMark, parseInvoiceNotes } from '@/lib/invoice-notes'
+import {
+  formatInvoiceNote,
+  hasInvoiceNoteMark,
+  masterAddAssignmentHref,
+  parseAssignLink,
+  parseInvoiceNotes,
+} from '@/lib/invoice-notes'
 import { extraItemTitle } from '@/lib/invoice-extra'
 import {
   CAUTION_LABEL_SEPARATOR,
@@ -27,6 +34,7 @@ import {
   toExpenseDate,
 } from '@/lib/invoice-match'
 import type {
+  InvoiceAssignLink,
   InvoiceCheckRow,
   InvoiceDeliverySheetLink,
   InvoiceExpenseAssignment,
@@ -84,6 +92,8 @@ const NOTE_CLASS: Record<InvoiceNoteMark, string> = {
   ok: 'text-muted-foreground',
   // 人が上書きした結果であることは、自動でOKになった行と見分けられるよう色付きで残す。
   manualOk: 'rounded bg-success-subtle px-2 py-1 text-success',
+  // 行そのものは画面に出さない（直前の注意行の「担当を追加」ボタンの行き先として読むだけ）。
+  assignLink: 'text-muted-foreground',
 }
 
 // NG行の右端に出す「今月はスキップ」の口。押せるときはボタン、できないときは理由の1行を出す。
@@ -95,11 +105,14 @@ type SkipSlot = { kind: 'button'; onSkip: () => void } | { kind: 'reason'; text:
 // 判定理由に「|key=…」のような機械用の文字列を埋め込む方式は、そのまま人の目に触れるうえ
 // 文言を1文字変えるとキーが壊れるため採らない。本文の先頭が必ず明細ラベルの原文になっている
 // という約束だけを守れば、サーバーと画面が同じキーを作れる。
-function NoteLine({ line, onConfirmCaution, busy, skipSlot }: {
+function NoteLine({ line, onConfirmCaution, busy, skipSlot, assignLink }: {
   line: InvoiceNoteLine
   onConfirmCaution: (key: string, confirmed: boolean) => void
   busy: boolean
   skipSlot?: SkipSlot | null
+  // 「担当を追加」の行き先。ある注意行は、確認済みにして消す性質のものではない（担当を足して直す）ので
+  // 「確認済みにする」は出さず、マスタのアサイン追加を開くボタンだけを出す。
+  assignLink?: InvoiceAssignLink | null
 }) {
   // キーを復元できない行（この仕組みより前に保存された注意など）は操作の対象外。
   const key = cautionKeyFromNoteText(line.text)
@@ -107,7 +120,7 @@ function NoteLine({ line, onConfirmCaution, busy, skipSlot }: {
   // 注意自体が出なくなったのかが区別できない）。誤操作の戻し用に取り消しも出す。
   const confirmed = line.mark === 'ok' && line.text.includes('確認済み')
   const action: { kind: 'confirm' | 'revert'; key: string } | null =
-    key === null
+    key === null || assignLink
       ? null
       : line.mark === 'caution'
         ? { kind: 'confirm', key }
@@ -154,6 +167,18 @@ function NoteLine({ line, onConfirmCaution, busy, skipSlot }: {
       >
         {line.text}
       </p>
+      {assignLink && (
+        <Link
+          href={masterAddAssignmentHref(assignLink)}
+          // 請求書チェックの画面を開いたまま担当を足し、戻って再チェックできるよう別タブで開く。
+          target="_blank"
+          rel="noopener noreferrer"
+          // スマホでのタップ領域を44px確保する（PCは従来の行高のまま）。
+          className="flex min-h-11 shrink-0 items-center rounded border border-warning/40 px-2 text-xs font-medium whitespace-nowrap text-warning hover:bg-warning-subtle md:min-h-7"
+        >
+          担当を追加
+        </Link>
+      )}
       {action?.kind === 'confirm' && (
         <button
           type="button"
@@ -292,15 +317,31 @@ function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
 
   // 追加費用の問いかけ（confirm）はここでは出さない。同じ内容を「認める／認めない」のボタン付きで
   // ExtraItemsBlock が出すため、ここにも出すと同じ行が2回並ぶ。
-  const primary = lines.filter((line) => line.mark !== 'ok' && line.mark !== 'confirm')
+  // assignLink 行は注意行のボタンの行き先を持つだけの行なので、どちらの一覧にも出さない。
+  const primary = lines.filter((line) => line.mark !== 'ok' && line.mark !== 'confirm' && line.mark !== 'assignLink')
   const details = lines.filter((line) => line.mark === 'ok')
+
+  // 注意行の直後に assignLink 行があれば、その注意行の「担当を追加」ボタンの行き先として対応づける
+  // （サーバーは必ず注意行→assignLink行の順で積む。読めない・欠けている古い行にはボタンを出さないだけ）。
+  const assignLinkOf = new Map<InvoiceNoteLine, InvoiceAssignLink>()
+  lines.forEach((line, i) => {
+    const next = lines[i + 1]
+    if (line.mark !== 'caution' || next?.mark !== 'assignLink') return
+    const link = parseAssignLink(next.text)
+    if (link) assignLinkOf.set(line, link)
+  })
 
   const otherPrimary = primary.filter((line) => line.mark !== 'caution')
   const cautionLines = primary.filter((line) => line.mark === 'caution')
   // キーが読める行だけを集約枠へ。読めない古い形式はNoteLineでの従来表示（単独箱・ボタンなし）に残す。
   const keyedCautions: { line: InvoiceNoteLine; key: string; display: string }[] = []
   const legacyCautions: InvoiceNoteLine[] = []
+  const assignCautions: InvoiceNoteLine[] = []
   for (const line of cautionLines) {
+    if (assignLinkOf.has(line)) {
+      assignCautions.push(line)
+      continue
+    }
     const summary = summarizeCaution(line.text)
     if (summary) keyedCautions.push({ line, ...summary })
     else legacyCautions.push(line)
@@ -312,6 +353,15 @@ function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
         <NoteLine key={`other-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} skipSlot={skipSlotOf(line)} />
       ))}
       <CautionGroup items={keyedCautions} onConfirmCaution={onConfirmCaution} busy={busy} />
+      {assignCautions.map((line, i) => (
+        <NoteLine
+          key={`assign-${i}`}
+          line={line}
+          onConfirmCaution={onConfirmCaution}
+          busy={busy}
+          assignLink={assignLinkOf.get(line)}
+        />
+      ))}
       {legacyCautions.map((line, i) => (
         <NoteLine key={`legacy-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} />
       ))}

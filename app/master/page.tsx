@@ -18,7 +18,7 @@ import { FormDialog } from '@/app/components/form-dialog'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Contractor, Client, Assignment, ClientBillingItem, PayrollRecipient } from '@/lib/schema'
 import type { GoogleDriveStatus, PayrollKind, RecurringReimbursementWithRecipient } from '@/lib/ui-types'
-import { PAYROLL_KINDS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
+import { MASTER_ADD_ASSIGNMENT_PARAMS, PAYROLL_KINDS, PAYROLL_DEFAULT_PAY_DAY } from '@/lib/config'
 import { PAYROLL_KIND_LABEL, payrollAmountsOfRecipient, payrollDeductions, payrollNet } from '@/lib/payroll'
 import { nowJST } from '@/lib/dates'
 
@@ -89,6 +89,7 @@ async function readErrorMessage(res: Response, fallback: string) {
 // Main page
 // ─────────────────────────────────────────────
 export default function MasterPage() {
+  const router = useRouter()
   const [tab, setTab] = useState<'contractor' | 'client'>('contractor')
   const [contractors, setContractors] = useState<Contractor[]>([])
   const [clients, setClients] = useState<ClientWithItems[]>([])
@@ -96,6 +97,9 @@ export default function MasterPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 請求書チェックの「担当を追加」から開かれたときの、選択済みの委託者・クライアント（URLのクエリで受け取る）。
+  const [assignPreset, setAssignPreset] = useState<{ contractor: Contractor; client: ClientWithItems } | null>(null)
+  const presetReadRef = useRef(false)
 
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg)
@@ -123,6 +127,25 @@ export default function MasterPage() {
   }, [showError])
 
   useEffect(() => { load() }, [load])
+
+  // 「?add_assignment=1&contractor=…&client=…」で開かれたら、委託者とクライアントを選択済みにして
+  // アサイン追加の入力画面を開く。委託者・クライアントの一覧が読み込まれてから1度だけ判定する
+  // （一覧が空のうちは名前を引けないため）。useSearchParams ではなく window から読むのは、ドライブ連携の
+  // コールバック判定と同じく、Suspense 境界を増やさないため。開いたらクエリを消し、再読み込みで再び開かないようにする。
+  useEffect(() => {
+    if (loading || presetReadRef.current) return
+    presetReadRef.current = true
+    const params = new URLSearchParams(window.location.search)
+    if (params.get(MASTER_ADD_ASSIGNMENT_PARAMS.flag) !== '1') return
+    router.replace('/master')
+    const contractor = contractors.find((c) => c.id === params.get(MASTER_ADD_ASSIGNMENT_PARAMS.contractor))
+    const client = clients.find((c) => c.id === params.get(MASTER_ADD_ASSIGNMENT_PARAMS.client))
+    if (!contractor || !client) {
+      showError('担当を追加する委託者またはクライアントが見つかりませんでした。マスタから選び直してください。')
+      return
+    }
+    setAssignPreset({ contractor, client })
+  }, [loading, contractors, clients, router, showError])
 
   return (
     <div className="space-y-6">
@@ -152,6 +175,22 @@ export default function MasterPage() {
             <ClientTab clients={clients} contractors={contractors} assignments={assignments} onRefresh={load} onError={showError} />
           )}
         </>
+      )}
+
+      {assignPreset && (
+        <AssignFormDialog
+          open
+          onClose={() => setAssignPreset(null)}
+          onSaved={() => { setAssignPreset(null); load() }}
+          onError={showError}
+          clients={[]}
+          contractors={contractors}
+          fixedContractorId={assignPreset.contractor.id}
+          fixedContractorType={assignPreset.contractor.contractor_type}
+          fixedClientId={assignPreset.client.id}
+          initial={null}
+          notice={`請求書チェックの「担当を追加」から開きました。委託者「${assignPreset.contractor.name}」・クライアント「${assignPreset.client.name}」は選択済みです。`}
+        />
       )}
 
       {/* 役員報酬・給与は委託者（外注）でもクライアントでもない自社の人件費なので、タブの外に置く。

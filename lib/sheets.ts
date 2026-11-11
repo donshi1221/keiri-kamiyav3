@@ -41,24 +41,51 @@ export function buildTabUrl(spreadsheetId: string, sheetId: number): string {
   return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`
 }
 
-// タブ名から対象月（N月）を含むものを選ぶ。数字直前に別の数字が来る誤検出（例:16月）は除外する。
+// 年は「2026」でも「26」（＝2000を足す）でも書かれる。
+function toFullYear(digits: string): number {
+  const n = Number(digits)
+  return digits.length <= 2 ? 2000 + n : n
+}
+
+// 「26年10月」「2026年10月度」のように年が明記されたタブ名。数字直前に別の数字が来る誤検出
+// （例: 126年）は、直前が数字でないことを条件にして除く。
+const YEAR_MONTH_TAB_PATTERN = /(?:^|[^0-9])(\d{4}|\d{2})\s*年\s*(\d{1,2})\s*月/
+
+// タブ名から対象年月のタブを選ぶ。月の誤検出（例: 16月・「11月」を「1月」）は、数字直前に別の数字が来る形を除いて防ぐ。
+// 年を明記したタブ（「26年10月」）があればそれを優先し、無ければ年なしタブ（「10月度」）を使う。
+// 別の年と明記されたタブ（前年同月の「25年10月」など）は候補に入れない。
+// 年入りが2枚以上、または年なしが2枚以上のときは1枚に決められないので ambiguous にする。
 export function pickMonthTab(
   tabs: SheetTab[],
+  year: number,
   month: number
 ): { tab: SheetTab | null; ambiguous: boolean; matchedTitles: string[] } {
-  const re = new RegExp(`(?:^|[^0-9])${month}月`)
-  const matched = tabs.filter((t) => re.test(normalizeSheetText(t.title)))
+  const monthPattern = new RegExp(`(?:^|[^0-9])${month}月`)
+  const sameYear: SheetTab[] = []
+  const noYear: SheetTab[] = []
+  for (const tab of tabs) {
+    const title = normalizeSheetText(tab.title)
+    const dated = title.match(YEAR_MONTH_TAB_PATTERN)
+    if (dated) {
+      if (Number(dated[2]) === month && toFullYear(dated[1]) === year) sameYear.push(tab)
+      continue
+    }
+    if (monthPattern.test(title)) noYear.push(tab)
+  }
+  const matched = sameYear.length > 0 ? sameYear : noYear
   return { tab: matched[0] ?? null, ambiguous: matched.length > 1, matchedTitles: matched.map((t) => t.title) }
 }
 
-// 「6月3日」「6/3」「2026/6/3」等が対象月を指すか。年は問わない（対象年月はタブ選択で担保）。
-function isDeadlineInMonth(raw: string, month: number): boolean {
+// 「6月3日」「6/3」「2026/6/3」「26年6月3日」等が対象年月を指すか。
+// 年が明記されているときだけ対象年と比べる（前年の行がタブに残っていても数えないため）。
+// 年が書かれていない行は、従来どおり月だけで判定する（対象年月はタブ選択で担保）。
+function isDeadlineInMonth(raw: string, year: number, month: number): boolean {
   const s = normalizeSheetText(raw).trim()
   if (!s) return false
-  const jp = s.match(/(\d{1,2})\s*月/)
-  if (jp) return Number(jp[1]) === month
-  const slash = s.match(/(?:\d{4}\/)?(\d{1,2})\/\d{1,2}/)
-  if (slash) return Number(slash[1]) === month
+  const jp = s.match(/(?:(?:^|[^0-9])(\d{4}|\d{2})\s*年\s*)?(\d{1,2})\s*月/)
+  if (jp) return (jp[1] === undefined || toFullYear(jp[1]) === year) && Number(jp[2]) === month
+  const slash = s.match(/(?:(\d{4})\/)?(\d{1,2})\/\d{1,2}/)
+  if (slash) return (slash[1] === undefined || Number(slash[1]) === year) && Number(slash[2]) === month
   return false
 }
 
@@ -79,12 +106,14 @@ function isRevisionRow(row: string[]): boolean {
   return row.some((cell, index) => index !== DELIVERY_COL_URL && isRevisionLabel(normalizeSheetText(cell ?? '')))
 }
 
-// A列(〆切)が対象月の行を「すべき」、そのうちD列(URL)が非空の行を「済み」として数える。
+// A列(〆切)が対象年月の行を「すべき」、そのうちD列(URL)が非空の行を「済み」として数える。
+// 〆切に年が書かれていて対象年と違う行（前年の同月の行がタブに残っているなど）は数えない。
 // 修正の行は通常の本数（すべき・済み）に含めず、revisions として別に数える。修正は1本分の単価ではなく
 // 修正費として別に払う（払うかは請求書チェックで人が決める）ため、本数に入れると支払予定が1本分多くなり、
 // 修正を除いて書かれた請求書が「本数が少ない」とNGになってしまう。
 export function countDeliveries(
   values: string[][],
+  year: number,
   month: number
 ): { expected: number; delivered: number; revisions: number } {
   let expected = 0
@@ -98,7 +127,7 @@ export function countDeliveries(
     // 〆切を日付形式で書かない運用が実際のシートに存在するための救済措置。
     // URLが貼られている＝納品済みは確実なので、対象月タブのものとして拾う。
     // ただし別の月の日付として読める行（例: 7月度タブに8/1）は従来どおり数えない（月またぎ誤カウント防止）。
-    const inMonth = isDeadlineInMonth(deadline, month)
+    const inMonth = isDeadlineInMonth(deadline, year, month)
     if (!inMonth && !(!parsesAsDate(deadline) && hasUrl)) continue
 
     if (isRevisionRow(row)) {
@@ -142,9 +171,11 @@ export interface DeliveryAssignmentInput {
   spreadsheetUrl: string | null
 }
 
-// 1アサイン分のシートを読み、対象月の納品集計を返す。例外は投げず status に載せる。
+// 1アサイン分のシートを読み、対象年月の納品集計を返す。例外は投げず status に載せる。
+// year / month は「納品月」（支払月ではない）。
 export async function checkAssignmentDelivery(
   input: DeliveryAssignmentInput,
+  year: number,
   month: number
 ): Promise<DeliveryCheckRow> {
   const base: DeliveryCheckRow = {
@@ -171,8 +202,8 @@ export async function checkAssignmentDelivery(
 
   try {
     const tabs = await fetchTabs(spreadsheetId, apiKey)
-    const { tab, ambiguous, matchedTitles } = pickMonthTab(tabs, month)
-    if (!tab) return { ...base, status: 'no_tab', message: `「${month}月」を含むタブが見つかりません` }
+    const { tab, ambiguous, matchedTitles } = pickMonthTab(tabs, year, month)
+    if (!tab) return { ...base, status: 'no_tab', message: `「${year}年${month}月」（年なしなら「${month}月」）を含むタブが見つかりません` }
     const tabUrl = buildTabUrl(spreadsheetId, tab.sheetId)
     if (ambiguous) {
       return {
@@ -184,7 +215,7 @@ export async function checkAssignmentDelivery(
       }
     }
     const values = await fetchTabValues(spreadsheetId, tab.title, apiKey)
-    const { expected, delivered, revisions } = countDeliveries(values, month)
+    const { expected, delivered, revisions } = countDeliveries(values, year, month)
     return { ...base, status: 'ok', tabTitle: tab.title, tabUrl, expected, delivered, revisions }
   } catch (err) {
     if (err instanceof SheetsError) {
