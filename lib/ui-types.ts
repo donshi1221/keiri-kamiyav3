@@ -387,7 +387,126 @@ export type InvoiceNgReason =
   | { kind: 'expense_unregistered'; billed: number }
   | { kind: 'expense_amount'; billed: number; expected: number }
   | { kind: 'addressee'; actual: string; correct: string }
+  // 編集者の請求の合計本数が、その委託者の全クライアントの納品実績（読めた分）の合計を超えたとき。
+  // 請求書を正にする方式（lib/invoice-judge）では、納品シートは合計本数の上限としてだけ使うため。
+  | { kind: 'total_count_over'; billed: number; delivered: number; over: number }
   | { kind: 'other'; text: string }
+
+// ─── 請求書チェックの判定（lib/invoice-judge）─────────────────────────────
+// 判定はDB・納品シートを読まない関数に切り出してあり（確認用スクリプトから直接呼べるようにするため）、
+// その入出力の型をここに置く。
+
+// 照合1観点の結論。ok=一致 / ng=不一致（人が中身を直す） / hold=判定材料が足りず結論を出せない。
+export type InvoiceVerdict = 'ok' | 'ng' | 'hold'
+
+// 照合1観点の結果。reason はNGのときだけ付ける控えで、委託者への返信文（lib/invoice-reply）の材料になる。
+export interface InvoiceCompared {
+  verdict: InvoiceVerdict
+  note: string
+  reason?: InvoiceNgReason
+}
+
+export interface InvoiceYearMonth {
+  year: number
+  month: number
+}
+
+// 今月の支払いをスキップ中のクライアント。請求書に明細が載ってきたとき専用の文言で保留にするために持つ。
+export interface InvoiceSkippedClient {
+  clientName: string
+  matchNames: string[]
+}
+
+// 支払期間の外（終了済み・開始前）のクライアント。detail は期間外であることを伝える文言。
+export interface InvoiceOutOfPeriodClient {
+  clientName: string
+  matchNames: string[]
+  detail: string
+}
+
+// 取引先マスタにはあるが、この委託者の有効なアサインに入っていないクライアント。
+export interface InvoiceUnassignedClient {
+  clientId: string
+  clientName: string
+  matchNames: string[]
+}
+
+// 支払回数の確認結果1行。判定（ok/ng/hold）とは別枠で、status には影響させない。
+export interface InvoicePaymentCountNote {
+  mark: 'ok' | 'caution'
+  note: string
+}
+
+// 担当に入っていない取引先の明細の保留。画面の「担当を追加」ボタンの行き先（assignLink）を一緒に持つ。
+export interface InvoiceUnassignedNote {
+  note: string
+  assignLink: InvoiceAssignLink
+}
+
+// 照合OKになったときだけ月次レコードへ書き戻す支払額と本数。
+export interface InvoiceDeliveryPayoutApply {
+  recordId: string
+  amount: number
+  videoCount: number
+}
+
+// 支払回数の確認に使う、明細を当てた先の情報（内訳の行・編集者の記録行のどちらからでも渡せる形）。
+export type InvoicePaymentTarget = Pick<
+  InvoicePayoutBreakdownRow,
+  'clientName' | 'paymentStartMonth' | 'paymentCount' | 'nmAsDate'
+>
+
+// 編集者の記録行（支払月の月次レコード1件＝アサイン1件。スキップした行は含めない）。
+// confirmed は実支払額が入っている行（人やこれまでの照合が決めた額）。入っている行は納品シートを読まないので delivery は null。
+// delivery は納品シートを読んだ結果（状態・納品済み本数・修正の行数・読めなかった理由）。
+export interface EditorCapRecord extends InvoicePaymentTarget {
+  recordId: string
+  matchNames: string[]
+  confirmed: { amount: number; count: number | null } | null
+  delivery: {
+    status: DeliveryCheckStatus
+    delivered: number | null
+    expected: number | null
+    revisions: number
+    message: string | null
+  } | null
+}
+
+// 編集者の請求書を「請求書を正にして、合計本数だけ納品実績を上限にする」方式で判定するときの入力。
+//   expenseTotal       … 登録済みの立替経費（追加費用を除く）。請求書の経費明細と突き合わせる相手
+//   approvedExtraTotal … 認め済みの追加費用（経費の表に登録済みの分）。支払予定額に足す
+//   extraItems         … 請求書の追加費用の明細と今の扱い（lib/invoice-extra の decideExtraItems）
+//   deliveryMonth      … 納品シートで読んだ月（タブが見つからないときの案内に使う）
+export interface EditorCapJudgeInput {
+  items: InvoiceExtractedItem[]
+  invoiceAmount: number | null
+  unitPrice: number
+  records: EditorCapRecord[]
+  skipped: InvoiceSkippedClient[]
+  outOfPeriod: InvoiceOutOfPeriodClient[]
+  unassigned: InvoiceUnassignedClient[]
+  expenseTotal: number
+  approvedExtraTotal: number
+  extraItems: InvoiceExtraItem[]
+  payout: InvoiceYearMonth
+  deliveryMonth: InvoiceYearMonth
+  confirmedCautions: ReadonlySet<string>
+  contractor: { id: string; name: string }
+}
+
+// 判定の結果。verdict は金額まわり（明細・合計本数・経費・合計・追加費用）だけの結論で、
+// 差出人・宛名などの他の観点は含まない。results は判定理由に積む順のまま並ぶ。
+// payouts は照合OKのとき書き戻す行（請求書に載ったクライアントのうち、実支払額が未入力の行だけ）。
+// sheetRevisions は請求書に載ったクライアントのうち、納品シートに修正の行があったもの。
+export interface EditorCapJudgeResult {
+  verdict: InvoiceVerdict
+  results: InvoiceCompared[]
+  countNotes: InvoicePaymentCountNote[]
+  unassignedNotes: InvoiceUnassignedNote[]
+  payouts: InvoiceDeliveryPayoutApply[]
+  expectedAmount: number
+  sheetRevisions: { clientName: string; count: number }[]
+}
 
 // 一覧APIが返す返信1件。draft_body は自動で作った下書き、sent_body は実際に送った文面
 // （人が直してから送ることがあるため別に持つ）。

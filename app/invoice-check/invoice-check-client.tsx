@@ -110,8 +110,8 @@ function NoteLine({ line, onConfirmCaution, busy, skipSlot, assignLink }: {
   onConfirmCaution: (key: string, confirmed: boolean) => void
   busy: boolean
   skipSlot?: SkipSlot | null
-  // 「担当を追加」の行き先。ある注意行は、確認済みにして消す性質のものではない（担当を足して直す）ので
-  // 「確認済みにする」は出さず、マスタのアサイン追加を開くボタンだけを出す。
+  // 「担当を追加」の行き先（担当外の取引先の明細の保留・注意の行に付く）。確認済みにして消す性質のものでは
+  // ない（担当を足して直す）ので「確認済みにする」は出さず、マスタのアサイン追加を開くボタンだけを出す。
   assignLink?: InvoiceAssignLink | null
 }) {
   // キーを復元できない行（この仕組みより前に保存された注意など）は操作の対象外。
@@ -321,12 +321,13 @@ function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
   const primary = lines.filter((line) => line.mark !== 'ok' && line.mark !== 'confirm' && line.mark !== 'assignLink')
   const details = lines.filter((line) => line.mark === 'ok')
 
-  // 注意行の直後に assignLink 行があれば、その注意行の「担当を追加」ボタンの行き先として対応づける
-  // （サーバーは必ず注意行→assignLink行の順で積む。読めない・欠けている古い行にはボタンを出さないだけ）。
+  // 注意・保留の行の直後に assignLink 行があれば、その行の「担当を追加」ボタンの行き先として対応づける
+  // （サーバーは必ず本文の行→assignLink行の順で積む。担当外の取引先の明細は今は保留で、以前に保存された
+  // 判定理由では注意のため両方を見る。読めない・欠けている古い行にはボタンを出さないだけ）。
   const assignLinkOf = new Map<InvoiceNoteLine, InvoiceAssignLink>()
   lines.forEach((line, i) => {
     const next = lines[i + 1]
-    if (line.mark !== 'caution' || next?.mark !== 'assignLink') return
+    if ((line.mark !== 'caution' && line.mark !== 'hold') || next?.mark !== 'assignLink') return
     const link = parseAssignLink(next.text)
     if (link) assignLinkOf.set(line, link)
   })
@@ -350,7 +351,14 @@ function CheckNotes({ notes, onConfirmCaution, busy, skipSlotOf }: {
   return (
     <div className="space-y-1">
       {otherPrimary.map((line, i) => (
-        <NoteLine key={`other-${i}`} line={line} onConfirmCaution={onConfirmCaution} busy={busy} skipSlot={skipSlotOf(line)} />
+        <NoteLine
+          key={`other-${i}`}
+          line={line}
+          onConfirmCaution={onConfirmCaution}
+          busy={busy}
+          skipSlot={skipSlotOf(line)}
+          assignLink={assignLinkOf.get(line)}
+        />
       ))}
       <CautionGroup items={keyedCautions} onConfirmCaution={onConfirmCaution} busy={busy} />
       {assignCautions.map((line, i) => (

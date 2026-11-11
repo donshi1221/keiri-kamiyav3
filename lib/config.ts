@@ -231,6 +231,7 @@ export const INVOICE_REPLY_UNKNOWN_MONTH = process.env.INVOICE_REPLY_UNKNOWN_MON
 //   {client} クライアント名 / {billed} 請求書の値 / {expected} こちらの控えの値 / {diff} 差
 //   {actual} 請求書の宛名 / {correct} 正しい宛名 / {text} 判定理由の本文
 //   {label} 追加費用の明細の名称 / {amount} その金額
+//   {delivered} 納品を確認できている本数 / {over} 超えている本数（合計本数の超過）
 // 金額は「¥」付き、本数は数字だけが入る。種類ごとに INVOICE_REPLY_REASON_<種類の大文字> で上書きできる。
 const INVOICE_REPLY_REASON_DEFAULTS = {
   total: 'ご請求額 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
@@ -245,6 +246,8 @@ const INVOICE_REPLY_REASON_DEFAULTS = {
   expense_unregistered: '請求書に経費 {billed} の記載がありますが、こちらでは該当する経費を確認できていません。',
   expense_amount: '経費：ご請求 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
   addressee: '宛名が「{actual}」になっています。正しくは「{correct}」です。',
+  total_count_over:
+    '請求書の合計本数（{billed}本）が、こちらで納品を確認できている本数（{delivered}本）を{over}本超えています。納品シートの記入状況と請求の本数をご確認のうえ、修正版をご提出ください。',
   other: '{text}',
 } as const
 
