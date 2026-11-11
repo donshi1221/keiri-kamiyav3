@@ -1259,6 +1259,18 @@ function ReplyBlock({ reply, hasRoom, recipientName, wide = false, text, onChang
         </p>
         {recipient}
       </div>
+      {/* NGの連絡を済ませたあとにOKへ変わった請求書。いま下書きにあるのは別の連絡だと分かるようにする。 */}
+      {reply.history.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {reply.history
+            .map((h) =>
+              h.outcome === 'sent' && h.at
+                ? `${formatSentDate(h.at)} に${REPLY_KIND_LABEL[h.kind]}を送信済み`
+                : `${REPLY_KIND_LABEL[h.kind]}は送らない設定でした`
+            )
+            .join('／')}
+        </p>
+      )}
       {/* sending は前回の送信が終わったか分からないまま残った状態。届いているかもしれないので、確かめてから送り直してもらう。 */}
       {reply.state === 'sending' && (
         <p className="rounded bg-warning-subtle px-2 py-1 text-xs text-warning">

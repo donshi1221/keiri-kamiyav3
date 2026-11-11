@@ -516,6 +516,16 @@ export interface InvoiceReplyInfo {
   draft_body: string
   sent_body: string | null
   sent_at: string | null
+  // 同じ請求書で先に済ませた連絡（古い順）。NG送信後にOKへ変わったとき、修正依頼がここに入る。
+  history: InvoiceReplyHistoryEntry[]
+}
+
+// at は送信した日時。outcome が skipped（送らないと決めた）のときは null。
+export interface InvoiceReplyHistoryEntry {
+  kind: InvoiceReplyKind
+  outcome: 'sent' | 'skipped'
+  body: string
+  at: string | null
 }
 
 // POST /api/invoice-check/[id]/reply に送る操作。

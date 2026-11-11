@@ -19,6 +19,7 @@ function toInfo(row: InvoiceReply): InvoiceReplyInfo {
     draft_body: row.draft_body,
     sent_body: row.sent_body,
     sent_at: row.sent_at,
+    history: row.sent_history ?? [],
   }
 }
 

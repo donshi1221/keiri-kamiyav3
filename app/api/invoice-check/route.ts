@@ -48,6 +48,7 @@ export async function GET() {
         reply_draft_body: invoiceReplies.draft_body,
         reply_sent_body: invoiceReplies.sent_body,
         reply_sent_at: invoiceReplies.sent_at,
+        reply_history: invoiceReplies.sent_history,
       })
       .from(invoiceUploads)
       .leftJoin(contractors, eq(invoiceUploads.contractor_id, contractors.id))
@@ -76,9 +77,10 @@ function withReply<
     reply_draft_body: string | null
     reply_sent_body: string | null
     reply_sent_at: string | null
+    reply_history: InvoiceReplyInfo['history'] | null
   },
 >(row: T) {
-  const { reply_kind, reply_state, reply_draft_body, reply_sent_body, reply_sent_at, ...rest } = row
+  const { reply_kind, reply_state, reply_draft_body, reply_sent_body, reply_sent_at, reply_history, ...rest } = row
   const reply: InvoiceReplyInfo | null =
     reply_kind === null || reply_state === null || reply_draft_body === null
       ? null
@@ -88,6 +90,7 @@ function withReply<
           draft_body: reply_draft_body,
           sent_body: reply_sent_body,
           sent_at: reply_sent_at,
+          history: reply_history ?? [],
         }
   return { ...rest, reply }
 }

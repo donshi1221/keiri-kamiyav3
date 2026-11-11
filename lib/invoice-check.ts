@@ -1,5 +1,5 @@
 import 'server-only'
-import { and, eq, inArray, isNull } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   assignments,
@@ -714,6 +714,9 @@ async function appendCheckHistory(entry: {
 // （マスタ未登録・納品チェック未反映など）が原因のことが多く、相手に送る内容ではないため作らない。
 // 触るのは state が draft の行だけにする。送信済み（sent）は相手に届いた文面の記録、
 // 送らない（skipped）は人が決めた結果で、どちらも再チェックで書き換えてはいけない。
+// 例外は1つだけ。NGの連絡を済ませた（または送らないと決めた）請求書がOKに変わったとき。
+// これは同じ連絡のやり直しではなく「直してもらえたので受領します」という別の連絡なので、
+// NGの控えを sent_history へ退避してから、行を受領の下書きに開き直す。
 // 履歴と同じく、失敗してもチェック本体は成功させる。
 async function syncReplyDraft(
   uploadId: string,
@@ -767,6 +770,29 @@ async function syncReplyDraft(
         set: { kind: draft.kind, draft_body: body, updated_at: new Date().toISOString() },
         setWhere: eq(invoiceReplies.state, 'draft'),
       })
+    if (draft.kind === 'ok') {
+      // 上の1文のあとに行う。行が無かった・draft だった場合は既に kind=ok になっているので、この更新は空振りする。
+      // 控えに入れる文面は、送ったものを優先し、送っていなければ下書き。右辺はすべて更新前の値で評価される。
+      await db
+        .update(invoiceReplies)
+        .set({
+          kind: 'ok',
+          state: 'draft',
+          draft_body: body,
+          sent_body: null,
+          sent_at: null,
+          chatwork_message_id: null,
+          sent_history: sql`coalesce(${invoiceReplies.sent_history}, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('kind', ${invoiceReplies.kind}, 'outcome', ${invoiceReplies.state}, 'body', coalesce(${invoiceReplies.sent_body}, ${invoiceReplies.draft_body}), 'at', ${invoiceReplies.sent_at}))`,
+          updated_at: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(invoiceReplies.upload_id, uploadId),
+            eq(invoiceReplies.kind, 'ng'),
+            inArray(invoiceReplies.state, ['sent', 'skipped'])
+          )
+        )
+    }
   } catch (err) {
     console.error('[invoice-check] syncReplyDraft failed:', err)
   }

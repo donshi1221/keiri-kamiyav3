@@ -1,0 +1,1 @@
+ALTER TABLE "invoice_replies" ADD COLUMN "sent_history" jsonb;

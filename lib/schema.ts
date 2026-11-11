@@ -403,6 +403,17 @@ export const invoiceReplies = pgTable('invoice_replies', {
   kind: text('kind').$type<(typeof INVOICE_REPLY_KINDS)[number]>().notNull(),
   draft_body: text('draft_body').notNull(),
   sent_body: text('sent_body'),
+  // この行が前に担っていた連絡（送った／送らないと決めた）の控え。NGを送ったあとに同じ請求書がOKへ変わると、
+  // 行を受領の下書きに開き直すため、先に送った修正依頼の文面をここへ退避する（上書きして消さない）。
+  // 画面が見るのは「いま」の1件だけにしたいので、行を増やさず列で持つ（upload_id は1行のまま）。
+  sent_history: jsonb('sent_history').$type<
+    {
+      kind: (typeof INVOICE_REPLY_KINDS)[number]
+      outcome: 'sent' | 'skipped'
+      body: string
+      at: string | null
+    }[]
+  >(),
   state: text('state').$type<(typeof INVOICE_REPLY_STATES)[number]>().notNull().default('draft'),
   chatwork_message_id: text('chatwork_message_id'),
   sent_at: timestamp('sent_at', { withTimezone: true, mode: 'string' }),
