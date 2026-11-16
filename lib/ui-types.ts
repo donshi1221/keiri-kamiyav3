@@ -610,6 +610,16 @@ export interface ExpenseExtractedItem {
   to_place: string | null //    利用区間の終点
   description: string | null // 内容（「鉄道利用」「特急券」など）
   amount: number //             正の整数（原本のマイナス表記は絶対値に直す）
+  amount_check_note: string | null // 合計が領収証の内訳と合わないときの警告文（lib/expense-amount-check）
+}
+
+// 合計と内訳の検算（lib/expense-amount-check）に渡す値。内訳の3項目はAIが内訳欄から読んだ数字で、
+// 内訳の無い書類・読めなかった項目は null。
+export interface ExpenseAmountCheckInput {
+  amount: number
+  breakdown_amount: number | null
+  breakdown_tax: number | null
+  breakdown_is_tax_included: boolean | null
 }
 
 // 読み取りは失敗しても例外にせず、理由を持ち回って expense_uploads.extract_error に保存する

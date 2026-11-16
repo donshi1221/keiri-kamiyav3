@@ -465,6 +465,10 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   extracted_amount: integer('extracted_amount'),
   // 代表が受付で行ごとに添える備考（任意）。経理が確認画面で読むだけで、経費の摘要には写さない。
   note: text('note'),
+  // AIが読んだ合計が、領収証の内訳（税抜＋消費税など）と合わなかったときの警告文。合っていた行・内訳の無い行は null。
+  // 手書きの「¥」を「7」と読み違える事故があり、指示文だけでは防げなかったためコード側で検算して残す。
+  // 内訳の数字そのものは残さない（経理が見たいのは「合わない」という事実と、その中身の文だけのため）。
+  amount_check_note: text('amount_check_note'),
   // 代表が割り当てる帰属先。読み取り直後は未割当（null）。
   client_id: uuid('client_id').references(() => clients.id),
   // 経費科目。現在は使っていない（代表に選ばせるのをやめたため常に null が入る）。

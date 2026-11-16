@@ -1,0 +1,1 @@
+ALTER TABLE "expense_upload_items" ADD COLUMN "amount_check_note" text;

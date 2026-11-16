@@ -31,6 +31,7 @@ export async function PATCH(
     const [current] = await db
       .select({
         kind: expenseUploadItems.kind,
+        amount: expenseUploadItems.amount,
         registered_client_expense_id: expenseUploadItems.registered_client_expense_id,
       })
       .from(expenseUploadItems)
@@ -49,7 +50,12 @@ export async function PATCH(
         { status: 409 }
       )
     }
-    if (v.amount !== undefined) patch.amount = v.amount
+    if (v.amount !== undefined) {
+      patch.amount = v.amount
+      // 経理が金額を直した時点で、AIの読み取り値に対する警告は役目を終える。
+      // 残すと直した後の正しい金額まで疑わしく見えるため消す。
+      if (v.amount !== current.amount) patch.amount_check_note = null
+    }
 
     const nextKind = v.kind ?? current.kind
     if (v.kind !== undefined) {

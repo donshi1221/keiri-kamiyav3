@@ -294,6 +294,12 @@ export const EXPENSE_DEFAULT_PAY_METHOD: (typeof EXPENSE_PAY_METHODS)[number] = 
 export const EXPENSE_ITEM_NOTE_MAX_LENGTH = 200
 // 明細1行の金額の上限（円）。経理が直すとき（expenseItemPatchSchema）と同じ値。桁の打ち間違いを止めるため。
 export const EXPENSE_ITEM_AMOUNT_MAX = 100_000_000
+// 領収証の合計と内訳（税抜＋消費税）を検算するときに許す差（円）。消費税の端数処理で
+// 合計が内訳の足し算と数円ずれる店があり、それまで警告すると本当の読み違いが埋もれるため。
+export const EXPENSE_AMOUNT_CHECK_TOLERANCE_YEN = 1
+// 領収証の内訳で、消費税額が妥当かを確かめるときの税率（軽減税率8%・標準税率10%）。
+// 「¥」を「7」と読む誤りが合計と税抜の両方に起きると足し算では辻褄が合ってしまうため、税率でも確かめる。
+export const EXPENSE_TAX_RATES = [0.08, 0.1] as const
 
 // 経費アップロードで受け付けるファイル種別。ICOCAの利用履歴はPDF、特急券の領収書は
 // スマホで撮った画像で届くため両方を許す（Geminiはどちらもそのまま読める）。

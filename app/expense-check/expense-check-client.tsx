@@ -100,6 +100,13 @@ function RepAmountEditedMark({ item }: { item: ExpenseUploadItemRow }) {
   )
 }
 
+// 合計が領収証の内訳と合わなかった行の警告。代表が金額を直した行は代表が確かめた扱いにして出さない
+// （そちらは RepAmountEditedMark が出る）。経理が直した行は PATCH で警告そのものが消える。
+function AmountCheckNote({ item, className }: { item: ExpenseUploadItemRow; className?: string }) {
+  if (!item.amount_check_note || item.extracted_amount !== null) return null
+  return <span className={cn('mt-1 block text-xs break-words text-warning', className)}>{item.amount_check_note}</span>
+}
+
 // 代表が添えた備考。確認のときに読むためだけのもので、登録時の摘要には写さない。
 function RepNote({ note }: { note: string | null }) {
   if (!note) return null
@@ -889,6 +896,8 @@ export default function ExpenseCheckClient() {
                       <td className="px-3 py-2 text-right whitespace-nowrap text-foreground">
                         {isMoneyEditable(row, item) ? renderAmountInput(row, item, busy) : formatExpenseAmount(item.amount)}
                         <RepAmountEditedMark item={item} />
+                        {/* 金額の列は折り返さない設定のため、長い警告文だけは折り返させて表の幅を広げすぎない。 */}
+                        <AmountCheckNote item={item} className="min-w-56 text-left whitespace-normal" />
                       </td>
                       <td className="px-3 py-2">
                         {assignable ? (
@@ -964,6 +973,7 @@ export default function ExpenseCheckClient() {
                   </div>
                   {/* 金額の横に並べるとスマホ幅で収まらないため、見出しの下に置く。 */}
                   <RepAmountEditedMark item={item} />
+                  <AmountCheckNote item={item} />
                   <RepNote note={item.note} />
                   <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
                     {isMoneyEditable(row, item) && (

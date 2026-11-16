@@ -641,6 +641,13 @@ export default function ExpenseUploadForm({
                         </p>
                       )
                     )}
+                    {/* 合計が領収証の内訳と合わない行。正当に合わない領収証もあるので送信は止めず、
+                        代表が金額を直した時点で確認済みとみなして消す。 */}
+                    {item.amount_check_note && amount === item.amount && (
+                      <p className="mt-1 text-xs break-words text-warning">
+                        {item.amount_check_note}金額をご確認ください。
+                      </p>
+                    )}
                   </div>
 
                   <AssignFields

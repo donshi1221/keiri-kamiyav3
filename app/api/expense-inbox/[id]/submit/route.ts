@@ -108,6 +108,9 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
       .from(expenseUploadItems)
       .where(eq(expenseUploadItems.upload_id, id))
       .orderBy(asc(expenseUploadItems.sort_order))
+    const uncheckedMismatchCount = items.filter(
+      (item) => item.amount_check_note !== null && item.extracted_amount === null
+    ).length
 
     // 通知は保険であり本業の受付を止めない。宛先未設定や送信失敗があっても経費の送信自体は成功として返す。
     try {
@@ -127,6 +130,9 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
             `明細件数: ${items.length}件`,
             // 金額が読み取り値から変わった行は、原本と見比べて確かめる必要があるため件数だけ先に知らせる。
             ...(amountChangedCount > 0 ? [`代表が金額を修正した行が${amountChangedCount}件あります`] : []),
+            // 合計が内訳と合わない警告を、代表が金額を直さないまま送った行。正当に合わない領収証もあるため
+            // 送信は止めていないが、経理が原本と見比べるべき行なので件数を知らせる。
+            ...(uncheckedMismatchCount > 0 ? [`内訳と合計が合わない行が${uncheckedMismatchCount}件あります`] : []),
             '',
             `確認はこちら: ${appUrl}/expense-check`,
           ].join('\n'),

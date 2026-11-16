@@ -13,6 +13,7 @@ import {
 } from '@/lib/ai-retry'
 import { GEMINI_MODEL_FALLBACKS, AI_REQUEST_MIN_TIMEOUT_MS } from '@/lib/config'
 import { nowJST } from '@/lib/dates'
+import { checkExpenseAmount } from '@/lib/expense-amount-check'
 import type { ExpenseExtractedItem, ExpenseExtractOutcome } from '@/lib/ui-types'
 
 // AIに返させるJSONの形。プロンプトの文章だけで形式を守らせようとすると
@@ -35,7 +36,24 @@ const RESPONSE_SCHEMA: ResponseSchema = {
           to_place: { type: SchemaType.STRING, nullable: true, description: '利用区間の終点。区間が無ければ null' },
           description: { type: SchemaType.STRING, nullable: true, description: '内容（「鉄道利用」「特急券」など）' },
           amount: { type: SchemaType.INTEGER, nullable: true, description: '利用額（円）。符号は付けず正の数で返す' },
+          breakdown_amount: {
+            type: SchemaType.INTEGER,
+            nullable: true,
+            description: '領収証の内訳欄に書かれた金額（円）。内訳欄が無ければ null',
+          },
+          breakdown_tax: {
+            type: SchemaType.INTEGER,
+            nullable: true,
+            description: '領収証の内訳欄に書かれた消費税額（円）。内訳欄が無ければ null',
+          },
+          breakdown_is_tax_included: {
+            type: SchemaType.BOOLEAN,
+            nullable: true,
+            description: '内訳欄の金額が税込なら true、税抜なら false。判別できなければ null',
+          },
         },
+        // 内訳の3項目は required に入れない。ICOCAの利用履歴など内訳の無い書類が大半で、必須にすると
+        // 既存の読み取りの答え方まで変わりうるため（今まで安定していた交通費の読み取りを崩さないことを優先）。
         required: ['item_date', 'from_place', 'to_place', 'description', 'amount'],
       },
     },
@@ -93,6 +111,17 @@ const PROMPT = [
   '  （例: 手書きで「¥9,900」と書かれているのに「79,900」と読まない）',
   '  内訳が書かれているときは、税抜金額 + 消費税額 = 合計 になるかを検算し、',
   '  合計欄の読み取りが内訳と合わないときは、内訳から合うほうの金額を返す。',
+  '- breakdown_amount / breakdown_tax / breakdown_is_tax_included:',
+  '  領収証に「内訳（税率・金額（税抜／税込）・消費税額等）」の欄があるときだけ、',
+  '  その欄の金額を breakdown_amount に、消費税額を breakdown_tax に、カンマ・「円」・「¥」を取り除いた整数で返す。',
+  '  breakdown_is_tax_included は、内訳欄の金額が税込なら true、税抜なら false、',
+  '  丸囲みが無いなどで判別できなければ null にする。',
+  '  合計欄の amount とは別に、内訳欄に書かれている数字をそのまま読むこと（合計に合わせて辻褄を合わせない）。',
+  '  内訳の税率の行が2行以上書かれている場合（8%の行と10%の行が並ぶなど）は、',
+  '  breakdown_amount / breakdown_tax / breakdown_is_tax_included を3つとも null にする（1行目だけを返さない）。',
+  '',
+  '内訳欄が無い書類（交通費の書類・納付書・内訳の無い領収書）では、',
+  'breakdown_amount / breakdown_tax / breakdown_is_tax_included の3つとも null にする。',
   '',
   '読み取れない項目は必ず null にすること（推測で埋めない）。',
 ].join('\n')
@@ -115,6 +144,14 @@ function normalizeAmount(value: unknown): number {
   return n <= MAX_AMOUNT ? n : 0
 }
 
+// 内訳欄の金額は検算にしか使わないため、読めなければ 0 でなく null にする。
+// 0 にすると「0円の内訳」と区別できず、検算で誤った警告を出してしまう。
+function normalizeBreakdownAmount(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const n = Math.abs(Math.round(value))
+  return n <= MAX_AMOUNT ? n : null
+}
+
 // 日付は date 列にそのまま入れるため、形式が違う値を渡すとDBが生の500を返す。
 // カレンダー上ありえない日（2026-02-31）もここで弾き、null＝人が直す、に寄せる。
 function normalizeDate(value: unknown): string | null {
@@ -133,12 +170,20 @@ function normalizeItems(value: unknown): ExpenseExtractedItem[] {
   return value.flatMap((raw): ExpenseExtractedItem[] => {
     if (typeof raw !== 'object' || raw === null) return []
     const item = raw as Record<string, unknown>
+    const amount = normalizeAmount(item.amount)
     const normalized: ExpenseExtractedItem = {
       item_date: normalizeDate(item.item_date),
       from_place: normalizeText(item.from_place),
       to_place: normalizeText(item.to_place),
       description: normalizeText(item.description),
-      amount: normalizeAmount(item.amount),
+      amount,
+      amount_check_note: checkExpenseAmount({
+        amount,
+        breakdown_amount: normalizeBreakdownAmount(item.breakdown_amount),
+        breakdown_tax: normalizeBreakdownAmount(item.breakdown_tax),
+        breakdown_is_tax_included:
+          typeof item.breakdown_is_tax_included === 'boolean' ? item.breakdown_is_tax_included : null,
+      }),
     }
     const empty =
       normalized.item_date === null &&
@@ -293,6 +338,7 @@ export async function extractExpenseAndSave(
         to_place: item.to_place,
         description: item.description,
         amount: item.amount,
+        amount_check_note: item.amount_check_note,
         sort_order: index,
       }))
     )

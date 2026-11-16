@@ -288,6 +288,13 @@
       "when": 1794794151319,
       "tag": "0040_fair_warbird",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794870620560,
+      "tag": "0041_unique_senator_kelly",
+      "breakpoints": true
     }
   ]
 }
