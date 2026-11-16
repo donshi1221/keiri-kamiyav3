@@ -29,7 +29,9 @@ export function isPaymentActiveForMonth(
 
 // 契約開始月・契約期間から、その (year, month) に内訳が有効かを判定する。
 // contract_start が無ければ常に有効。contract_months が無ければ開始月以降ずっと有効。
-function isBillingItemActiveForMonth(
+// 生成側と、期間外になった請求行の掃除側（app/api/master/billing-items/[id]）で
+// 同じ判定を使うため export している。片方だけ直すと生成と掃除が食い違うため実装は必ずここ1か所に置く。
+export function isBillingItemActiveForMonth(
   item: { contract_start: string | null; contract_months: number | null },
   year: number,
   month: number
