@@ -89,6 +89,25 @@ function KindLabel({ kind }: { kind: string | null }) {
   return <span className={cn('whitespace-nowrap', kind === 'client_billed' ? 'text-info' : 'text-muted-foreground')}>{label}</span>
 }
 
+// 代表が受付で金額を直した行の印。原本と見比べて確かめるべき行を、経理が見落とさないようにする。
+// 経理が後から PATCH で読み取り値に戻した場合は差が無くなるので印も消える。
+function RepAmountEditedMark({ item }: { item: ExpenseUploadItemRow }) {
+  if (item.extracted_amount === null || item.extracted_amount === item.amount) return null
+  return (
+    <span className="mt-1 block text-xs text-warning">
+      代表が修正（AI読み取り: {formatExpenseAmount(item.extracted_amount)}）
+    </span>
+  )
+}
+
+// 代表が添えた備考。確認のときに読むためだけのもので、登録時の摘要には写さない。
+function RepNote({ note }: { note: string | null }) {
+  if (!note) return null
+  return (
+    <span className="mt-1 block text-xs break-words whitespace-pre-wrap text-muted-foreground">備考: {note}</span>
+  )
+}
+
 // 受付・送信日時はサーバー保存の UTC 文字列。閲覧端末のタイムゾーンに左右されないよう JST 固定で表示する。
 function formatDateTime(iso: string): string {
   return formatInTimeZone(iso, TZ, 'M/d HH:mm')
@@ -865,9 +884,11 @@ export default function ExpenseCheckClient() {
                       <td className="px-3 py-2 text-foreground">{formatExpenseRoute(item.from_place, item.to_place) || '—'}</td>
                       <td className="px-3 py-2 text-foreground">
                         {descEditable ? renderDescriptionInput(row, item, busy) : (item.description ?? '—')}
+                        <RepNote note={item.note} />
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap text-foreground">
                         {isMoneyEditable(row, item) ? renderAmountInput(row, item, busy) : formatExpenseAmount(item.amount)}
+                        <RepAmountEditedMark item={item} />
                       </td>
                       <td className="px-3 py-2">
                         {assignable ? (
@@ -941,6 +962,9 @@ export default function ExpenseCheckClient() {
                     </div>
                     <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(item.amount)}</p>
                   </div>
+                  {/* 金額の横に並べるとスマホ幅で収まらないため、見出しの下に置く。 */}
+                  <RepAmountEditedMark item={item} />
+                  <RepNote note={item.note} />
                   <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
                     {isMoneyEditable(row, item) && (
                       <div className="space-y-1 pb-1">

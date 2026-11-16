@@ -51,10 +51,15 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
     }
 
     const rows = await db
-      .select({ id: expenseUploadItems.id })
+      .select({
+        id: expenseUploadItems.id,
+        amount: expenseUploadItems.amount,
+        extracted_amount: expenseUploadItems.extracted_amount,
+      })
       .from(expenseUploadItems)
       .where(eq(expenseUploadItems.upload_id, id))
     const ownIds = new Set(rows.map((r) => r.id))
+    const currentById = new Map(rows.map((r) => [r.id, r]))
 
     // 公開エンドポイントなので、他の受付の明細IDを混ぜて送られる可能性を排除する。
     // 件数の一致も見て、画面が一部の行を落として送った場合は割り当て漏れとして弾く。
@@ -64,10 +69,24 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
     }
 
     // neon-http はトランザクションを張れないため1行ずつ更新する（明細は10件前後で件数が知れている）。
+    let amountChangedCount = 0
     for (const item of parsed.data.items) {
+      const current = currentById.get(item.id)
+      const amountChanged = current !== undefined && item.amount !== undefined && item.amount !== current.amount
+      if (amountChanged) amountChangedCount++
       await db
         .update(expenseUploadItems)
         .set({
+          ...(amountChanged
+            ? {
+                amount: item.amount,
+                // 直す前の値を控えておかないと、経理は「AIの読み違いを代表が直した行」を見分けられない。
+                // 既に控えがあるならそれが最初のAIの値なので、上書きせずに残す。
+                ...(current.extracted_amount === null ? { extracted_amount: current.amount } : {}),
+              }
+            : {}),
+          // 古いフォーム・経理の画面からは届かない。届かないときに既存の備考を消さないよう、来たときだけ書く。
+          ...(item.note !== undefined ? { note: item.note } : {}),
           kind: item.kind,
           // 対象外の行にクライアントが残っていると、後から見て「請求するのか」が読めなくなる。
           // 検証では任意にしているため、意味の無い値はここで消してから保存する。
@@ -106,6 +125,8 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
             '',
             `ファイル名: ${upload.file_name}`,
             `明細件数: ${items.length}件`,
+            // 金額が読み取り値から変わった行は、原本と見比べて確かめる必要があるため件数だけ先に知らせる。
+            ...(amountChangedCount > 0 ? [`代表が金額を修正した行が${amountChangedCount}件あります`] : []),
             '',
             `確認はこちら: ${appUrl}/expense-check`,
           ].join('\n'),

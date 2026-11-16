@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS, PAYROLL_KINDS, PAYMENT_REQUEST_STATUSES } from '@/lib/config'
+import {
+  EXPENSE_ITEM_AMOUNT_MAX,
+  EXPENSE_ITEM_KINDS,
+  EXPENSE_ITEM_NOTE_MAX_LENGTH,
+  EXPENSE_PAY_METHODS,
+  PAYROLL_KINDS,
+  PAYMENT_REQUEST_STATUSES,
+} from '@/lib/config'
 
 // API入力の検証スキーマを1か所に集約する。
 // 目的は「壊れたデータをDBに入れない」「型不一致でDBが生の500を返す事故を防ぐ」こと。
@@ -260,6 +267,24 @@ const expenseItemClientId = z.preprocess(
   z.uuid({ message: 'クライアントの指定が不正です' }).nullable()
 )
 
+// 明細1行の金額。代表が受付で直すときと経理が直すときで規則を揃える（片方だけ緩いと、
+// 一方の画面で入った値がもう一方では直せない、という食い違いになるため）。
+const expenseItemAmount = z
+  .number({ message: '金額は数字で入力してください' })
+  .int({ message: '金額は整数で入力してください' })
+  .min(0, { message: '金額は0円以上で入力してください' })
+  .max(EXPENSE_ITEM_AMOUNT_MAX, { message: '金額が大きすぎます' })
+
+// 代表が明細に添える備考。空欄は「備考なし」（null）として保存する。
+const expenseItemNote = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
+  z
+    .string()
+    .max(EXPENSE_ITEM_NOTE_MAX_LENGTH, { message: `備考は${EXPENSE_ITEM_NOTE_MAX_LENGTH}文字以内で入力してください` })
+    .nullable()
+    .optional()
+)
+
 const expenseItemAssignSchema = z
   .object({
     id: z.uuid({ message: '明細の指定が不正です' }),
@@ -268,6 +293,9 @@ const expenseItemAssignSchema = z
     // 支払方法。経理が代わりに割り当てる画面や、開きっぱなしの古い受付フォームからは届かないので任意にし、
     // 無いときは保存側で規定（会社クレカ・ICOCA）に倒す。
     pay_method: z.enum(EXPENSE_PAY_METHODS, { message: '支払方法の指定が不正です' }).optional(),
+    // 金額と備考も同じ理由で任意。金額が届かなければ読み取り値のまま、備考が届かなければ触らない。
+    amount: expenseItemAmount.optional(),
+    note: expenseItemNote,
   })
   .superRefine((item, ctx) => {
     if (item.kind === 'client_billed' && !item.client_id) {
@@ -292,12 +320,7 @@ export const expenseItemPatchSchema = z
       (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
       z.string().max(200, { message: '内容は200文字以内で入力してください' }).nullable().optional()
     ),
-    amount: z
-      .number({ message: '金額は数字で入力してください' })
-      .int({ message: '金額は整数で入力してください' })
-      .min(0, { message: '金額は0円以上で入力してください' })
-      .max(100_000_000, { message: '金額が大きすぎます' })
-      .optional(),
+    amount: expenseItemAmount.optional(),
     kind: z.enum(EXPENSE_ITEM_KINDS, { message: '区分の指定が不正です' }).optional(),
     // 「未選択に戻す」も送れるよう null を許す（請求する行で null のままなら登録の手前で止まる）。
     client_id: z.uuid({ message: 'クライアントの指定が不正です' }).nullable().optional(),

@@ -612,6 +612,9 @@ export interface ExpenseItemAssignment {
   client_id: string | null
   // 経理が代わりに割り当てる画面からは送らない（登録のときに選ぶため）。
   pay_method?: ExpensePayMethod
+  // 代表が受付で直した金額と、行ごとの備考。経理の画面からは送らない（金額は PATCH で直すため）。
+  amount?: number
+  note?: string | null
 }
 
 // 経理が登録前の明細を直すときに送る値。検証の正本は lib/validation の expenseItemPatchSchema で、

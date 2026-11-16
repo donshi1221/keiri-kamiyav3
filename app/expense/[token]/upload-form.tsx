@@ -3,7 +3,13 @@
 import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { EXPENSE_DEFAULT_PAY_METHOD, EXPENSE_ITEM_KINDS, EXPENSE_PAY_METHODS } from '@/lib/config'
+import {
+  EXPENSE_DEFAULT_PAY_METHOD,
+  EXPENSE_ITEM_AMOUNT_MAX,
+  EXPENSE_ITEM_KINDS,
+  EXPENSE_ITEM_NOTE_MAX_LENGTH,
+  EXPENSE_PAY_METHODS,
+} from '@/lib/config'
 import type { Client, ExpenseUploadItem } from '@/lib/schema'
 import type {
   ExpenseInboxResponse,
@@ -21,15 +27,36 @@ import {
 
 // 入力の途中は「まだ選んでいない」状態を持てないと困る（初期表示が必ず未選択のため）。
 // 送信用の型（ExpenseItemAssignment）は選択済みを前提にした形なので、画面の下書きは空文字を許す形で別に持つ。
+// 金額は打ちかけ（空欄・全角・カンマ入り）も持てるよう、数値ではなく入力された文字のまま持つ。
 type ItemDraft = {
   kind: ExpenseItemKind | ''
   clientId: string
   payMethod: ExpensePayMethod
+  amountText: string
+  note: string
 }
 
 // 支払方法だけは最初から規定（会社クレカ・ICOCA）を入れておく。大半がそちらなので、
-// 現金で払った行だけ変えれば済むようにする。
-const EMPTY_DRAFT: ItemDraft = { kind: '', clientId: '', payMethod: EXPENSE_DEFAULT_PAY_METHOD }
+// 現金で払った行だけ変えれば済むようにする。金額はAIの読み取り値から始め、違うときだけ直してもらう。
+function initialDraft(item: Pick<ExpenseUploadItem, 'amount'>): ItemDraft {
+  return { kind: '', clientId: '', payMethod: EXPENSE_DEFAULT_PAY_METHOD, amountText: String(item.amount), note: '' }
+}
+
+// スマホの日本語入力のままだと全角数字や「1,200円」が入りやすい。打ち直しをさせないよう、
+// 半角化とカンマ・円記号・「円」・空白の除去までは受け付け、それでも整数にならなければ null（不正）にする。
+// 範囲はサーバー側の検証（expenseItemAssignSchema の amount）と同じにする。
+function parseAmount(text: string): number | null {
+  const normalized = text
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[,，、¥￥円\s]/g, '')
+  if (!/^\d+$/.test(normalized)) return null
+  const value = Number(normalized)
+  return value <= EXPENSE_ITEM_AMOUNT_MAX ? value : null
+}
+
+function isNoteValid(note: string): boolean {
+  return note.trim().length <= EXPENSE_ITEM_NOTE_MAX_LENGTH
+}
 
 // 代表へ返すかどうかに関わるのは、立替精算に乗りうる区分だけ（経理の画面の isReimbursableItem と同じ条件）。
 function needsPayMethod(kind: ItemDraft['kind']): boolean {
@@ -51,6 +78,12 @@ type UploadOutcome = { ok: true; data: ExpenseInboxResponse } | { ok: false; err
 // 送信できる状態か。サーバー側の検証（lib/validation の expenseItemAssignSchema）と同じ条件にして、
 // 画面では通るのに送信で弾かれる、という食い違いを避ける。
 function isComplete(draft: ItemDraft): boolean {
+  return isAssignComplete(draft) && parseAmount(draft.amountText) !== null && isNoteValid(draft.note)
+}
+
+// 区分・クライアントが選び終わっているか。「同日の明細に適用」で配るのはこの部分だけなので、
+// 金額の打ち間違いがあってもボタンは押せるよう、判定を分けておく。
+function isAssignComplete(draft: ItemDraft): boolean {
   if (draft.kind === '') return false
   return draft.kind !== 'client_billed' || draft.clientId !== ''
 }
@@ -187,18 +220,25 @@ export default function ExpenseUploadForm({
     return Array.from(map, ([date, rows]) => ({ date, rows }))
   }, [items])
 
-  const incomplete = items.filter((item) => !isComplete(drafts[item.id] ?? EMPTY_DRAFT))
+  const draftOf = (item: ExpenseUploadItem) => drafts[item.id] ?? initialDraft(item)
+  const incomplete = items.filter((item) => !isComplete(draftOf(item)))
+
+  // 打ちかけで金額が不正な行は合計に足さない（読み取り値で足すと、画面の金額と合計が食い違って見えるため）。
+  const amountOf = (item: ExpenseUploadItem) => parseAmount(draftOf(item).amountText) ?? 0
 
   function updateDraft(id: string, next: ItemDraft) {
     setDrafts((prev) => ({ ...prev, [id]: next }))
   }
 
   // ある行の選択を同じ日の行へ配る。往復2行を1件ずつ選ぶ手間をなくすのが目的。
+  // 金額と備考はその行だけのものなので配らない（配ると往復の片道の金額で上書きしてしまう）。
   function applyToDate(date: string, draft: ItemDraft) {
     setDrafts((prev) => {
       const next = { ...prev }
       for (const item of items) {
-        if ((item.item_date ?? '') === date) next[item.id] = { ...draft }
+        if ((item.item_date ?? '') !== date) continue
+        const base = prev[item.id] ?? initialDraft(item)
+        next[item.id] = { ...base, kind: draft.kind, clientId: draft.clientId, payMethod: draft.payMethod }
       }
       return next
     })
@@ -257,7 +297,7 @@ export default function ExpenseUploadForm({
       recordResult({ name: file.name, status: 'upload_failed', message: outcome.error })
     } else {
       setInbox(outcome.data)
-      setDrafts(Object.fromEntries(outcome.data.items.map((item) => [item.id, EMPTY_DRAFT])))
+      setDrafts(Object.fromEntries(outcome.data.items.map((item) => [item.id, initialDraft(item)])))
       // 失敗はこの時点で記録する。代表が「次のファイルへ」を押さずに画面を離れても、
       // 直前まで見ていた結果一覧に失敗が残っている方が担当者へ伝えやすい。
       if (outcome.data.extract_error || outcome.data.items.length === 0) {
@@ -298,13 +338,17 @@ export default function ExpenseUploadForm({
 
     // 「対象外」の行にクライアントを付けたまま送らない。選び直しの途中経過が
     // そのまま経理に見えると、請求するのかどうかが読めなくなるため。
+    // 金額は incomplete が0件＝全行で parseAmount が通っている前提なので、読み取り値への退避は保険。
     const payload: ExpenseItemAssignment[] = inbox.items.map((item) => {
-      const draft = drafts[item.id] ?? EMPTY_DRAFT
+      const draft = draftOf(item)
+      const note = draft.note.trim()
       return {
         id: item.id,
         kind: draft.kind as ExpenseItemKind,
         client_id: draft.kind === 'client_billed' ? draft.clientId : null,
         ...(needsPayMethod(draft.kind) ? { pay_method: draft.payMethod } : {}),
+        amount: parseAmount(draft.amountText) ?? item.amount,
+        note: note === '' ? null : note,
       }
     })
 
@@ -524,7 +568,7 @@ export default function ExpenseUploadForm({
       <div className="rounded-lg border bg-card px-4 py-3">
         <p className="text-sm font-medium break-all">{inbox.file_name}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {items.length}件の明細を読み取りました。行ごとに区分などを選んで送信してください。
+          {items.length}件の明細を読み取りました。行ごとに区分などを選んで送信してください。金額が違う行は直せます。
         </p>
       </div>
 
@@ -533,14 +577,17 @@ export default function ExpenseUploadForm({
           <div className="flex items-baseline justify-between gap-2 px-1">
             <h2 className="text-sm font-bold">{formatExpenseDate(group.date || null)}</h2>
             <span className="text-xs text-muted-foreground">
-              {group.rows.length}件 / {formatExpenseAmount(group.rows.reduce((sum, r) => sum + r.amount, 0))}
+              {group.rows.length}件 / {formatExpenseAmount(group.rows.reduce((sum, r) => sum + amountOf(r), 0))}
             </span>
           </div>
 
           {group.rows.map((item) => {
-            const draft = drafts[item.id] ?? EMPTY_DRAFT
+            const draft = draftOf(item)
             const route = formatExpenseRoute(item.from_place, item.to_place)
             const complete = isComplete(draft)
+            const amount = parseAmount(draft.amountText)
+            const amountEdited = amount !== null && amount !== item.amount
+            const noteValid = isNoteValid(draft.note)
             return (
               <div
                 key={item.id}
@@ -557,27 +604,89 @@ export default function ExpenseUploadForm({
                       {item.description ?? '内容なし'}
                     </p>
                   </div>
-                  <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(item.amount)}</p>
+                  <p className="shrink-0 text-sm font-medium">{formatExpenseAmount(amount ?? item.amount)}</p>
                 </div>
 
-                <div className="mt-3">
+                <div className="mt-3 space-y-2">
+                  {/* 手書きの領収証などはAIが金額を読み違えることがある。却下・再提出まで戻らずに済むよう、
+                      その場で直せるようにする。 */}
+                  <div>
+                    <label
+                      htmlFor={`item-${item.id}-amount`}
+                      className="mb-1 block text-xs font-medium text-muted-foreground"
+                    >
+                      金額（円）
+                    </label>
+                    <input
+                      id={`item-${item.id}-amount`}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={draft.amountText}
+                      onChange={(e) => updateDraft(item.id, { ...draft, amountText: e.target.value })}
+                      aria-invalid={amount === null}
+                      className={cn(
+                        'min-h-11 w-full rounded border bg-card px-3 py-2 text-right text-sm md:min-h-9',
+                        amount === null && 'border-danger'
+                      )}
+                    />
+                    {amount === null ? (
+                      <p className="mt-1 text-xs text-danger">
+                        金額は0〜{EXPENSE_ITEM_AMOUNT_MAX.toLocaleString('ja-JP')}円の整数で入力してください。
+                      </p>
+                    ) : (
+                      amountEdited && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          読み取った金額: {formatExpenseAmount(item.amount)}（修正したことは経理に伝わります）
+                        </p>
+                      )
+                    )}
+                  </div>
+
                   <AssignFields
                     draft={draft}
                     clients={clients}
                     onChange={(next) => updateDraft(item.id, next)}
                     idPrefix={`item-${item.id}`}
                   />
+
+                  <div>
+                    <label
+                      htmlFor={`item-${item.id}-note`}
+                      className="mb-1 block text-xs font-medium text-muted-foreground"
+                    >
+                      備考（任意）
+                    </label>
+                    <textarea
+                      id={`item-${item.id}-note`}
+                      rows={2}
+                      maxLength={EXPENSE_ITEM_NOTE_MAX_LENGTH}
+                      value={draft.note}
+                      onChange={(e) => updateDraft(item.id, { ...draft, note: e.target.value })}
+                      aria-invalid={!noteValid}
+                      placeholder="経理に伝えたいことがあれば"
+                      className={cn(
+                        'min-h-11 w-full rounded border bg-card px-3 py-2 text-sm',
+                        !noteValid && 'border-danger'
+                      )}
+                    />
+                    {!noteValid && (
+                      <p className="mt-1 text-xs text-danger">
+                        備考は{EXPENSE_ITEM_NOTE_MAX_LENGTH}文字以内で入力してください。
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* 往復が2行に分かれるため、同じ日の行へ配れるようにする。1行分を選び終えてから押す操作なので、
-                    その行が埋まるまでは押せないようにする。 */}
+                    その行の区分などが埋まるまでは押せないようにする。 */}
                 {group.rows.length > 1 && (
                   <Button
                     type="button"
                     variant="outline"
                     className="mt-2 h-11 w-full md:h-9"
                     onClick={() => applyToDate(group.date, draft)}
-                    disabled={!complete}
+                    disabled={!isAssignComplete(draft)}
                   >
                     同日の明細に適用
                   </Button>
@@ -598,7 +707,7 @@ export default function ExpenseUploadForm({
           「あと何行埋めればよいか」を見ながら送信できるようにする。 */}
       <div className="sticky bottom-4 rounded-lg border bg-card px-4 py-3 shadow-lg">
         {incomplete.length > 0 && (
-          <p className="mb-2 text-center text-xs text-warning">未入力があと{incomplete.length}件あります</p>
+          <p className="mb-2 text-center text-xs text-warning">未入力・入力の誤りがあと{incomplete.length}件あります</p>
         )}
         <Button
           type="button"

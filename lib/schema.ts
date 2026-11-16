@@ -460,6 +460,11 @@ export const expenseUploadItems = pgTable('expense_upload_items', {
   description: text('description'),
   // 原本はマイナス表記（-350 円）だが、経費としては正の数で扱うため読み取り時に絶対値へ直す。
   amount: integer('amount').notNull().default(0),
+  // 代表が受付で金額を直したときの、直す前の金額（AIの読み取り値）。経理が「読み取り違いを代表が直した行」を
+  // 見分けるための控え。直していない行と、この列ができる前の行は null。最初の値を残したいので上書きしない。
+  extracted_amount: integer('extracted_amount'),
+  // 代表が受付で行ごとに添える備考（任意）。経理が確認画面で読むだけで、経費の摘要には写さない。
+  note: text('note'),
   // 代表が割り当てる帰属先。読み取り直後は未割当（null）。
   client_id: uuid('client_id').references(() => clients.id),
   // 経費科目。現在は使っていない（代表に選ばせるのをやめたため常に null が入る）。

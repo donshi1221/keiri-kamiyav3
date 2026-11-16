@@ -279,6 +279,12 @@ export const EXPENSE_PAY_METHODS = ['company', 'cash'] as const
 // （現金の分は代表が受付で選ぶ。規定を現金にすると、選び忘れた会社カードの分まで代表へ返してしまう）。
 export const EXPENSE_DEFAULT_PAY_METHOD: (typeof EXPENSE_PAY_METHODS)[number] = 'company'
 
+// 代表が受付で明細1行に添える備考の上限文字数。画面の入力欄とサーバー側の検証（zod）で同じ値を使い、
+// 「画面では打てるのに送信で弾かれる」食い違いを作らないためここに置く。
+export const EXPENSE_ITEM_NOTE_MAX_LENGTH = 200
+// 明細1行の金額の上限（円）。経理が直すとき（expenseItemPatchSchema）と同じ値。桁の打ち間違いを止めるため。
+export const EXPENSE_ITEM_AMOUNT_MAX = 100_000_000
+
 // 経費アップロードで受け付けるファイル種別。ICOCAの利用履歴はPDF、特急券の領収書は
 // スマホで撮った画像で届くため両方を許す（Geminiはどちらもそのまま読める）。
 // 画像はサブタイプが機種でまちまち（jpeg / heic / webp）なので前方一致で判定する。
