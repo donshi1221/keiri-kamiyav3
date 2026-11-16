@@ -232,6 +232,8 @@ export const INVOICE_REPLY_UNKNOWN_MONTH = process.env.INVOICE_REPLY_UNKNOWN_MON
 //   {actual} 請求書の宛名 / {correct} 正しい宛名 / {text} 判定理由の本文
 //   {label} 追加費用の明細の名称 / {amount} その金額
 //   {delivered} 納品を確認できている本数 / {over} 超えている本数（合計本数の超過）
+//   {shown} 請求書に書かれた支払回数（「2/6」） / {expected} 今月分として期待する支払回数（「3/6」）
+//   ※ 支払回数（payment_count_*）の {expected} は回数の表記で、金額ではない
 // 金額は「¥」付き、本数は数字だけが入る。種類ごとに INVOICE_REPLY_REASON_<種類の大文字> で上書きできる。
 const INVOICE_REPLY_REASON_DEFAULTS = {
   total: 'ご請求額 {billed} に対し、こちらの控えでは {expected} です（差額 {diff}）。',
@@ -248,6 +250,14 @@ const INVOICE_REPLY_REASON_DEFAULTS = {
   addressee: '宛名が「{actual}」になっています。正しくは「{correct}」です。',
   total_count_over:
     '請求書の合計本数（{billed}本）が、こちらで納品を確認できている本数（{delivered}本）を{over}本超えています。納品シートの記入状況と請求の本数をご確認のうえ、修正版をご提出ください。',
+  payment_count_same:
+    '「{client}」分：支払回数が前月と同じ「{shown}」のままです。今月分は「{expected}」に直した修正版をお送りください。',
+  payment_count_back:
+    '「{client}」分：支払回数が「{shown}」と前月より戻っています。今月分は「{expected}」です。直した修正版をお送りください。',
+  payment_count_ahead:
+    '「{client}」分：支払回数が「{shown}」と進みすぎています。今月分は「{expected}」です。直した修正版をお送りください。',
+  payment_count_total:
+    '「{client}」分：支払回数の総数が「{shown}」となっていますが、こちらの控えでは「{expected}」です。確認のうえ修正版をお送りください。',
   other: '{text}',
 } as const
 

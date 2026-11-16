@@ -10,7 +10,9 @@ import type {
   InvoiceDeliveryPayoutApply,
   InvoiceExtraItem,
   InvoiceExtractedItem,
+  InvoiceNgReason,
   InvoiceOutOfPeriodClient,
+  InvoicePaymentCountContext,
   InvoicePaymentCountNote,
   InvoicePaymentTarget,
   InvoicePayoutBreakdownRow,
@@ -117,55 +119,204 @@ function cautionNote(label: string, body: string): string {
   return `${label}${CAUTION_LABEL_SEPARATOR}${body}`
 }
 
-// 明細の支払回数がマスタの支払期間と整合するかを見る。
-// 請求書の支払月 P が「全M回中N回目」なら、契約は P-(N-1) 月に始まり P+(M-N) 月で終わる。
-// マスタ側の終了月（開始月+回数-1）と突き合わせ、終わりが揃っていれば回数の記載は正しい。
-// 突き合わせる相手が無い場合（クライアント未特定・支払期間が「継続」）は、判断できないことを
-// そのまま伝えて人に回す（勝手に整合とみなすと、回数のズレを黙って通してしまう）。
-// confirmed は人が目視で確認済みにした注意のキー一覧。該当する注意は消さずにOKへ落とす
+type PaymentCountRef = { index: number; total: number }
+type PaymentCountDrift = 'same' | 'back' | 'ahead' | 'total'
+
+// 前月分の請求書のうち、明細を当てた先と同じクライアントの明細から読めた材料。
+// 前月分の請求書そのものが無いときは null（呼び出し側で「比べる相手が無い」として扱う）。
+interface PrevPaymentRef {
+  count: PaymentCountRef | null
+  date: { month: number; day: number } | null
+}
+
+// 期待する回数（expected）と請求書の回数（ref）のずれ方。null はずれていない。
+// 総数が違うと何回目かを比べても意味が無いため、総数を先に見る。
+function paymentCountDrift(ref: PaymentCountRef, expected: PaymentCountRef): PaymentCountDrift | null {
+  if (ref.total !== expected.total) return 'total'
+  if (ref.index === expected.index) return null
+  if (ref.index === expected.index - 1) return 'same'
+  if (ref.index < expected.index - 1) return 'back'
+  return 'ahead'
+}
+
+// 判定理由の本文（社内向け）。比べた相手（マスタか前月の請求書か）を添えて、何を根拠にずれと見たかを残す。
+// cautionNote の本文になるため ' — ' を入れない。
+function paymentCountDriftBody(
+  drift: PaymentCountDrift,
+  clientName: string,
+  ref: PaymentCountRef,
+  expected: PaymentCountRef,
+  basis: string
+): string {
+  const shown = `支払回数（${ref.index}/${ref.total}）`
+  const expectedText = `${expected.index}/${expected.total}`
+  switch (drift) {
+    case 'same':
+      return `${clientName}の${shown}が前月と同じ回数のままです（${basis}では今月分は${expectedText}）`
+    case 'back':
+      return `${clientName}の${shown}が前月より戻っています（${basis}では今月分は${expectedText}）`
+    case 'ahead':
+      return `${clientName}の${shown}が進みすぎています（${basis}では今月分は${expectedText}）`
+    case 'total':
+      return `${clientName}の${shown}の総数が${basis}と違います（${basis}では今月分は${expectedText}）`
+  }
+}
+
+function paymentCountReason(
+  drift: PaymentCountDrift,
+  clientName: string,
+  ref: PaymentCountRef,
+  expected: PaymentCountRef
+): InvoiceNgReason {
+  const kinds = {
+    same: 'payment_count_same',
+    back: 'payment_count_back',
+    ahead: 'payment_count_ahead',
+    total: 'payment_count_total',
+  } as const
+  return {
+    kind: kinds[drift],
+    client: clientName,
+    shown: `${ref.index}/${ref.total}`,
+    expected: `${expected.index}/${expected.total}`,
+  }
+}
+
+// 明細ラベルが支払回数を書いたものだとはっきり分かるか。前月の請求書とだけ比べるときは、
+// 「7/12」が日付なのか回数なのかをマスタで確かめられないため、この文字があるときだけNGにする。
+function labelStatesPaymentCount(label: string): boolean {
+  return label.includes('支払回数') || label.includes('回目')
+}
+
+// 記載日の月が、請求書の記載月（◯月分）の前月〜翌月に収まっているか。月だけで比べるため循環で差をとる
+// （12月分に「1/5」、1月分に「12/28」と書かれる年またぎも範囲内として扱う）。
+function isDateNearBilledMonth(month: number, billedMonth: number): boolean {
+  const diff = ((month - billedMonth + 18) % 12) - 6
+  return diff >= -1 && diff <= 1
+}
+
+// 「N/M」を台本作成日として書くクライアント（clients.nm_as_date）の確認。回数として突き合わせると
+// 必ず不整合になるため、記載日の作業実施を人に確かめてもらう案内にする。
+// 記載日が対象月から離れている・前月の請求書と同じ日付のままのときは、使い回しの疑いとして注意の本文を差し替える。
+// 日付は年をまたいでも書かれる・作業日が前後することもあるため、NGにはせず注意にとどめる。
+// 日付として読めない並び（「19/24」など）は案内の材料が無いため何も出さない。
+function checkItemDate(
+  label: string,
+  billedMonth: InvoiceYearMonth,
+  prev: PrevPaymentRef | null,
+  isConfirmed: boolean
+): InvoicePaymentCountNote | null {
+  const date = extractItemDate(label)
+  if (!date) return null
+  if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '作業実施を確認済み') }
+  const shown = `${date.month}/${date.day}`
+  const outOfRange = !isDateNearBilledMonth(date.month, billedMonth.month)
+  const sameAsPrev = prev?.date ? prev.date.month === date.month && prev.date.day === date.day : false
+  const rangeText = `対象月（${billedMonth.month}月）の前月〜翌月の範囲外`
+  const body =
+    outOfRange && sameAsPrev
+      ? `記載日（${shown}）が${rangeText}で、前月の請求書とも同じ日付です。更新されていない可能性があります`
+      : outOfRange
+        ? `記載日（${shown}）が${rangeText}です。作業実施をご確認ください`
+        : sameAsPrev
+          ? `記載日（${shown}）が前月の請求書と同じ日付です。更新されていない可能性があります`
+          : `記載日（${shown}）の作業実施をご確認ください`
+  return { mark: 'caution', note: cautionNote(label, body) }
+}
+
+// 明細の支払回数「N/M」が今月分として正しいかを見る。
+// マスタに支払期間（開始月と回数）があれば、支払月が開始月から何か月目かで今月分の回数を割り出して比べる。
+// 無ければ同じ委託者の前月分の請求書の回数から1つ進んだものを今月分とみなして比べる
+// （前月の請求書を使い回して回数を更新し忘れる取り違えを拾うため）。ずれていればNGにして修正依頼に載せる。
+// ただし前月の請求書とだけ比べるときは、ラベルに「支払回数」「回目」が無ければ日付を回数と読み違えている
+// 可能性があるため注意にとどめる。突き合わせる相手が無い場合（クライアント未特定・前月分の請求書が無い）は、
+// 判断できないことをそのまま伝えて人に回す（勝手に整合とみなすと、回数のズレを黙って通してしまう）。
+// confirmed は人が目視で確認済みにした注意のキー一覧。該当する注意・NGは消さずにOKへ落とす
 // （消してしまうと「確認した結果その注意は問題なかった」のか「注意自体が出なくなった」のかが
 // 区別できなくなる）。
 function checkPaymentCount(
   label: string,
   target: InvoicePaymentTarget | null,
   payout: InvoiceYearMonth,
+  billedMonth: InvoiceYearMonth,
+  prev: PrevPaymentRef | null,
   confirmed: ReadonlySet<string>
 ): InvoicePaymentCountNote | null {
   const isConfirmed = confirmed.has(cautionKeyOf(label))
-  // 「N/M」を台本作成日として書くクライアント（clients.nm_as_date）では、回数として突き合わせると
-  // 必ず不整合になる。回数チェックは行わず、記載日の作業実施を人に確かめてもらう案内に切り替える。
-  // 日付として読めない並び（「19/24」など）は案内の材料が無いため何も出さない。
-  if (target?.nmAsDate) {
-    const date = extractItemDate(label)
-    if (!date) return null
-    if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '作業実施を確認済み') }
-    return {
-      mark: 'caution',
-      note: cautionNote(label, `記載日（${date.month}/${date.day}）の作業実施をご確認ください`),
-    }
-  }
+  if (target?.nmAsDate) return checkItemDate(label, billedMonth, prev, isConfirmed)
   const ref = extractPaymentCount(label)
   if (!ref) return null
   const shown = `支払回数（${ref.index}/${ref.total}）`
-  const start = target?.paymentStartMonth ? parseYearMonth(target.paymentStartMonth) : null
-  const count = target?.paymentCount ?? null
-  if (!target || !start || count === null || count < 1) {
-    if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '回数を確認済み') }
-    // どの明細についての注意かが分からないと確認しようがないため、本文にラベル原文を必ず含める。
-    return { mark: 'caution', note: cautionNote(label, '支払回数の記載があります。回数が合っているかご確認ください') }
-  }
-  const billedEnd = addMonths(payout, ref.total - ref.index)
-  const masterEnd = addMonths(start, count - 1)
-  if (billedEnd.year === masterEnd.year && billedEnd.month === masterEnd.month) {
-    return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
-  }
-  if (isConfirmed) return { mark: 'ok', note: cautionNote(label, '回数を確認済み') }
-  return {
+  const confirmedNote: InvoicePaymentCountNote = { mark: 'ok', note: cautionNote(label, '回数を確認済み') }
+  // どの明細についての注意かが分からないと確認しようがないため、本文にラベル原文を必ず含める。
+  const genericCaution: InvoicePaymentCountNote = {
     mark: 'caution',
-    note: cautionNote(
-      label,
-      `${target.clientName}の${shown}が支払予定と整合しません（記載どおりなら${formatYearMonth(billedEnd)}終了・マスタは${formatYearMonth(masterEnd)}終了）。ご確認ください`
-    ),
+    note: cautionNote(label, '支払回数の記載があります。回数が合っているかご確認ください'),
+  }
+  if (!target) return isConfirmed ? confirmedNote : genericCaution
+
+  const start = target.paymentStartMonth ? parseYearMonth(target.paymentStartMonth) : null
+  const count = target.paymentCount
+  if (start && count !== null && count >= 1) {
+    const expectedIndex = (payout.year - start.year) * 12 + (payout.month - start.month) + 1
+    // 支払月がマスタの支払期間の外だと「今月分は何回目か」が決まらない（そもそも期間外のクライアントは
+    // 内訳に入らないので通常は来ない）。決まらない回数で比べるとありえない表記を求めてしまうため人に回す。
+    if (expectedIndex < 1 || expectedIndex > count) {
+      if (isConfirmed) return confirmedNote
+      return {
+        mark: 'caution',
+        note: cautionNote(
+          label,
+          `${target.clientName}の${shown}について、支払月（${formatYearMonth(payout)}）がマスタの支払期間（${formatYearMonth(start)}開始・${count}回）の外のため回数を照合できません。ご確認ください`
+        ),
+      }
+    }
+    const expected = { index: expectedIndex, total: count }
+    const drift = paymentCountDrift(ref, expected)
+    if (!drift) return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
+    if (isConfirmed) return confirmedNote
+    return {
+      mark: 'ng',
+      note: cautionNote(label, paymentCountDriftBody(drift, target.clientName, ref, expected, 'マスタの支払期間')),
+      reason: paymentCountReason(drift, target.clientName, ref, expected),
+    }
+  }
+
+  // マスタに支払期間が無い（「継続」など）ときは、前月分の請求書の同じクライアントの回数と比べる。
+  const prevRef = prev?.count ?? null
+  if (!prevRef) return isConfirmed ? confirmedNote : genericCaution
+  const expected = { index: prevRef.index + 1, total: prevRef.total }
+  const drift = paymentCountDrift(ref, expected)
+  if (!drift) {
+    return {
+      mark: 'ok',
+      note: `${target.clientName}　${shown}は前月の請求書（${prevRef.index}/${prevRef.total}）から1回進んでいて整合しています`,
+    }
+  }
+  if (isConfirmed) return confirmedNote
+  const note = cautionNote(label, paymentCountDriftBody(drift, target.clientName, ref, expected, '前月の請求書'))
+  if (!labelStatesPaymentCount(label)) return { mark: 'caution', note }
+  return { mark: 'ng', note, reason: paymentCountReason(drift, target.clientName, ref, expected) }
+}
+
+// 前月分の請求書の明細を、今回と同じ当て先（targets）へ帰属させ、当て先ごとの回数・日付を取り出す。
+// 帰属の決め方を今回と揃えるため attributeWorkItems をそのまま使う。複数明細が当たる場合は最初に読めたもの。
+// 前月分の請求書が無ければ null（当て先ごとに「比べる相手が無い」と扱われる）。
+function prevPaymentRefsOf(
+  prevItems: InvoiceExtractedItem[] | null,
+  targets: { matchNames: string[] }[]
+): ((index: number) => PrevPaymentRef) | null {
+  if (!prevItems) return null
+  const matched = attributeWorkItems(prevItems, targets.map((target) => target.matchNames)).matched
+  return (index) => {
+    const items = matched.get(index) ?? []
+    let count: PaymentCountRef | null = null
+    let date: { month: number; day: number } | null = null
+    for (const item of items) {
+      count ??= extractPaymentCount(item.label)
+      date ??= extractItemDate(item.label)
+    }
+    return { count, date }
   }
 }
 
@@ -266,22 +417,27 @@ function compareItemsSum(items: InvoiceExtractedItem[], invoiceAmount: number | 
 // （「特定できません」だけだと、マスタの別名の登録漏れと誤解させるため）。
 // 担当外（unassigned）の分は、支払いを記録する先の行が無く支払いが記録から漏れるため保留にし、
 // 画面の「担当を追加」ボタンの行き先と一緒に unassignedNotes として返す（呼び出し側が保留として積む）。
-// 支払回数の確認（countNotes）は、当てた先が分かる明細だけ相手の支払期間で確かめる。
-function describeWorkAttribution<T extends InvoicePaymentTarget>(
+// 支払回数の確認（countNotes）は、当てた先が分かる明細だけ相手の支払期間（無ければ前月分の請求書）で確かめる。
+function describeWorkAttribution<T extends InvoicePaymentTarget & { matchNames: string[] }>(
   resolved: { item: InvoiceExtractedItem; indexes: number[] }[],
   targets: T[],
   skipped: InvoiceSkippedClient[],
   outOfPeriod: InvoiceOutOfPeriodClient[],
   unassigned: InvoiceUnassignedClient[],
   payout: InvoiceYearMonth,
+  paymentCountContext: InvoicePaymentCountContext,
   confirmedCautions: ReadonlySet<string>,
   contractor: { id: string; name: string }
 ): { results: InvoiceCompared[]; countNotes: InvoicePaymentCountNote[]; unassignedNotes: InvoiceUnassignedNote[] } {
   const results: InvoiceCompared[] = []
   const countNotes: InvoicePaymentCountNote[] = []
   const unassignedNotes: InvoiceUnassignedNote[] = []
-  const addCountNote = (label: string, target: InvoicePaymentTarget | null) => {
-    const note = checkPaymentCount(label, target, payout, confirmedCautions)
+  const prevRefOf = prevPaymentRefsOf(paymentCountContext.prevItems, targets)
+  // index は明細を当てた先（targets の位置）。当て先が決まらない明細は null で、前月分とも比べない。
+  const addCountNote = (label: string, index: number | null) => {
+    const target = index === null ? null : targets[index]
+    const prev = index === null || !prevRefOf ? null : prevRefOf(index)
+    const note = checkPaymentCount(label, target, payout, paymentCountContext.billedMonth, prev, confirmedCautions)
     if (note) countNotes.push(note)
   }
   const skippedNames = skipped.map((client) => client.matchNames)
@@ -337,7 +493,7 @@ function describeWorkAttribution<T extends InvoicePaymentTarget>(
       addCountNote(item.label, null)
       continue
     }
-    addCountNote(item.label, targets[indexes[0]])
+    addCountNote(item.label, indexes[0])
   }
   return { results, countNotes, unassignedNotes }
 }
@@ -348,8 +504,10 @@ function describeWorkAttribution<T extends InvoicePaymentTarget>(
 // 取引先名を優先し、決まらなければ明細ラベルで照合する）。名前は表記ゆれ・通称が避けられないので
 // 「文字列の中に呼び名があるか」まで緩め、1つに絞れない行は判定せず保留として人へ回す。
 // 経費明細はクライアントの支払いではないため、ここでは経費どうしで別に照合する。
-// 支払回数（「19/24」）の確認は判定（ok/ng/hold）とは別枠の countNotes として返す。明細と
-// アサインの対応がここでしか分からない一方、status には影響させたくないため混ぜずに分ける。
+// 支払回数（「19/24」）・記載日の確認は results とは別枠の countNotes として返す。明細とアサインの
+// 対応がここでしか分からない一方、大半は判定を動かさない案内（ok・注意）のため混ぜずに分ける。
+// countNotes のうち mark が ng のもの（回数のずれが確かなもの）は reason を持ち、呼び出し側が
+// results と同じくNGとして積む（この関数は結論の verdict を返さないため、NGの扱いは呼び出し側に揃える）。
 // 代行者と、明細はあるが業務明細の無い編集者の請求書はこちらで判定する（編集者の業務明細は judgeEditorInvoiceByCap）。
 export function compareInvoiceItems(
   items: InvoiceExtractedItem[],
@@ -360,6 +518,7 @@ export function compareInvoiceItems(
   expenseTotal: number,
   invoiceAmount: number | null,
   payout: InvoiceYearMonth,
+  paymentCountContext: InvoicePaymentCountContext,
   confirmedCautions: ReadonlySet<string>,
   contractor: { id: string; name: string }
 ): { results: InvoiceCompared[]; countNotes: InvoicePaymentCountNote[]; unassignedNotes: InvoiceUnassignedNote[] } {
@@ -377,6 +536,7 @@ export function compareInvoiceItems(
     outOfPeriod,
     unassigned,
     payout,
+    paymentCountContext,
     confirmedCautions,
     contractor
   )
@@ -490,6 +650,7 @@ export function judgeEditorInvoiceByCap(input: EditorCapJudgeInput): EditorCapJu
     input.outOfPeriod,
     input.unassigned,
     input.payout,
+    input.paymentCountContext,
     input.confirmedCautions,
     input.contractor
   )
@@ -628,10 +789,12 @@ export function judgeEditorInvoiceByCap(input: EditorCapJudgeInput): EditorCapJu
   const extraVerdicts: InvoiceVerdict[] = input.extraItems.map((extra) =>
     extra.decision === 'rejected' ? 'ng' : extra.decision === 'pending' ? 'hold' : 'ok'
   )
+  // 支払回数のずれ（countNotes の ng）も修正依頼に載るNGなので結論に含める（書き戻しもさせない）。
   const verdict = strongestVerdict([
     ...results.map((r) => r.verdict),
     ...described.unassignedNotes.map((): InvoiceVerdict => 'hold'),
     ...extraVerdicts,
+    ...described.countNotes.flatMap((note): InvoiceVerdict[] => (note.mark === 'ng' ? ['ng'] : [])),
   ])
 
   return {

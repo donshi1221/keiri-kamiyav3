@@ -1,5 +1,5 @@
 import 'server-only'
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   assignments,
@@ -62,6 +62,7 @@ import type {
   InvoiceCheckTrigger,
   InvoiceDeliveryPayoutApply,
   InvoiceExtraItem,
+  InvoiceExtractedItem,
   InvoiceManualApprovePreview,
   InvoiceNgReason,
   InvoiceOutOfPeriodClient,
@@ -798,6 +799,38 @@ async function syncReplyDraft(
   }
 }
 
+// 同じ委託者の前月分（記載月が prevMonth）の請求書の明細。支払回数・記載日を前月と比べる材料にする
+// （マスタに支払期間が無いクライアントは、前月の回数から1つ進んだものを今月分とみなすしかないため）。
+// 出し直しで同じ月の請求書が複数あるときは、受付が最も新しいもの（最後に出し直された版）を使う。
+// 読み取り前（extracted_items が null）の行は比べる材料にならないので除く。今回の行自身も除く。
+// 取得に失敗しても照合全体は止めず、前月分が無いときと同じ扱い（従来の注意）に落とす。
+async function findPrevInvoiceItems(
+  currentId: string,
+  contractorId: string,
+  prevMonth: YearMonth
+): Promise<InvoiceExtractedItem[] | null> {
+  try {
+    const [prev] = await db
+      .select({ extracted_items: invoiceUploads.extracted_items })
+      .from(invoiceUploads)
+      .where(
+        and(
+          eq(invoiceUploads.contractor_id, contractorId),
+          eq(invoiceUploads.resolved_year, prevMonth.year),
+          eq(invoiceUploads.resolved_month, prevMonth.month),
+          ne(invoiceUploads.id, currentId),
+          isNotNull(invoiceUploads.extracted_items)
+        )
+      )
+      .orderBy(desc(invoiceUploads.created_at))
+      .limit(1)
+    return prev?.extracted_items ?? null
+  } catch (err) {
+    console.error('[invoice-check] findPrevInvoiceItems failed:', err)
+    return null
+  }
+}
+
 // 受け付けた請求書1件を自動照合し、結果を同じ行に書き戻す。
 // 受付直後・再読み取り後・画面からの再チェック・手動修正後で同じ処理を使う。
 // trigger はどの操作で走ったか（履歴に残す）。origin は呼び出し元リクエストのオリジンで、
@@ -931,10 +964,12 @@ export async function checkInvoiceAndSave(
   }
   // 明細の照合に付く支払回数の確認と、担当外の取引先の保留を積む。
   const recordItemNotes = (countNotes: InvoicePaymentCountNote[], unassignedNotes: InvoiceUnassignedNote[]) => {
-    // 支払回数の確認結果は record() を通さず直接積む。回数が合わなくても請求額そのものが
-    // 誤っているとは限らないため、判定（status）は動かさず注意として見せるだけにする。
+    // 回数のずれが確かなもの（ng）はNGとして積み、返信の下書きで修正を依頼する
+    // （前月の請求書を使い回して回数を更新し忘れたまま払うと、回数の控えが合わなくなるため）。
+    // それ以外（整合・注意）は record() を通さず直接積み、判定（status）は動かさない。
     for (const note of countNotes) {
-      notes.push(formatInvoiceNote(note.mark, note.note))
+      if (note.mark === 'ng') record('ng', note.note, note.reason)
+      else notes.push(formatInvoiceNote(note.mark, note.note))
     }
     // 担当に入っていない取引先の明細は保留にする。支払いを記録する先（月次レコード）が無く、
     // そのまま通すとこの明細の支払いが記録から漏れるため。ボタンの行き先は、直後の assignLink 行に持たせる。
@@ -944,8 +979,15 @@ export async function checkInvoiceAndSave(
     }
   }
 
-  if (contractor && payout) {
+  // payout は記載月が読めたときだけ埋まるので、記載月の条件は実質 payout と同じ（型を絞るために並べている）。
+  if (contractor && payout && resolvedYear !== null && resolvedMonth !== null) {
     const items = row.extracted_items ?? []
+    // 支払回数・記載日の確認に使う記載月と、前月分の請求書の明細（回数の更新忘れ・日付の使い回しを見るため）。
+    const billedMonth = { year: resolvedYear, month: resolvedMonth }
+    const paymentCountContext = {
+      billedMonth,
+      prevItems: await findPrevInvoiceItems(id, contractor.id, addMonths(billedMonth, -1)),
+    }
     // 編集者の請求書に業務明細があるときは、請求書の明細を正にして支払額を決め、納品シートは
     // 合計本数の上限としてだけ使う（lib/invoice-judge の judgeEditorInvoiceByCap）。
     // 明細の無い請求書・業務明細の無い請求書と代行者は、従来どおり支払予定額との突き合わせで判定する。
@@ -972,6 +1014,7 @@ export async function checkInvoiceAndSave(
         extraItems,
         payout,
         deliveryMonth: deliveryTargetMonth(payout.year, payout.month),
+        paymentCountContext,
         confirmedCautions,
         contractor,
       })
@@ -1013,6 +1056,7 @@ export async function checkInvoiceAndSave(
           expected.expenseTotal,
           row.extracted_amount,
           payout,
+          paymentCountContext,
           confirmedCautions,
           contractor
         )

@@ -56,6 +56,11 @@ function reasonValues(reason: InvoiceNgReason): Record<string, string> {
       return { actual: reason.actual, correct: reason.correct }
     case 'total_count_over':
       return { billed: String(reason.billed), delivered: String(reason.delivered), over: String(reason.over) }
+    case 'payment_count_same':
+    case 'payment_count_back':
+    case 'payment_count_ahead':
+    case 'payment_count_total':
+      return { client: reason.client, shown: reason.shown, expected: reason.expected }
     case 'extra_rejected':
       return { label: reason.label, amount: reason.amount === null ? '金額不明' : yen(reason.amount) }
     case 'other':

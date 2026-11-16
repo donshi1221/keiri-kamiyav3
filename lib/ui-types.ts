@@ -390,6 +390,14 @@ export type InvoiceNgReason =
   // 編集者の請求の合計本数が、その委託者の全クライアントの納品実績（読めた分）の合計を超えたとき。
   // 請求書を正にする方式（lib/invoice-judge）では、納品シートは合計本数の上限としてだけ使うため。
   | { kind: 'total_count_over'; billed: number; delivered: number; over: number }
+  // 明細の支払回数「N/M」が今月分としてずれているとき（lib/invoice-judge の checkPaymentCount）。
+  // 前月の請求書を使い回して回数を更新し忘れる取り違えが多く、そのまま払うと回数の控えが合わなくなるため
+  // 修正依頼に載せる。shown は請求書の記載（「2/6」）、expected は今月分として期待する表記（「3/6」）。
+  //   same … 前月と同じ回数のまま / back … 前月より戻っている / ahead … 進みすぎ / total … 総数（M）が違う
+  | { kind: 'payment_count_same'; client: string; shown: string; expected: string }
+  | { kind: 'payment_count_back'; client: string; shown: string; expected: string }
+  | { kind: 'payment_count_ahead'; client: string; shown: string; expected: string }
+  | { kind: 'payment_count_total'; client: string; shown: string; expected: string }
   | { kind: 'other'; text: string }
 
 // ─── 請求書チェックの判定（lib/invoice-judge）─────────────────────────────
@@ -431,10 +439,19 @@ export interface InvoiceUnassignedClient {
   matchNames: string[]
 }
 
-// 支払回数の確認結果1行。判定（ok/ng/hold）とは別枠で、status には影響させない。
-export interface InvoicePaymentCountNote {
-  mark: 'ok' | 'caution'
-  note: string
+// 支払回数・記載日の確認結果1行。ok と caution は判定（status）を動かさない案内。
+// ng は回数のずれが確かなとき（マスタの支払期間か前月の請求書と突き合わせられたとき）だけで、
+// 呼び出し側が判定理由のNGとして積み、reason を返信の下書きの材料にする。
+export type InvoicePaymentCountNote =
+  | { mark: 'ok' | 'caution'; note: string }
+  | { mark: 'ng'; note: string; reason: InvoiceNgReason }
+
+// 支払回数・記載日の確認に使う、今回の請求書の外の材料。
+//   billedMonth … 請求書の記載月（「◯月分」）。支払月（payout）とは別物で、記載日の範囲の基準にする
+//   prevItems   … 同じ委託者の前月分の請求書の明細。前月分の請求書が無い（読み取れていない）ときは null
+export interface InvoicePaymentCountContext {
+  billedMonth: InvoiceYearMonth
+  prevItems: InvoiceExtractedItem[] | null
 }
 
 // 担当に入っていない取引先の明細の保留。画面の「担当を追加」ボタンの行き先（assignLink）を一緒に持つ。
@@ -477,6 +494,7 @@ export interface EditorCapRecord extends InvoicePaymentTarget {
 //   approvedExtraTotal … 認め済みの追加費用（経費の表に登録済みの分）。支払予定額に足す
 //   extraItems         … 請求書の追加費用の明細と今の扱い（lib/invoice-extra の decideExtraItems）
 //   deliveryMonth      … 納品シートで読んだ月（タブが見つからないときの案内に使う）
+//   paymentCountContext … 支払回数・記載日の確認に使う記載月と前月分の明細
 export interface EditorCapJudgeInput {
   items: InvoiceExtractedItem[]
   invoiceAmount: number | null
@@ -490,11 +508,12 @@ export interface EditorCapJudgeInput {
   extraItems: InvoiceExtraItem[]
   payout: InvoiceYearMonth
   deliveryMonth: InvoiceYearMonth
+  paymentCountContext: InvoicePaymentCountContext
   confirmedCautions: ReadonlySet<string>
   contractor: { id: string; name: string }
 }
 
-// 判定の結果。verdict は金額まわり（明細・合計本数・経費・合計・追加費用）だけの結論で、
+// 判定の結果。verdict は金額まわり（明細・合計本数・経費・合計・追加費用・支払回数のNG）だけの結論で、
 // 差出人・宛名などの他の観点は含まない。results は判定理由に積む順のまま並ぶ。
 // payouts は照合OKのとき書き戻す行（請求書に載ったクライアントのうち、実支払額が未入力の行だけ）。
 // sheetRevisions は請求書に載ったクライアントのうち、納品シートに修正の行があったもの。
