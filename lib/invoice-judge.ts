@@ -139,6 +139,24 @@ function paymentCountDrift(ref: PaymentCountRef, expected: PaymentCountRef): Pay
   return 'ahead'
 }
 
+// 前月分の請求書の回数（prevRef）から見た、今月分の回数（ref）の期待とずれ。
+// 前月が最終回のときは次の月に契約更新で1回目へ戻るのが正しい運用なので、今月が1回目（総数は更新で変わってよい）なら
+// ずれなしの「更新」とみなす。最終回のまま（まったく同じ）なら same、それ以外は進みすぎ。期待値は更新後の1回目。
+// 最終回でない前月は、前月の回数＋1（総数は同じ）と比べる。
+function paymentCountVsPrev(
+  ref: PaymentCountRef,
+  prevRef: PaymentCountRef
+): { expected: PaymentCountRef; drift: PaymentCountDrift | null; renewal: boolean } {
+  if (prevRef.index !== prevRef.total) {
+    const expected = { index: prevRef.index + 1, total: prevRef.total }
+    return { expected, drift: paymentCountDrift(ref, expected), renewal: false }
+  }
+  const expected = { index: 1, total: ref.total }
+  if (ref.index === 1) return { expected, drift: null, renewal: true }
+  const unchanged = ref.index === prevRef.index && ref.total === prevRef.total
+  return { expected, drift: unchanged ? 'same' : 'ahead', renewal: false }
+}
+
 // 判定理由の本文（社内向け）。比べた相手（マスタか前月の請求書か）を添えて、何を根拠にずれと見たかを残す。
 // cautionNote の本文になるため ' — ' を入れない。
 function paymentCountDriftBody(
@@ -228,7 +246,9 @@ function checkItemDate(
 // マスタに支払期間（開始月と回数）があれば、支払月が開始月から何か月目かで今月分の回数を割り出して比べる。
 // 無ければ同じ委託者の前月分の請求書の回数から1つ進んだものを今月分とみなして比べる
 // （前月の請求書を使い回して回数を更新し忘れる取り違えを拾うため）。ずれていればNGにして修正依頼に載せる。
-// ただし前月の請求書とだけ比べるときは、ラベルに「支払回数」「回目」が無ければ日付を回数と読み違えている
+// マスタと前月の請求書の両方で比べられるときは、マスタと合えばOK、マスタと合わなくても前月から正しく
+// 1回進んでいれば注意（NGにしない）、前月とも合わなければNGにする。
+// 前月の請求書とだけ比べるときは、ラベルに「支払回数」「回目」が無ければ日付を回数と読み違えている
 // 可能性があるため注意にとどめる。突き合わせる相手が無い場合（クライアント未特定・前月分の請求書が無い）は、
 // 判断できないことをそのまま伝えて人に回す（勝手に整合とみなすと、回数のズレを黙って通してしまう）。
 // confirmed は人が目視で確認済みにした注意のキー一覧。該当する注意・NGは消さずにOKへ落とす
@@ -255,48 +275,81 @@ function checkPaymentCount(
   }
   if (!target) return isConfirmed ? confirmedNote : genericCaution
 
+  const ngNote = (
+    drift: PaymentCountDrift,
+    expected: PaymentCountRef,
+    basis: string
+  ): Extract<InvoicePaymentCountNote, { mark: 'ng' }> => ({
+    mark: 'ng',
+    note: cautionNote(label, paymentCountDriftBody(drift, target.clientName, ref, expected, basis)),
+    reason: paymentCountReason(drift, target.clientName, ref, expected),
+  })
+
+  // 前月分の請求書の同じクライアントの回数から1つ進んだものを、今月分の期待値とする。
+  // 前月が最終回のときだけは、契約更新で1回目に戻るのが正しい運用のため、戻りとして誤ってNGにしないよう別扱いにする。
+  const prevRef = prev?.count ?? null
+  const prevCheck = prevRef ? paymentCountVsPrev(ref, prevRef) : null
+  const prevExpected = prevCheck?.expected ?? null
+  const prevDrift = prevCheck?.drift ?? null
+  const isRenewal = prevCheck?.renewal ?? false
+
   const start = target.paymentStartMonth ? parseYearMonth(target.paymentStartMonth) : null
   const count = target.paymentCount
-  if (start && count !== null && count >= 1) {
-    const expectedIndex = (payout.year - start.year) * 12 + (payout.month - start.month) + 1
-    // 支払月がマスタの支払期間の外だと「今月分は何回目か」が決まらない（そもそも期間外のクライアントは
-    // 内訳に入らないので通常は来ない）。決まらない回数で比べるとありえない表記を求めてしまうため人に回す。
-    if (expectedIndex < 1 || expectedIndex > count) {
-      if (isConfirmed) return confirmedNote
-      return {
-        mark: 'caution',
-        note: cautionNote(
-          label,
-          `${target.clientName}の${shown}について、支払月（${formatYearMonth(payout)}）がマスタの支払期間（${formatYearMonth(start)}開始・${count}回）の外のため回数を照合できません。ご確認ください`
-        ),
-      }
-    }
-    const expected = { index: expectedIndex, total: count }
-    const drift = paymentCountDrift(ref, expected)
-    if (!drift) return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
+  const period = start && count !== null && count >= 1 ? { start, count } : null
+  const expectedIndex = period
+    ? (payout.year - period.start.year) * 12 + (payout.month - period.start.month) + 1
+    : 0
+  // 支払月が期間の外だと「今月分は何回目か」が決まらない（そもそも期間外のクライアントは内訳に入らないので
+  // 通常は来ない）。決まらない回数で比べるとありえない表記を求めてしまうため、マスタは使えない扱いにする。
+  const masterExpected =
+    period && expectedIndex >= 1 && expectedIndex <= period.count
+      ? { index: expectedIndex, total: period.count }
+      : null
+
+  if (masterExpected) {
+    const masterDrift = paymentCountDrift(ref, masterExpected)
+    if (!masterDrift) return { mark: 'ok', note: `${target.clientName}　${shown}は支払予定と整合しています` }
     if (isConfirmed) return confirmedNote
-    return {
-      mark: 'ng',
-      note: cautionNote(label, paymentCountDriftBody(drift, target.clientName, ref, expected, 'マスタの支払期間')),
-      reason: paymentCountReason(drift, target.clientName, ref, expected),
+    // 前月の請求書が無ければマスタしか比べる相手が無いので、従来どおりマスタ基準でNGにする。
+    if (!prevRef || !prevExpected) return ngNote(masterDrift, masterExpected, 'マスタの支払期間')
+    // マスタの支払期間が実際の契約とずれていることがあり（契約更新で数え直しなど）、前月から正しく進んでいる
+    // 請求書までNGにしてしまうため、前月比較と食い違うときは注意にとどめる（どちらが正しいかは人が決める）。
+    if (!prevDrift) {
+      const masterText = `マスタの支払期間（今月分は${masterExpected.index}/${masterExpected.total}）`
+      const body = isRenewal
+        ? `${target.clientName}の前月の請求書（${prevRef.index}/${prevRef.total}）が最終回のため契約更新（今月は${ref.index}/${ref.total}）とみなしますが、${masterText}とは合いません。マスタの登録が更新に追いついていない可能性があります`
+        : `${target.clientName}の${shown}は前月の請求書（${prevRef.index}/${prevRef.total}）から1回進んでいますが、${masterText}とは合いません。請求書とマスタのどちらかが実際と違う可能性があります`
+      return { mark: 'caution', note: cautionNote(label, body) }
     }
+    // 前月とも合わない（前月のまま・戻り・進みすぎ・総数違い）なら、マスタの正しさに関わらず請求書が誤りと見てよい。
+    // マスタに支払期間がある＝回数を書くクライアントと分かっているので、ラベルの文字の条件は見ない。
+    return ngNote(prevDrift, prevExpected, '前月の請求書')
   }
 
-  // マスタに支払期間が無い（「継続」など）ときは、前月分の請求書の同じクライアントの回数と比べる。
-  const prevRef = prev?.count ?? null
-  if (!prevRef) return isConfirmed ? confirmedNote : genericCaution
-  const expected = { index: prevRef.index + 1, total: prevRef.total }
-  const drift = paymentCountDrift(ref, expected)
-  if (!drift) {
+  // マスタの支払期間が使えないときは、前月分の請求書の回数だけで比べる。
+  if (!prevRef || !prevExpected) {
+    if (isConfirmed) return confirmedNote
+    if (!period) return genericCaution
+    return {
+      mark: 'caution',
+      note: cautionNote(
+        label,
+        `${target.clientName}の${shown}について、支払月（${formatYearMonth(payout)}）がマスタの支払期間（${formatYearMonth(period.start)}開始・${period.count}回）の外のため回数を照合できません。ご確認ください`
+      ),
+    }
+  }
+  if (!prevDrift) {
     return {
       mark: 'ok',
-      note: `${target.clientName}　${shown}は前月の請求書（${prevRef.index}/${prevRef.total}）から1回進んでいて整合しています`,
+      note: isRenewal
+        ? `${target.clientName}　${shown}は前月の請求書（${prevRef.index}/${prevRef.total}が最終回）から契約更新として始まっていて整合しています`
+        : `${target.clientName}　${shown}は前月の請求書（${prevRef.index}/${prevRef.total}）から1回進んでいて整合しています`,
     }
   }
   if (isConfirmed) return confirmedNote
-  const note = cautionNote(label, paymentCountDriftBody(drift, target.clientName, ref, expected, '前月の請求書'))
-  if (!labelStatesPaymentCount(label)) return { mark: 'caution', note }
-  return { mark: 'ng', note, reason: paymentCountReason(drift, target.clientName, ref, expected) }
+  const ng = ngNote(prevDrift, prevExpected, '前月の請求書')
+  if (!labelStatesPaymentCount(label)) return { mark: 'caution', note: ng.note }
+  return ng
 }
 
 // 前月分の請求書の明細を、今回と同じ当て先（targets）へ帰属させ、当て先ごとの回数・日付を取り出す。
