@@ -231,6 +231,8 @@ export default function ExpenseCheckClient() {
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({})
   // 明細ID => 入力中の金額。空欄を 0 と区別するため文字列のまま持つ。
   const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({})
+  // 明細ID => 入力中の利用日（YYYY-MM-DD）。読み取れなかった行は空欄から入れ始める。
+  const [dateDrafts, setDateDrafts] = useState<Record<string, string>>({})
   // 割当中（draft）の受付を経理がこの画面で割り当てるための選択。明細IDは受付をまたいで一意なので明細単位で持つ。
   const [assignDrafts, setAssignDrafts] = useState<Record<string, ItemAssignDraft>>({})
   // 区分の選択肢に出すクライアント。受付ページはサーバー側で渡せるが、この画面は認証済みなので社内APIから取る。
@@ -352,6 +354,29 @@ export default function ExpenseCheckClient() {
     if (await patchItem(row, item, { amount: value }, '金額の保存に失敗しました。')) clearDraft()
   }
 
+  // 利用日を保存する。金額と同じく、入力欄から離れたときに呼ぶ。
+  async function saveDate(row: ExpenseUploadRow, item: ExpenseUploadItemRow) {
+    const draft = dateDrafts[item.id] as string | undefined
+    if (draft === undefined) return
+    const clearDraft = () => setDateDrafts((prev) => withoutKey(prev, item.id))
+    const text = draft.trim()
+    // 日付の入力欄は途中まで打った値や存在しない日付を空文字で返すため、空欄は「消した」ではなく「未完成」とみなす。
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      setError('利用日は正しい日付で入力してください。')
+      return
+    }
+    if (text === item.item_date) {
+      clearDraft()
+      return
+    }
+    if (await patchItem(row, item, { item_date: text }, '利用日の保存に失敗しました。')) {
+      clearDraft()
+      // 請求月の選択肢は利用日から決まる（利用月〜翌々月）。前の利用日で選んだ月は新しい選択肢の外に
+      // 出ることがあり、そのまま登録すると範囲外で弾かれるため、選び直しを既定（翌月）へ戻す。
+      setBillingMonths((prev) => withoutKey(prev, item.id))
+    }
+  }
+
   // 明細1行の保存。成功したら、返ってきた行で一覧を書き換える（合計や確認画面の金額もこの値から出るため）。
   async function patchItem(
     row: ExpenseUploadRow,
@@ -403,6 +428,27 @@ export default function ExpenseCheckClient() {
         onBlur={() => saveAmount(row, item)}
         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
         className="min-h-11 w-full min-w-[6rem] rounded border bg-card px-2 py-1 text-right text-sm disabled:bg-muted md:min-h-0"
+      />
+    )
+  }
+
+  // 表とカードで同じ入力欄を出すため、見た目と挙動をここに1つだけ持つ。
+  function renderDateInput(row: ExpenseUploadRow, item: ExpenseUploadItemRow, disabled: boolean) {
+    const value = (dateDrafts[item.id] as string | undefined) ?? item.item_date ?? ''
+    return (
+      <input
+        type="date"
+        aria-label="利用日"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => setDateDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+        onBlur={() => saveDate(row, item)}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        // 読み取れなかった行は登録を止めている原因なので、枠の色で見つけられるようにする。
+        className={cn(
+          'min-h-11 w-full min-w-[8rem] rounded border bg-card px-2 py-1 text-sm disabled:bg-muted md:min-h-0',
+          !value && 'border-warning'
+        )}
       />
     )
   }
@@ -862,15 +908,23 @@ export default function ExpenseCheckClient() {
               <table
                 className={cn(
                   'w-full text-sm',
-                  showBillingMonth ? 'min-w-[57rem]' : 'min-w-[48rem]',
-                  showReimburse && 'min-w-[64rem]',
+                  // 利用日の列は入力欄になるぶん広くとるので、どの組み合わせでもその幅を足しておく。
+                  showBillingMonth ? 'min-w-[61rem]' : 'min-w-[52rem]',
+                  showReimburse && 'min-w-[68rem]',
                   // 区分・クライアントが文字からプルダウンに変わるぶん、潰れないよう幅を広げる。
-                  assignable && 'min-w-[56rem]'
+                  assignable && 'min-w-[60rem]'
                 )}
               >
                 <thead className="border-b bg-secondary">
                   <tr>
-                    <th className="w-[5rem] px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">利用日</th>
+                    <th
+                      className={cn(
+                        'px-4 py-2 text-left font-medium whitespace-nowrap text-muted-foreground',
+                        descEditable ? 'w-[9rem]' : 'w-[5rem]'
+                      )}
+                    >
+                      利用日
+                    </th>
                     <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">区間</th>
                     <th className="px-3 py-2 text-left font-medium whitespace-nowrap text-muted-foreground">内容</th>
                     <th className="w-[7rem] px-3 py-2 text-right font-medium whitespace-nowrap text-muted-foreground">金額</th>
@@ -887,7 +941,9 @@ export default function ExpenseCheckClient() {
                 <tbody>
                   {row.items.map((item) => (
                     <tr key={item.id} className="border-b align-top last:border-0">
-                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatExpenseDate(item.item_date)}</td>
+                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
+                        {isMoneyEditable(row, item) ? renderDateInput(row, item, busy) : formatExpenseDate(item.item_date)}
+                      </td>
                       <td className="px-3 py-2 text-foreground">{formatExpenseRoute(item.from_place, item.to_place) || '—'}</td>
                       <td className="px-3 py-2 text-foreground">
                         {descEditable ? renderDescriptionInput(row, item, busy) : (item.description ?? '—')}
@@ -977,10 +1033,16 @@ export default function ExpenseCheckClient() {
                   <RepNote note={item.note} />
                   <div className="mt-2 space-y-1 rounded-lg bg-secondary px-3 py-2 text-xs">
                     {isMoneyEditable(row, item) && (
-                      <div className="space-y-1 pb-1">
-                        <span className="block text-muted-foreground">金額</span>
-                        {renderAmountInput(row, item, busy)}
-                      </div>
+                      <>
+                        <div className="space-y-1 pb-1">
+                          <span className="block text-muted-foreground">利用日</span>
+                          {renderDateInput(row, item, busy)}
+                        </div>
+                        <div className="space-y-1 pb-1">
+                          <span className="block text-muted-foreground">金額</span>
+                          {renderAmountInput(row, item, busy)}
+                        </div>
+                      </>
                     )}
                     {/* 割当中はプルダウンになる。幅が狭いので値と同じ行には並べず、ラベルの下に全幅で置く。 */}
                     {assignable ? (

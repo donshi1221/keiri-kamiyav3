@@ -5,7 +5,7 @@ import { db } from '@/lib/db'
 import { clients, expenseUploads, expenseUploadItems } from '@/lib/schema'
 import { expenseItemPatchSchema, parseBody } from '@/lib/validation'
 
-// 経理が明細の内容・金額・区分・クライアントを直す。どれも登録のときに請求経費や立替明細へ写されるので、
+// 経理が明細の内容・金額・利用日・区分・クライアントを直す。どれも登録のときに請求経費や立替明細へ写されるので、
 // 直せるのは登録の前（割当中・送信済み）だけにする。登録後にここだけ変えると、写した先と食い違う。
 export async function PATCH(
   req: NextRequest,
@@ -41,15 +41,17 @@ export async function PATCH(
     const patch: Partial<typeof expenseUploadItems.$inferInsert> = {}
     if (v.description !== undefined) patch.description = v.description
 
-    const changesMoney = v.amount !== undefined || v.kind !== undefined || v.client_id !== undefined
+    const changesRegistered =
+      v.amount !== undefined || v.item_date !== undefined || v.kind !== undefined || v.client_id !== undefined
     // 登録が途中で失敗した受付は、請求経費を作り終えた行が「送信済み」のまま残る。
-    // その行の金額や請求先を変えると、作った請求経費と食い違うため止める。
-    if (changesMoney && current.registered_client_expense_id) {
+    // その行の金額・利用日・請求先を変えると、作った請求経費と食い違うため止める。
+    if (changesRegistered && current.registered_client_expense_id) {
       return Response.json(
-        { error: 'この明細はすでに請求経費として登録済みのため、金額・区分・クライアントは変更できません。' },
+        { error: 'この明細はすでに請求経費として登録済みのため、金額・利用日・区分・クライアントは変更できません。' },
         { status: 409 }
       )
     }
+    if (v.item_date !== undefined) patch.item_date = v.item_date
     if (v.amount !== undefined) {
       patch.amount = v.amount
       // 経理が金額を直した時点で、AIの読み取り値に対する警告は役目を終える。

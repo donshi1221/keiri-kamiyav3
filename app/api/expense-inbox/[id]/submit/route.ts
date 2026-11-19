@@ -55,6 +55,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
         id: expenseUploadItems.id,
         amount: expenseUploadItems.amount,
         extracted_amount: expenseUploadItems.extracted_amount,
+        item_date: expenseUploadItems.item_date,
       })
       .from(expenseUploadItems)
       .where(eq(expenseUploadItems.upload_id, id))
@@ -70,10 +71,13 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
 
     // neon-http はトランザクションを張れないため1行ずつ更新する（明細は10件前後で件数が知れている）。
     let amountChangedCount = 0
+    let dateChangedCount = 0
     for (const item of parsed.data.items) {
       const current = currentById.get(item.id)
       const amountChanged = current !== undefined && item.amount !== undefined && item.amount !== current.amount
       if (amountChanged) amountChangedCount++
+      const dateChanged = current !== undefined && item.item_date !== undefined && item.item_date !== current.item_date
+      if (dateChanged) dateChangedCount++
       await db
         .update(expenseUploadItems)
         .set({
@@ -85,6 +89,8 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
                 ...(current.extracted_amount === null ? { extracted_amount: current.amount } : {}),
               }
             : {}),
+          // 利用日は読み取り値を控える列が無いので、直した事実は通知メールの件数でだけ経理に伝える。
+          ...(dateChanged ? { item_date: item.item_date } : {}),
           // 古いフォーム・経理の画面からは届かない。届かないときに既存の備考を消さないよう、来たときだけ書く。
           ...(item.note !== undefined ? { note: item.note } : {}),
           kind: item.kind,
@@ -130,6 +136,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<'/api/expense-inb
             `明細件数: ${items.length}件`,
             // 金額が読み取り値から変わった行は、原本と見比べて確かめる必要があるため件数だけ先に知らせる。
             ...(amountChangedCount > 0 ? [`代表が金額を修正した行が${amountChangedCount}件あります`] : []),
+            ...(dateChangedCount > 0 ? [`代表が利用日を修正した行が${dateChangedCount}件あります`] : []),
             // 合計が内訳と合わない警告を、代表が金額を直さないまま送った行。正当に合わない領収証もあるため
             // 送信は止めていないが、経理が原本と見比べるべき行なので件数を知らせる。
             ...(uncheckedMismatchCount > 0 ? [`内訳と合計が合わない行が${uncheckedMismatchCount}件あります`] : []),

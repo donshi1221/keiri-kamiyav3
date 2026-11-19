@@ -644,6 +644,8 @@ export interface ExpenseItemAssignment {
   // 代表が受付で直した金額と、行ごとの備考。経理の画面からは送らない（金額は PATCH で直すため）。
   amount?: number
   note?: string | null
+  // 代表が受付で直した利用日（YYYY-MM-DD）。読み取り値から変えた行だけ送る。
+  item_date?: string
 }
 
 // 経理が登録前の明細を直すときに送る値。検証の正本は lib/validation の expenseItemPatchSchema で、
@@ -653,6 +655,7 @@ export interface ExpenseItemPatch {
   amount?: number
   kind?: ExpenseItemKind
   client_id?: string | null
+  item_date?: string
 }
 
 // 経理が登録時に選んだ「その明細をどの月の請求に乗せるか」。検証の正本は

@@ -285,6 +285,20 @@ const expenseItemNote = z.preprocess(
     .optional()
 )
 
+// 明細の利用日。形だけ見ると 2026-02-30 のような存在しない日付も通り、DBの date 列に渡した時点で500になるため、
+// 暦の上で実在する日付かまで確かめる。代表が受付で直すときと経理が直すときで規則を揃える。
+const expenseItemDate = z
+  .string({ message: '利用日はYYYY-MM-DD形式の正しい日付で入力してください' })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: '利用日はYYYY-MM-DD形式の正しい日付で入力してください' })
+  .refine(
+    (s) => {
+      const [y, m, d] = s.split('-').map(Number)
+      const date = new Date(Date.UTC(y, m - 1, d))
+      return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+    },
+    { message: '利用日はYYYY-MM-DD形式の正しい日付で入力してください' }
+  )
+
 const expenseItemAssignSchema = z
   .object({
     id: z.uuid({ message: '明細の指定が不正です' }),
@@ -296,6 +310,8 @@ const expenseItemAssignSchema = z
     // 金額と備考も同じ理由で任意。金額が届かなければ読み取り値のまま、備考が届かなければ触らない。
     amount: expenseItemAmount.optional(),
     note: expenseItemNote,
+    // 代表が受付で直した利用日。届かなければ読み取り値のまま。
+    item_date: expenseItemDate.optional(),
   })
   .superRefine((item, ctx) => {
     if (item.kind === 'client_billed' && !item.client_id) {
@@ -324,6 +340,8 @@ export const expenseItemPatchSchema = z
     kind: z.enum(EXPENSE_ITEM_KINDS, { message: '区分の指定が不正です' }).optional(),
     // 「未選択に戻す」も送れるよう null を許す（請求する行で null のままなら登録の手前で止まる）。
     client_id: z.uuid({ message: 'クライアントの指定が不正です' }).nullable().optional(),
+    // 利用日は請求月の選択肢の基準になるため、空に戻すことはさせない（読み取れなかった行に入れる・直すだけ）。
+    item_date: expenseItemDate.optional(),
   })
   .refine((v) => Object.values(v).some((value) => value !== undefined), { message: '更新する項目がありません。' })
 

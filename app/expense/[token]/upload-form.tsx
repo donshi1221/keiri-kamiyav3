@@ -28,18 +28,27 @@ import {
 // 入力の途中は「まだ選んでいない」状態を持てないと困る（初期表示が必ず未選択のため）。
 // 送信用の型（ExpenseItemAssignment）は選択済みを前提にした形なので、画面の下書きは空文字を許す形で別に持つ。
 // 金額は打ちかけ（空欄・全角・カンマ入り）も持てるよう、数値ではなく入力された文字のまま持つ。
+// 利用日も日付の入力欄が返す文字（YYYY-MM-DD・未入力は空文字）のまま持つ。
 type ItemDraft = {
   kind: ExpenseItemKind | ''
   clientId: string
   payMethod: ExpensePayMethod
   amountText: string
+  dateText: string
   note: string
 }
 
 // 支払方法だけは最初から規定（会社クレカ・ICOCA）を入れておく。大半がそちらなので、
 // 現金で払った行だけ変えれば済むようにする。金額はAIの読み取り値から始め、違うときだけ直してもらう。
-function initialDraft(item: Pick<ExpenseUploadItem, 'amount'>): ItemDraft {
-  return { kind: '', clientId: '', payMethod: EXPENSE_DEFAULT_PAY_METHOD, amountText: String(item.amount), note: '' }
+function initialDraft(item: Pick<ExpenseUploadItem, 'amount' | 'item_date'>): ItemDraft {
+  return {
+    kind: '',
+    clientId: '',
+    payMethod: EXPENSE_DEFAULT_PAY_METHOD,
+    amountText: String(item.amount),
+    dateText: item.item_date ?? '',
+    note: '',
+  }
 }
 
 // スマホの日本語入力のままだと全角数字や「1,200円」が入りやすい。打ち直しをさせないよう、
@@ -52,6 +61,13 @@ function parseAmount(text: string): number | null {
   if (!/^\d+$/.test(normalized)) return null
   const value = Number(normalized)
   return value <= EXPENSE_ITEM_AMOUNT_MAX ? value : null
+}
+
+// 読み取れていた利用日を空にして送ると「日付なし」と区別が付かず、請求月も決まらなくなるため空欄は不可にする。
+// もともと読み取れなかった行は空欄のまま送れる（これまでどおり、経理が確認画面で入れる）。
+function isDateValid(item: Pick<ExpenseUploadItem, 'item_date'>, dateText: string): boolean {
+  if (dateText === '') return item.item_date === null
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateText)
 }
 
 function isNoteValid(note: string): boolean {
@@ -77,8 +93,13 @@ type UploadOutcome = { ok: true; data: ExpenseInboxResponse } | { ok: false; err
 
 // 送信できる状態か。サーバー側の検証（lib/validation の expenseItemAssignSchema）と同じ条件にして、
 // 画面では通るのに送信で弾かれる、という食い違いを避ける。
-function isComplete(draft: ItemDraft): boolean {
-  return isAssignComplete(draft) && parseAmount(draft.amountText) !== null && isNoteValid(draft.note)
+function isComplete(item: Pick<ExpenseUploadItem, 'item_date'>, draft: ItemDraft): boolean {
+  return (
+    isAssignComplete(draft) &&
+    parseAmount(draft.amountText) !== null &&
+    isDateValid(item, draft.dateText) &&
+    isNoteValid(draft.note)
+  )
 }
 
 // 区分・クライアントが選び終わっているか。「同日の明細に適用」で配るのはこの部分だけなので、
@@ -221,7 +242,7 @@ export default function ExpenseUploadForm({
   }, [items])
 
   const draftOf = (item: ExpenseUploadItem) => drafts[item.id] ?? initialDraft(item)
-  const incomplete = items.filter((item) => !isComplete(draftOf(item)))
+  const incomplete = items.filter((item) => !isComplete(item, draftOf(item)))
 
   // 打ちかけで金額が不正な行は合計に足さない（読み取り値で足すと、画面の金額と合計が食い違って見えるため）。
   const amountOf = (item: ExpenseUploadItem) => parseAmount(draftOf(item).amountText) ?? 0
@@ -231,7 +252,8 @@ export default function ExpenseUploadForm({
   }
 
   // ある行の選択を同じ日の行へ配る。往復2行を1件ずつ選ぶ手間をなくすのが目的。
-  // 金額と備考はその行だけのものなので配らない（配ると往復の片道の金額で上書きしてしまう）。
+  // 金額・利用日・備考はその行だけのものなので配らない（配ると往復の片道の金額で上書きしてしまう）。
+  // まとめる単位は読み取った利用日のまま。入力中の日付で組み直すと、打っている途中でカードが別の日へ飛ぶため。
   function applyToDate(date: string, draft: ItemDraft) {
     setDrafts((prev) => {
       const next = { ...prev }
@@ -348,6 +370,8 @@ export default function ExpenseUploadForm({
         client_id: draft.kind === 'client_billed' ? draft.clientId : null,
         ...(needsPayMethod(draft.kind) ? { pay_method: draft.payMethod } : {}),
         amount: parseAmount(draft.amountText) ?? item.amount,
+        // 読み取り値から変えた行だけ送る。変えていない行まで送ると、経理側で直した値と競合したときに上書きしうるため。
+        ...(draft.dateText !== '' && draft.dateText !== item.item_date ? { item_date: draft.dateText } : {}),
         note: note === '' ? null : note,
       }
     })
@@ -568,7 +592,7 @@ export default function ExpenseUploadForm({
       <div className="rounded-lg border bg-card px-4 py-3">
         <p className="text-sm font-medium break-all">{inbox.file_name}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {items.length}件の明細を読み取りました。行ごとに区分などを選んで送信してください。金額が違う行は直せます。
+          {items.length}件の明細を読み取りました。行ごとに区分などを選んで送信してください。日付や金額が違う行は直せます。
         </p>
       </div>
 
@@ -584,9 +608,11 @@ export default function ExpenseUploadForm({
           {group.rows.map((item) => {
             const draft = draftOf(item)
             const route = formatExpenseRoute(item.from_place, item.to_place)
-            const complete = isComplete(draft)
+            const complete = isComplete(item, draft)
             const amount = parseAmount(draft.amountText)
             const amountEdited = amount !== null && amount !== item.amount
+            const dateValid = isDateValid(item, draft.dateText)
+            const dateEdited = item.item_date !== null && draft.dateText !== '' && draft.dateText !== item.item_date
             const noteValid = isNoteValid(draft.note)
             return (
               <div
@@ -608,6 +634,36 @@ export default function ExpenseUploadForm({
                 </div>
 
                 <div className="mt-3 space-y-2">
+                  {/* 日付も金額と同じく読み違いがありうる。請求月の基準になるので、その場で直せるようにする。 */}
+                  <div>
+                    <label
+                      htmlFor={`item-${item.id}-date`}
+                      className="mb-1 block text-xs font-medium text-muted-foreground"
+                    >
+                      利用日
+                    </label>
+                    <input
+                      id={`item-${item.id}-date`}
+                      type="date"
+                      value={draft.dateText}
+                      onChange={(e) => updateDraft(item.id, { ...draft, dateText: e.target.value })}
+                      aria-invalid={!dateValid}
+                      className={cn(
+                        'min-h-11 w-full rounded border bg-card px-3 py-2 text-sm md:min-h-9',
+                        !dateValid && 'border-danger'
+                      )}
+                    />
+                    {!dateValid ? (
+                      <p className="mt-1 text-xs text-danger">利用日を入力してください。</p>
+                    ) : (
+                      dateEdited && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          読み取った日付: {formatExpenseDate(item.item_date)}
+                        </p>
+                      )
+                    )}
+                  </div>
+
                   {/* 手書きの領収証などはAIが金額を読み違えることがある。却下・再提出まで戻らずに済むよう、
                       その場で直せるようにする。 */}
                   <div>
